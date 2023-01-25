@@ -60,6 +60,3 @@ export class RSEModel implements RSEType {
         this.total_quota = total_quota ?? ''
     }
 }
-
-export class AccountLimitModel implements AccountLimitType {}
-export class AuthModel implements AuthHeaders {}
