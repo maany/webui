@@ -1,9 +1,8 @@
 import { AuthConfig } from '../utils/config'
 import { AuthError } from '../utils/exceptions'
-import { AuthModel } from '../utils/models'
 import { getData } from '../utils/restApiWrapper'
 
-class Auth extends AuthModel {
+class Auth {
     public static async userpassAuthCall(
         headers: AuthHeaders,
         authHost: string | undefined,

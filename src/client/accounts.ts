@@ -1,6 +1,6 @@
 import { parsedEndpoint } from '../util'
 import { AccountConfig } from '../utils/config'
-import { AccountModel } from '../utils/models'
+import { AccountModel } from '../core/domain/models'
 import { streamData, deleteData, postData } from '../utils/restApiWrapper'
 
 class Account extends AccountModel {

@@ -1,9 +1,8 @@
 import { parsedEndpoint } from '../util'
 import { AccountConfig } from '../utils/config'
-import { AccountLimitModel } from '../utils/models'
 import { streamData } from '../utils/restApiWrapper'
 
-class AccountLimit extends AccountLimitModel {
+class AccountLimit {
     public static getAccountLimits(
         account: string,
         onSuccess = (args?: unknown) => args,
