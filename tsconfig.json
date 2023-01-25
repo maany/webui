@@ -21,6 +21,7 @@
     "jsx": "react-jsx"
   },
   "include": [
-    "src"
-, "rucio.d.ts"  ]
+    "src",
+    "rucio.d.ts"
+  ]
 }
