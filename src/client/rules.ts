@@ -1,7 +1,7 @@
 import { parsedEndpoint } from '../util'
 import { RuleConfig } from '../utils/config'
 import { HttpError } from '../utils/exceptions'
-import { RuleModel } from '../core/domain/models'
+import { RuleModel } from '../core/domain/rucio/models'
 import { getData, postData, streamData } from '../utils/restApiWrapper'
 
 class Rules extends RuleModel {

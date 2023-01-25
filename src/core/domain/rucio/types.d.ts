@@ -8,7 +8,6 @@ type AccountType = {
 }
 
 type AccountLimitType = Record<string, string>
-type AuthHeaders = Record<string, string>
 
 type RuleType = {
     rule_id: string

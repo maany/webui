@@ -1,5 +1,5 @@
 import { getData, streamData } from '../utils/restApiWrapper'
-import { DIDModel } from '../core/domain/models'
+import { DIDModel } from '../core/domain/rucio/models'
 import { parsedEndpoint } from '../util'
 import { DidConfig } from '../utils/config'
 

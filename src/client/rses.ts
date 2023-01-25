@@ -1,6 +1,6 @@
 import { parsedEndpoint } from '../util'
 import { RSEConfig } from '../utils/config'
-import { RSEModel } from '../core/domain/models'
+import { RSEModel } from '../core/domain/rucio/models'
 import { getData, streamData } from '../utils/restApiWrapper'
 
 class RSE extends RSEModel {

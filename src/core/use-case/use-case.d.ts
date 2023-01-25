@@ -1,0 +1,3 @@
+interface UseCase {
+    execute(): void
+}
