@@ -1,35 +1,3 @@
-/************************ Rucio WebUI Client PropType Definitions ************************/
-
-type AccountType = {
-    account: string
-    scope?: string
-    identities?: string[]
-    rules?: string[]
-    email?: string
-    type?: 'USER' | 'GROUP' | 'SERVICE'
-}
-
-type AccountLimitType = {}
-type AuthHeaders = {}
-
-type RuleType = {
-    rule_id: string
-    locks?: any[]
-    history?: any[]
-    scope_name?: string
-    analysis?: object
-}
-
-type DidType = {
-    id: string
-}
-
-type RSEType = {
-    rse: string
-    remaining_quota?: string
-    total_quota?: string
-}
-
 /************************ Rucio WebUI Story Components PropType Definitions ************************/
 
 interface AlertProps {
