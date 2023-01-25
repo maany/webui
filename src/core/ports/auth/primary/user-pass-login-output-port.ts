@@ -1,6 +1,6 @@
-import { ResponseModel } from "../../../response-models/auth/auth-response-models"
+import { AuthResponseModel } from "../../../response-models/auth/auth-response-models"
 
 export interface UserPassLoginOutputPort { 
-    presentLoginSuccess(responseModel: ResponseModel): void
-    presentLoginFailure(responseModel: ResponseModel): void
+    presentLoginSuccess(responseModel: AuthResponseModel): void
+    presentLoginFailure(responseModel: AuthResponseModel): void
 }
