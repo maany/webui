@@ -1,4 +1,4 @@
-enum AuthStatus {
+export enum AuthStatus {
     "FAILED",
     "SUCCESS",
 }

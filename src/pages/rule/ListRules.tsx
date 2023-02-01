@@ -1,18 +1,17 @@
 import React from 'react'
 import { useEffect, useState } from 'react'
-import { Link, NavigateFunction, useNavigate } from 'react-router-dom'
-import { StoreContext } from '../App'
-import { RucioClient } from '../client'
-import { Button } from '../stories/Button/Button'
-import { Card } from '../stories/Card/Card'
-import { Dropdown } from '../stories/Dropdown/Dropdown'
-import { Header } from '../stories/Header/Header'
-import { Input } from '../stories/Input/Input'
-import { Table } from '../stories/Table/Table'
+import Link from 'next/link'
+import { StoreContext } from '../../App'
+import { RucioClient } from '../../client'
+import { Button } from '../../stories/Button/Button'
+import { Card } from '../../stories/Card/Card'
+import { Dropdown } from '../../stories/Dropdown/Dropdown'
+import { Header } from '../../stories/Header/Header'
+import { Input } from '../../stories/Input/Input'
+import { Table } from '../../stories/Table/Table'
 
 export const ListRules = () => {
     const [rulesArray, setRulesArray] = useState([] as any[])
-    const navigate: NavigateFunction = useNavigate()
 
     const { store } = React.useContext(StoreContext) as any
     const account = store?.account ?? sessionStorage.getItem('X-Rucio-Account')
@@ -83,7 +82,8 @@ export const ListRules = () => {
                                     kind="primary"
                                     size="large"
                                     onClick={() => {
-                                        navigate('/ruledef')
+                                        // TODO: https://nextjs.org/docs/api-reference/next/link
+                                        // navigate('/ruledef')
                                     }}
                                 />
                             </span>

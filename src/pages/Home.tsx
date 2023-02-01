@@ -1,5 +1,5 @@
 import { Header } from '../stories/Header/Header'
-import { useNavigate } from 'react-router-dom'
+import Link from 'next/link';
 import React, { useEffect, useState } from 'react'
 import { StoreContext } from '../App'
 import { Card } from '../stories/Card/Card'
@@ -8,15 +8,14 @@ import { RucioClient } from '../client'
 import { Box } from '../stories/Box/Box'
 
 function Home() {
-    const navigate = useNavigate()
     const [recentRules, setRecentRulesArray] = useState([] as any)
     const [recentRSE, setRecentRSEArray] = useState([] as any)
     const { store } = React.useContext(StoreContext) as any
 
     const account = store?.account ?? sessionStorage.getItem('X-Rucio-Account')
 
-    async function handleOnClick() {
-        navigate('/ruledef')
+    async function handleLogout() {
+        // TODO: Add logout functionality
     }
 
     const getRecentRules = () => {
@@ -79,7 +78,7 @@ function Home() {
                     console.log('User logged in!')
                 }}
                 onLogout={() => {
-                    handleOnClick()
+                    handleLogout()
                 }}
                 user={{
                     name: account,
@@ -102,7 +101,7 @@ function Home() {
                                 <Card
                                     content={<>ID: {element?.id}</>}
                                     onCardClick={() => {
-                                        navigate(`/rule?rule_id=${element?.id}`)
+                                        navigate(`/rule/${element?.id}`)
                                     }}
                                     hoverable
                                 ></Card>

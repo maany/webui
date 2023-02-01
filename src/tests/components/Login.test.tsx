@@ -1,6 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import Login from '../../components/Login'
-import { BrowserRouter } from 'react-router-dom'
+import Login from '../../pages/Login'
 import { ServiceProvider } from '../../components/GlobalHooks'
 import { ReactElement } from 'react'
 import { env } from '../../util'
@@ -9,9 +8,7 @@ window.scrollTo = jest.fn()
 
 const renderComponent: ReactElement = (
     <ServiceProvider>
-        <BrowserRouter>
-            <Login />
-        </BrowserRouter>
+        <Login />
     </ServiceProvider>
 )
 

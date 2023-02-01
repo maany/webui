@@ -1,6 +1,5 @@
 import { render } from '@testing-library/react'
-import { DID } from '../../components/DID'
-import { BrowserRouter } from 'react-router-dom'
+import { DID } from '../../pages/DID'
 
 test('renders DID Metadata page', () => {
     render(<>Hello World</>)

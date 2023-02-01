@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { NavigateFunction, useNavigate } from 'react-router-dom'
 import { RucioClient } from '../client'
 import { Button } from '../stories/Button/Button'
 import { Card } from '../stories/Card/Card'
@@ -12,7 +11,6 @@ export const Search = () => {
     const [selectedData, setSelectedData] = useState([] as any[])
 
     const showAlert: (options: AlertProps) => Promise<void> = useAlert()
-    const navigate: NavigateFunction = useNavigate()
 
     const search = () => {
         const urlSearchParams = new URLSearchParams(window?.location?.search)
@@ -33,9 +31,10 @@ export const Search = () => {
                                 label="More info"
                                 kind="outline"
                                 onClick={() => {
-                                    navigate(
-                                        `/did?scope=${scope}&name=${element?.id}`,
-                                    )
+                                    // TODO: fix navigation
+                                    // navigate(
+                                    //     `/did?scope=${scope}&name=${element?.id}`,
+                                    // )
                                 }}
                             ></Button>,
                         ]),

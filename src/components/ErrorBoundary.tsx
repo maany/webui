@@ -1,5 +1,4 @@
 import { ErrorBoundary } from 'react-error-boundary'
-import { NavigateFunction, useNavigate } from 'react-router-dom'
 import { Button } from '../stories/Button/Button'
 
 export function ErrorFallback({ error, resetErrorBoundary }: any) {
@@ -27,13 +26,12 @@ export const ErrorHandler = (
 }
 
 export const ErrorBoundaryWrapper = ({ children }: any) => {
-    const navigate: NavigateFunction = useNavigate()
     return (
         <ErrorBoundary
             FallbackComponent={ErrorFallback}
             onError={ErrorHandler}
             onReset={() => {
-                navigate('/login')
+                // TODO: Redirect to home page
             }}
         >
             {children}

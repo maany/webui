@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { RucioClient } from '../client'
-import { Card } from '../stories/Card/Card'
-import { Header } from '../stories/Header/Header'
-import { Table } from '../stories/Table/Table'
-import { useAlert } from './GlobalHooks'
+import { RucioClient } from '../../client'
+import { Card } from '../../stories/Card/Card'
+import { Header } from '../../stories/Header/Header'
+import { Table } from '../../stories/Table/Table'
+import { useAlert } from '../../components/GlobalHooks'
 
 export const Rule = () => {
     const [selectedData, setSelectedData] = useState([] as any[])

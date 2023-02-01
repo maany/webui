@@ -1,6 +1,7 @@
 import { AuthConfig } from '../utils/config'
 import { AuthError } from '../utils/exceptions'
 import { getData } from '../utils/restApiWrapper'
+import { AuthHeaders } from '../core/domain/auth/types'
 
 class Auth {
     public static async userpassAuthCall(

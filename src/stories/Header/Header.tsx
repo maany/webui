@@ -1,7 +1,6 @@
 import './header.scss'
 
 import { MutableRefObject, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 
 import { Button } from '../Button/Button'
 import { Image } from '../Image/Image'
@@ -24,7 +23,6 @@ export const Header = ({
     const { store } = React.useContext(StoreContext) as any
     const account = store?.account ?? sessionStorage.getItem('X-Rucio-Account')
 
-    const navigate = useNavigate()
     const toggleNav = () => {
         setNavIconClickToggle(!navIconClickToggle)
     }
@@ -32,7 +30,6 @@ export const Header = ({
         alert('User logged out!')
         sessionStorage.removeItem('X-Rucio-Auth-Token')
         sessionStorage.removeItem('X-Rucio-Account')
-        navigate('/login')
         onLogout?.()
     }
     return (

@@ -1,6 +1,6 @@
 import './navigation.scss'
 
-import { Link } from 'react-router-dom'
+import Link from 'next/link'
 
 export const Navbar = ({ active, menuItems }: NavProps) => {
     return (
@@ -19,7 +19,7 @@ export const Navbar = ({ active, menuItems }: NavProps) => {
                     index: number,
                 ) => (
                     <Link
-                        to={element?.route}
+                        href={element?.route}
                         className="SideNav-item"
                         key={index}
                         onClick={element?.click}

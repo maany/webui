@@ -1,3 +1,3 @@
-interface UseCase {
+export interface UseCase {
     execute(): void
 }

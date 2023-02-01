@@ -1,31 +1,26 @@
+import 'reflect-metadata'
 import './App.scss'
 import React, { ReactElement, useState } from 'react'
-import {
-    Routes,
-    Route,
-    Navigate,
-    useNavigate,
-    NavigateFunction,
-} from 'react-router-dom'
+import Link from 'next/link'
 
 import { ErrorBoundaryWrapper } from './components/ErrorBoundary'
 import { ServiceProvider } from './components/GlobalHooks'
 
-import { DID } from './components/DID'
-import { ListRules } from './components/ListRules'
-import { Rule } from './components/Rule'
-import { RuleDef } from './components/RuleDef'
+import { DID } from './pages/DID'
+import { ListRules } from './pages/rule/ListRules'
+import { Rule } from './pages/rule/Rule'
+import { RuleDef } from './pages/rule/RuleDef'
 import { Search } from './components/Search'
 
-import Home from './components/Home'
-import Login from './components/Login'
-import NotFound from './components/NotFound'
+import Home from './pages/Home'
+import Login from './pages/Login'
+import NotFound from './pages/NotFound'
 
 export const StoreContext = React.createContext({})
 
 const App = () => {
     const [store, updateStore] = useState({ displaySideBar: true } as any)
-    const navigate: NavigateFunction = useNavigate()
+    // const navigate: NavigateFunction = useNavigate()
 
     const ProtectedRoute = ({ redirectPath = '/login', children = <></> }) => {
         if (
@@ -33,7 +28,8 @@ const App = () => {
             !sessionStorage.getItem('X-Rucio-Auth-Token') &&
             !sessionStorage.getItem('X-Rucio-Account')
         ) {
-            return <Navigate to={redirectPath} replace />
+            // TODO: fix route redirect
+            // return <Navigate to={redirectPath} replace />
         }
         return children
     }
@@ -71,7 +67,8 @@ const App = () => {
                 onLoginSuccess={(args: string) => {
                     updateStore({ account: args })
                     sessionStorage.setItem('X-Rucio-Account', args)
-                    navigate('/home')
+                    // TODO: fix route 
+                    // navigate('/home')
                 }}
                 onLoginFailure={() => {
                     updateStore({ account: null })
@@ -83,30 +80,32 @@ const App = () => {
     )
 
     return (
-        <StoreContext.Provider value={{ store, updateStore }}>
-            <ServiceProvider>
-                <Routes>
-                    <Route index element={<LoginComponent />} />
-                    <Route path="/login" element={<LoginComponent />} />
-                    {protectedPathElementMap.map(
-                        ({ path, element }: any, index: number) => (
-                            <Route
-                                key={index}
-                                path={path}
-                                element={
-                                    <ProtectedRoute>
-                                        <ErrorBoundaryWrapper>
-                                            {element}
-                                        </ErrorBoundaryWrapper>
-                                    </ProtectedRoute>
-                                }
-                            />
-                        ),
-                    )}
-                    <Route path="/*" element={<NotFound />} />
-                </Routes>
-            </ServiceProvider>
-        </StoreContext.Provider>
+        <div className="App">
+        </div>
+        // <StoreContext.Provider value={{ store, updateStore }}>
+        //     <ServiceProvider>
+        //         <Routes>
+        //             <Route index element={<LoginComponent />} />
+        //             <Route path="/login" element={<LoginComponent />} />
+        //             {protectedPathElementMap.map(
+        //                 ({ path, element }: any, index: number) => (
+        //                     <Route
+        //                         key={index}
+        //                         path={path}
+        //                         element={
+        //                             <ProtectedRoute>
+        //                                 <ErrorBoundaryWrapper>
+        //                                     {element}
+        //                                 </ErrorBoundaryWrapper>
+        //                             </ProtectedRoute>
+        //                         }
+        //                     />
+        //                 ),
+        //             )}
+        //             <Route path="/*" element={<NotFound />} />
+        //         </Routes>
+        //     </ServiceProvider>
+        // </StoreContext.Provider>
     )
 }
 

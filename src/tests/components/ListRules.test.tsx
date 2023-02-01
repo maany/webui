@@ -1,11 +1,8 @@
 import { render } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
-import { ListRules } from '../../components/ListRules'
+import { ListRules } from '../../pages/rule/ListRules'
 
 test('renders List Rules', () => {
     render(
-        <BrowserRouter>
-            <ListRules />
-        </BrowserRouter>,
+        <ListRules />
     )
 })
