@@ -52,6 +52,7 @@ export type TRucioSuspiciousReplica = {
     rse_id: string;
     cnt: number;
     created_at: string;
+    reason?: string;
 };
 
 /**
@@ -68,6 +69,7 @@ export function convertToSuspiciousReplicaDTO(data: TRucioSuspiciousReplica): Su
         rseId: data.rse_id,
         cnt: data.cnt,
         createdAt: data.created_at,
+        reason: data.reason,
     };
     return dto;
 }

@@ -19,6 +19,7 @@ export default class ListSuspiciousReplicasPresenter
             rseId: responseModel.rseId,
             cnt: responseModel.cnt,
             createdAt: responseModel.createdAt,
+            reason: responseModel.reason,
         };
         return viewModel;
     }

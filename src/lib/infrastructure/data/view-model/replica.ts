@@ -11,6 +11,7 @@ export interface SuspiciousReplicaViewModel extends BaseViewModel {
     rseId: string;
     cnt: number;
     createdAt: string;
+    reason?: string;
     /** Typed error discriminator — set when status === 'error' */
     errorType?: 'gateway_error' | 'unknown';
 }

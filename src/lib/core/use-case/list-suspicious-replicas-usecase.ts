@@ -82,6 +82,7 @@ export default class ListSuspiciousReplicasUseCase
             rseId: dto.rseId,
             cnt: dto.cnt,
             createdAt: dto.createdAt,
+            reason: dto.reason,
         };
         return { status: 'success', data: responseModel };
     }
