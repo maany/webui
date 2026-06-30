@@ -87,6 +87,7 @@ const sampleReplica: SuspiciousReplicaDTO = {
     rseId: '00000000000000000000000000000001',
     cnt: 3,
     createdAt: 'Wed, 18 Mar 2026 09:08:23 UTC',
+    reason: 'Checksum mismatch',
 };
 
 async function waitForSinkFinish(sink: Writable): Promise<void> {
@@ -149,7 +150,20 @@ describe('ListSuspiciousReplicasUseCase', () => {
 
         const result = useCase.processStreamedData(sampleReplica);
         expect(result.status).toBe('success');
-        expect(result.data).toMatchObject({ status: 'success', rse: 'MOCK', cnt: 3 });
+        expect(result.data).toMatchObject({ status: 'success', rse: 'MOCK', cnt: 3, reason: 'Checksum mismatch' });
+    });
+
+    it('processStreamedData passes undefined reason when DTO has no reason', () => {
+        const gateway = makeGatewayReturning(successDTO([]));
+        const { presenter } = makeCapturingPresenter();
+        const useCase = new ListSuspiciousReplicasUseCase(presenter, gateway);
+
+        const replicaWithoutReason: SuspiciousReplicaDTO = { ...sampleReplica };
+        delete (replicaWithoutReason as any).reason;
+
+        const result = useCase.processStreamedData(replicaWithoutReason);
+        expect(result.status).toBe('success');
+        expect(result.data.reason).toBeUndefined();
     });
 
     it('processStreamedData converts an error DTO into an error model', () => {

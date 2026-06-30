@@ -470,7 +470,7 @@ export function generateSequenceArray(length: number, generator: () => any): any
     return result;
 }
 
-export function fixtureSuspiciousReplicaViewModel(): SuspiciousReplicaViewModel {
+export function fixtureSuspiciousReplicaViewModel(withReason = true): SuspiciousReplicaViewModel {
     return {
         ...mockBaseVM(),
         scope: createRandomScope(),
@@ -479,5 +479,6 @@ export function fixtureSuspiciousReplicaViewModel(): SuspiciousReplicaViewModel 
         rseId: faker.string.uuid().replace(/-/g, ''),
         cnt: faker.number.int({ min: 1, max: 100 }),
         createdAt: faker.date.past().toISOString(),
+        ...(withReason ? { reason: faker.lorem.sentence() } : {}),
     };
 }
