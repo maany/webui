@@ -20,6 +20,7 @@ export interface ListSuspiciousReplicasResponse extends BaseResponseModel {
     rseId: string;
     cnt: number;
     createdAt: string;
+    reason?: string;
 }
 
 /**

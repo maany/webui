@@ -31,6 +31,7 @@ export interface SuspiciousReplicaDTO extends BaseDTO {
     rseId: string;
     cnt: number;
     createdAt: string;
+    reason?: string;
 }
 
 /**

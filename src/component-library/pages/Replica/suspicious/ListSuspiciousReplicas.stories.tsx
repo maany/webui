@@ -25,12 +25,15 @@ const Template: StoryFn<typeof ListSuspiciousReplicas> = args => {
 
 /** Empty grid — no initial data and no streaming endpoint. */
 export const Empty = Template.bind({});
-Empty.args = {};
+Empty.args = {
+    featureDDMDashboard: false,
+};
 
 /** Grid pre-populated with static mock data (no network calls). */
 export const WithData = Template.bind({});
 WithData.args = {
     initialData: Array.from({ length: 30 }, () => fixtureSuspiciousReplicaViewModel()),
+    featureDDMDashboard: false,
 };
 
 /**
@@ -57,4 +60,34 @@ MultiSelectFilterTest.args = {
             rse,
         })),
     ),
+    featureDDMDashboard: false,
+};
+
+/** DDM Dashboard button visible in every row (FEATURE_DDM_DASHBOARD=true). */
+export const WithDDMDashboardEnabled = Template.bind({});
+WithDDMDashboardEnabled.args = {
+    initialData: Array.from({ length: 30 }, () => fixtureSuspiciousReplicaViewModel()),
+    featureDDMDashboard: true,
+};
+
+/** DDM Dashboard button hidden (FEATURE_DDM_DASHBOARD=false). */
+export const WithDDMDashboardDisabled = Template.bind({});
+WithDDMDashboardDisabled.args = {
+    initialData: Array.from({ length: 30 }, () => fixtureSuspiciousReplicaViewModel()),
+    featureDDMDashboard: false,
+};
+
+/**
+ * Demonstrates the 'Reason' column with a mix of populated and absent values.
+ * Half the rows carry an explicit non-empty reason so operators can verify the
+ * column renders text correctly; the other half have no reason to confirm the
+ * cell stays blank without errors.
+ */
+export const WithReason = Template.bind({});
+WithReason.args = {
+    initialData: Array.from({ length: 30 }, (_, i) => ({
+        ...fixtureSuspiciousReplicaViewModel(),
+        reason: i % 2 === 0 ? 'Checksum mismatch detected during verification scan' : undefined,
+    })),
+    featureDDMDashboard: false,
 };
