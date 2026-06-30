@@ -1,16 +1,18 @@
 'use client';
 
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { GridReadyEvent, SelectionChangedEvent, ValueGetterParams } from 'ag-grid-community';
 import { UseStreamReader } from '@/lib/infrastructure/hooks/useStreamReader';
 import { StreamedTable } from '@/component-library/features/table/StreamedTable/StreamedTable';
 import { DefaultTextFilterParams, DefaultDateFilterParams } from '@/component-library/features/utils/filter-parameters';
+import * as Popover from '@radix-ui/react-popover';
 import { DateCellRenderer } from '@/component-library/features/utils/DateWithTooltip';
 import { ClickableCell } from '@/component-library/features/table/cells/ClickableCell';
 import { Button } from '@/component-library/atoms/form/button';
 import { HiOutlineBan, HiOutlineExternalLink } from 'react-icons/hi';
 import { SuspiciousReplicaViewModel } from '@/lib/infrastructure/data/view-model/replica';
+import type { DDMLinkViewModel } from '@/lib/infrastructure/data/view-model/request';
 
 type SuspiciousReplicasTableProps = {
     streamingHook: UseStreamReader<SuspiciousReplicaViewModel>;
@@ -19,15 +21,38 @@ type SuspiciousReplicasTableProps = {
     onDeclareBad: (replica: SuspiciousReplicaViewModel) => void;
     /** Notifies the parent of the current selection (multi-row checkboxes). */
     onSelectionChanged: (selected: SuspiciousReplicaViewModel[]) => void;
+    featureDDMDashboard: boolean;
 };
 
 interface ActionsCellParams {
     data: SuspiciousReplicaViewModel | undefined;
     onDeclareBad: (replica: SuspiciousReplicaViewModel) => void;
+    featureDDMDashboard: boolean;
 }
 
-const ActionsCell = ({ data, onDeclareBad }: ActionsCellParams) => {
+const ActionsCell = ({ data, onDeclareBad, featureDDMDashboard }: ActionsCellParams) => {
+    const [isFetchingDDM, setIsFetchingDDM] = useState<boolean>(false);
+
     if (!data || data.status !== 'success') return null;
+
+    const openDDMDashboard = async (e: React.MouseEvent) => {
+        e.stopPropagation();
+        setIsFetchingDDM(true);
+        try {
+            const response = await fetch(
+                `/api/feature/get-ddm-link?scope=${encodeURIComponent(data.scope)}&name=${encodeURIComponent(data.name)}&rse=${encodeURIComponent(
+                    data.rse,
+                )}`,
+            );
+            const json: DDMLinkViewModel = await response.json();
+            if (json.status === 'success' && json.url) {
+                window.open(json.url, '_blank');
+            }
+        } finally {
+            setIsFetchingDDM(false);
+        }
+    };
+
     return (
         <div className="flex items-center gap-1 h-full">
             <Button
@@ -54,6 +79,12 @@ const ActionsCell = ({ data, onDeclareBad }: ActionsCellParams) => {
                 <HiOutlineExternalLink className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
                 View
             </Button>
+            {featureDDMDashboard && (
+                <Button size="sm" variant="neutral" className="h-7 px-2 text-xs" onClick={openDDMDashboard} disabled={isFetchingDDM}>
+                    <HiOutlineExternalLink className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                    DDM Dashboard
+                </Button>
+            )}
         </div>
     );
 };
@@ -69,8 +100,30 @@ const ClickableRSE = (props: { value: string }) => {
     return <ClickableCell href={`/rse/${encodeURIComponent(props.value)}`}>{props.value}</ClickableCell>;
 };
 
+const TruncatedReasonCell = (props: { value: string | undefined }) => {
+    if (!props.value) return null;
+    return (
+        <Popover.Root>
+            <Popover.Trigger asChild>
+                <span className="block truncate overflow-hidden text-ellipsis whitespace-nowrap max-w-full cursor-pointer">
+                    {props.value}
+                </span>
+            </Popover.Trigger>
+            <Popover.Portal>
+                <Popover.Content
+                    className="z-50 max-w-sm rounded bg-neutral-800 p-2 text-sm text-white shadow-lg"
+                    sideOffset={5}
+                >
+                    {props.value}
+                    <Popover.Arrow className="fill-neutral-800" />
+                </Popover.Content>
+            </Popover.Portal>
+        </Popover.Root>
+    );
+};
+
 export const SuspiciousReplicasTable = (props: SuspiciousReplicasTableProps) => {
-    const { onDeclareBad, onSelectionChanged, ...tableProps } = props;
+    const { onDeclareBad, onSelectionChanged, featureDDMDashboard, ...tableProps } = props;
     const tableRef = useRef<AgGridReact<SuspiciousReplicaViewModel>>(null);
 
     const columnDefs = useMemo(
@@ -136,20 +189,30 @@ export const SuspiciousReplicasTable = (props: SuspiciousReplicasTableProps) => 
                 sort: 'desc' as const,
             },
             {
+                headerName: 'Last failure reason',
+                field: 'reason',
+                flex: 2,
+                minWidth: 200,
+                filter: true,
+                filterParams: DefaultTextFilterParams,
+                sortable: true,
+                cellRenderer: TruncatedReasonCell,
+            },
+            {
                 headerName: 'Actions',
                 colId: 'actions',
-                width: 200,
-                minWidth: 200,
+                width: 300,
+                minWidth: 300,
                 sortable: false,
                 filter: false,
                 resizable: false,
                 pinned: 'right' as const,
                 cellRenderer: ActionsCell,
-                cellRendererParams: { onDeclareBad },
+                cellRendererParams: { onDeclareBad, featureDDMDashboard },
                 valueGetter: (params: ValueGetterParams<SuspiciousReplicaViewModel>) => params.data?.name,
             },
         ],
-        [onDeclareBad],
+        [onDeclareBad, featureDDMDashboard],
     );
 
     const handleGridReady = (event: GridReadyEvent) => {

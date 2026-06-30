@@ -24,6 +24,7 @@ type SearchFilters = {
 
 type ListSuspiciousReplicasProps = {
     initialData?: SuspiciousReplicaViewModel[];
+    featureDDMDashboard: boolean;
 };
 
 function FilterField({
@@ -343,6 +344,7 @@ export const ListSuspiciousReplicas = (props: ListSuspiciousReplicasProps) => {
                     onGridReady={onGridReady}
                     onDeclareBad={onDeclareBad}
                     onSelectionChanged={onSelectionChanged}
+                    featureDDMDashboard={props.featureDDMDashboard}
                 />
             </div>
 
