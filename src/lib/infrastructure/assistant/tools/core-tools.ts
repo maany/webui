@@ -20,7 +20,7 @@ export const findToolsSpec: ToolSpec<FindToolsArgs> = {
     name: 'find_tools',
     domain: 'core',
     description:
-        'Search the Rucio tools by keywords and load the best matches so you can call them in your next step. Tools for DIDs, rules, RSEs, accounts, replicas and subscriptions are not available until you load them here.',
+        'Search the Rucio tools by keywords and load the best matches so you can call them in your next step. Tools for DIDs, rules, RSEs, accounts, replicas, subscriptions and transfer requests are not available until you load them here.',
     input: FindToolsInput,
     risk: 'read',
     requires: { flags: [] },

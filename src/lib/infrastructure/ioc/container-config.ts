@@ -87,6 +87,7 @@ import GetDDMLinkFeature from './features/get-ddm-link-feature';
 import UpdateRuleFeature from '@/lib/infrastructure/ioc/features/update-rule-feature';
 import ListSuspiciousReplicasFeature from '@/lib/infrastructure/ioc/features/list-suspicious-replicas-feature';
 import DeclareBadReplicasFeature from '@/lib/infrastructure/ioc/features/declare-bad-replicas-feature';
+import ListRequestsFeature from '@/lib/infrastructure/ioc/features/list-requests-feature';
 import AMIGatewayOutputPort from '@/lib/core/port/secondary/ami-gateway-output-port';
 import AMIGateway from '../gateway/ami-gateway/ami-gateway';
 import GetAMITagInfoFeature from '@/lib/infrastructure/ioc/features/get-ami-tag-info-feature';
@@ -202,6 +203,10 @@ loadFeaturesSync(appContainer, accountManagementFeatures);
 const dashboardFeatures = [new ListAccountRSEUsageFeature(appContainer)];
 loadFeaturesSync(appContainer, dashboardFeatures);
 
+// Features: Transfer requests (gated by the requests flag; Rucio only lets admins list them by default)
+const requestFeatures = [new ListRequestsFeature(appContainer)];
+loadFeaturesSync(appContainer, requestFeatures);
+
 // Features: ATLAS AMI tags. Only loaded when FEATURE_DIDS_AMI_TAGS is on at
 // startup. The feature is still passed to buildControllerFlagMap so withFeature
 // answers 404 before anything tries to resolve the (unbound) controller.
@@ -234,6 +239,7 @@ export const CONTROLLER_FLAG_MAP = buildControllerFlagMap([
     ...updateRuleFeatures,
     ...accountManagementFeatures,
     ...dashboardFeatures,
+    ...requestFeatures,
     ...amiTagFeatures,
     ...pandaTaskFeatures,
     ...assistantFeatures,

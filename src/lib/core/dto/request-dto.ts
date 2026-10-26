@@ -1,4 +1,5 @@
-import { BaseDTO } from '@/lib/sdk/dto';
+import { TransferRequest } from '@/lib/core/entity/request';
+import { BaseDTO, BaseStreamableDTO } from '@/lib/sdk/dto';
 
 export interface RequestDTO extends BaseDTO {
     data?: {
@@ -54,3 +55,9 @@ export interface RequestDTO extends BaseDTO {
         dest_rse: string;
     };
 }
+
+/** One streamed row of GET /requests/list. */
+export interface TransferRequestDTO extends BaseDTO, TransferRequest {}
+
+/** GET /requests/list: `stream` carries TransferRequestDTO objects. */
+export interface ListRequestsDTO extends BaseStreamableDTO {}

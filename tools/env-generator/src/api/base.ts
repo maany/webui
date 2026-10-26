@@ -110,6 +110,7 @@ export class WebUIEnvTemplateCompiler {
       'FEATURE_ACCOUNTS_MANAGE_QUOTAS': 'true',
       'FEATURE_DIDS_METADATA': 'true',
       'FEATURE_DIDS_MUTATE': 'true',
+      'FEATURE_REQUESTS': 'true',
       'FEATURE_DIDS_AMI_TAGS': 'false',
       'AMI_BASE_URL': 'https://atlas-ami.cern.ch',
       'FEATURE_DIDS_PANDA_TASK': 'false',
