@@ -36,6 +36,8 @@ describe('list_requests tool', () => {
         expect(description).toContain('requests_1');
         expect(description).toContain('QUEUED, SUBMITTING, SUBMITTED, WAITING, PREPARING');
         expect(description).not.toContain(EM_DASH);
+        expect(description).toContain('DONE and FAILED');
+        expect(description).toContain('lower bound');
     });
 
     const calls: [ListRequestsInput, string][] = [

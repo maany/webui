@@ -24,5 +24,5 @@ export const READ_TOOL_SPECS: ToolSpec<ToolArgs>[] = [
 ];
 
 // Registered once, when this module is first imported (AssistantProvider imports it). Later phases add their
-// domain arrays to this call (phase 7: requestTools) or their own register call below it (phase 3: registerPageTools).
+// domain arrays to this call or their own register call below it (phase 3: registerPageTools).
 registerTools([...CORE_DATA_TOOLS, ...didTools, ...ruleTools, ...rseTools, ...accountTools, ...replicaTools, ...subscriptionTools, ...requestTools]);
