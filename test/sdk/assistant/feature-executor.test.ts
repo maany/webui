@@ -571,3 +571,63 @@ describe('fix round 1', () => {
         expect(fetchMock.mock.calls[0][0]).toBe('/api/feature/list-rules?account=a%3Fb%23c%2Fd%26e');
     });
 });
+
+describe('fix round 2', () => {
+    afterEach(() => jest.useRealTimers());
+
+    it('g1: cancels the reader when the row cap stops the read early', async () => {
+        const { deps } = setup();
+        const onCancel = jest.fn();
+        fetchMock.mockImplementationOnce(async () =>
+            fakeResponse({ chunks: [ndjson({ i: 1 }), ndjson({ i: 2 }), ndjson({ i: 3 }), ndjson({ i: 4 })], onCancel }),
+        );
+        await expect(executeFeatureTool(listRules, {}, { ...deps, rowCap: 2 })).resolves.toMatchObject({ rowCount: 2, truncated: true });
+        expect(onCancel).toHaveBeenCalled();
+    });
+
+    it('g1: closes the body when the store throws before reading', async () => {
+        const { deps } = setup();
+        const onCancel = jest.fn();
+        const failing = { ...deps, handles: { ingestRows: async () => Promise.reject(new Error('boom')) } as never };
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ i: 1 }), ndjson({ i: 2 })], onCancel }));
+        await expect(executeFeatureTool(listRules, {}, failing)).resolves.toMatchObject({ error: 'unavailable' });
+        expect(onCancel).toHaveBeenCalled();
+    });
+
+    it('g2: leaves no pending timers after a timed-out read resolves', async () => {
+        jest.useFakeTimers();
+        const { deps, handles } = setup();
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ id: 'a' })], hang: true }));
+        const pending = executeFeatureTool(listRules, {}, deps);
+        await jest.advanceTimersByTimeAsync(FEATURE_TOOL_TIMEOUT_MS);
+        await pending;
+        await handles.terminate(); // the store's own idle timer is not ours
+        expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it('g3: caps errorType at 100 characters', async () => {
+        const { deps } = setup();
+        fetchMock.mockImplementationOnce(async () =>
+            fakeResponse({ status: 500, chunks: [JSON.stringify({ errorType: 't'.repeat(300), message: 'x' })] }),
+        );
+        const result = (await executeFeatureTool(getRule, { id: 'r1' }, deps)) as { errorType: string };
+        expect(result.errorType).toHaveLength(100);
+    });
+
+    it('g3: a complete over-long line stops the read', async () => {
+        const { deps } = setup();
+        fetchMock.mockImplementationOnce(async () =>
+            fakeResponse({ chunks: [ndjson({ id: 'a' }), JSON.stringify({ id: 'x'.repeat(1_000_100) }) + '\n'] }),
+        );
+        const result = rows(await executeFeatureTool(listRules, {}, deps));
+        expect(result).toMatchObject({ rowCount: 1, truncated: true, error: { error: 'stream_error' } });
+        expect(result.error?.message).toContain('1000000');
+    });
+
+    it('g3: caps the message of an HTTP error', async () => {
+        const { deps } = setup();
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ status: 500, chunks: [JSON.stringify({ message: 'm'.repeat(900) })] }));
+        const result = (await executeFeatureTool(getRule, { id: 'r1' }, deps)) as { message: string };
+        expect(result.message).toHaveLength(500);
+    });
+});

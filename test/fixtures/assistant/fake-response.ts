@@ -8,6 +8,8 @@ export interface FakeResponseInit {
     failWith?: Error;
     /** After the last chunk the body never yields again (a hung connection). */
     hang?: boolean;
+    /** Called when the reader cancels the body. */
+    onCancel?: () => void;
 }
 
 /** A minimal Response with a real ReadableStream body; node-fetch's Response (used by jest-fetch-mock) has none. */
@@ -27,6 +29,9 @@ export function fakeResponse(init: FakeResponseInit = {}): Response {
             } else {
                 controller.close();
             }
+        },
+        cancel() {
+            init.onCancel?.();
         },
     });
     const status = init.status ?? 200;

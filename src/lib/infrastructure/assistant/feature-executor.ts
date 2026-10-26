@@ -19,6 +19,7 @@ const MAX_SAMPLE_STRING_CHARS = 200;
 const MAX_DEPTH = 6;
 const MAX_LINE_CHARS = 1_000_000;
 const MAX_MESSAGE_CHARS = 500;
+const MAX_ERROR_TYPE_CHARS = 100;
 /** After a read timeout the store may still finish writing the rows already read, for at most this long. */
 const ENGINE_GRACE_MS = 5_000;
 
@@ -92,7 +93,7 @@ function messageFrom(body: unknown): string | undefined {
 }
 
 function errorTypeFrom(body: unknown): string | undefined {
-    return isRecord(body) && typeof body.errorType === 'string' ? body.errorType : undefined;
+    return isRecord(body) && typeof body.errorType === 'string' ? body.errorType.slice(0, MAX_ERROR_TYPE_CHARS) : undefined;
 }
 
 async function readJsonSafely(response: Response): Promise<unknown> {
@@ -388,6 +389,7 @@ export async function executeFeatureTool(spec: ToolSpec<any>, rawArgs: unknown, 
     } finally {
         clearTimeout(timer);
         deps.signal.removeEventListener('abort', onAbort);
+        controller.abort();
     }
 }
 
@@ -407,13 +409,14 @@ async function ingestStream(
     const storeController = new AbortController();
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
     let reading = false;
+    let settled = false;
     const onStop = () => {
         if (deps.signal.aborted || !reading) storeController.abort();
     };
     ctx.signal.addEventListener('abort', onStop, { once: true });
     const onReadEnd = () => {
         reading = false;
-        if (ctx.isTimedOut() && !deps.signal.aborted) graceTimer = setTimeout(() => storeController.abort(), ENGINE_GRACE_MS);
+        if (!settled && ctx.isTimedOut() && !deps.signal.aborted) graceTimer = setTimeout(() => storeController.abort(), ENGINE_GRACE_MS);
     };
     const stoppedError = (): ToolError =>
         deps.signal.aborted || !ctx.isTimedOut()
@@ -452,6 +455,7 @@ async function ingestStream(
                     }
                 }
             } finally {
+                await source.return(undefined).catch(() => undefined);
                 onReadEnd();
             }
         })();
@@ -494,7 +498,10 @@ async function ingestStream(
         if (outcome.notices.length > 0) result.notices = outcome.notices;
         return result;
     } finally {
+        settled = true;
         clearTimeout(graceTimer);
+        // The wrapper only closes the source once the store iterates it; close it here too (a no-op when already done).
+        await source.return(undefined).catch(() => undefined);
         ctx.signal.removeEventListener('abort', onStop);
     }
 }
