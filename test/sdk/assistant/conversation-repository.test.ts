@@ -51,6 +51,15 @@ describe.each(repositories)('%s', (_name, open) => {
         expect(await repository.listMessages('c1')).toEqual([]);
     });
 
+    it('deletes a single message and ignores an unknown id', async () => {
+        await repository.saveConversation(makeConversation('c1', 'root@def'));
+        await repository.saveMessage(message('m1', 'c1', '2026-10-25T10:00:01.000Z'));
+        await repository.saveMessage(message('m2', 'c1', '2026-10-25T10:00:02.000Z'));
+        await repository.deleteMessage('m1');
+        await repository.deleteMessage('missing');
+        expect((await repository.listMessages('c1')).map(m => m.id)).toEqual(['m2']);
+    });
+
     it('deletes all conversations of one account or of every account', async () => {
         await repository.saveConversation(makeConversation('c1', 'root@def'));
         await repository.saveConversation(makeConversation('c2', 'jdoe@def'));

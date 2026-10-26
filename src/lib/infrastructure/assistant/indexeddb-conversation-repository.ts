@@ -160,6 +160,13 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
         );
     }
 
+    async deleteMessage(id: string): Promise<void> {
+        await this.run(
+            db => db.delete('messages', id),
+            memory => memory.deleteMessage(id),
+        );
+    }
+
     private async conversationBytes(conversation: Conversation): Promise<number> {
         const messages = await this.listMessages(conversation.id);
         return jsonBytes(conversation) + messages.reduce((sum, message) => sum + jsonBytes(message), 0);

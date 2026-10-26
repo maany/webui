@@ -537,9 +537,13 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
 
             if (runnerRef.current === runner) runnerRef.current = null;
             if (overflow && (controller.signal.aborted || !isCurrent())) {
-                // Stopped or replaced after the overflow: finish as an error instead of retrying.
+                // Stopped or replaced after the overflow: finish instead of retrying. A stop is not an error.
                 overflow = false;
-                storeMessage(applyRunnerUpdate(readMessage(), { type: 'finished', status: 'error', error: finalError }));
+                if (controller.signal.aborted) {
+                    finalStatus = 'stopped';
+                    finalError = undefined;
+                }
+                storeMessage(applyRunnerUpdate(readMessage(), { type: 'finished', status: finalStatus, error: finalError }));
             }
             if (!overflow) release(token);
             if (abortRef.current === controller) abortRef.current = null;
@@ -626,7 +630,6 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             if (!trimmed || busyRef.current || deletingAllRef.current) return;
             const token = {};
             busyRef.current = token;
-            openSeqRef.current += 1;
             try {
                 const d = depsRef.current;
                 const accountKey = d.accountKey;
@@ -642,6 +645,8 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     setStatusState('error');
                     return;
                 }
+                // A send that starts a turn supersedes a pending open; the early returns above must not.
+                openSeqRef.current += 1;
                 const generation = generationRef.current;
                 const superseded = () => generation !== generationRef.current || depsRef.current.accountKey !== accountKey;
                 const { repository } = await d.repository;
@@ -708,14 +713,15 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 setStatusState('error');
                 return;
             }
+            // The failed message goes away and the retry gets a fresh id, so a turn still winding down
+            // under the old id can never write into the retry.
             const failed = all[userIndex + 1];
-            await runTurn(
-                current,
-                all[userIndex],
-                provider,
-                { allowOverflowRetry: true, forceCompaction: false, ...(failed ? { assistantId: failed.id } : {}) },
-                token,
-            );
+            if (failed) {
+                setMessages(all.filter(message => message.id !== failed.id));
+                const { repository } = await depsRef.current.repository;
+                await repository.deleteMessage(failed.id).catch(() => undefined);
+            }
+            await runTurn(current, all[userIndex], provider, { allowOverflowRetry: true, forceCompaction: false }, token);
         } finally {
             release(token);
         }

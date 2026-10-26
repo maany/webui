@@ -694,6 +694,82 @@ describe('useAssistantController races', () => {
         expect(summarize).not.toHaveBeenCalled();
     });
 
+    it('ends a turn stopped after an overflow finish as stopped with a single Stopped notice', async () => {
+        const overflowThenWait: Script = async function* (input) {
+            yield { type: 'finished', status: 'error', error: CONTEXT_OVERFLOW_ERROR };
+            await new Promise<void>(resolve => input.signal.addEventListener('abort', () => resolve()));
+        };
+        const { hook, created, events } = setup([textScript('a1'), textScript('a2'), overflowThenWait, textScript('never')]);
+        for (const question of ['q1', 'q2']) {
+            await act(async () => {
+                await hook.result.current.send(question);
+            });
+        }
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('q3');
+        });
+        await waitFor(() => expect(created).toHaveLength(3));
+        await act(async () => {
+            await new Promise(resolve => setTimeout(resolve, 10));
+            hook.result.current.stop();
+            await sending;
+        });
+        const assistant = hook.result.current.messages[hook.result.current.messages.length - 1];
+        const notices = assistant.parts.filter(part => part.type === 'notice');
+        expect(notices).toEqual([{ type: 'notice', level: 'info', text: 'Stopped.' }]);
+        expect(hook.result.current.status).toBe('idle');
+        expect(hook.result.current.error).toBeUndefined();
+        expect(events.filter(event => event.type === 'turn-finished').pop()).toMatchObject({ status: 'stopped' });
+    });
+
+    it('retries with a fresh assistant message id and drops the failed message', async () => {
+        const failing: Script = async function* () {
+            yield { type: 'text-delta', text: 'partial' };
+            yield { type: 'finished', status: 'error', error: 'boom' };
+        };
+        const { hook, repository } = setup([failing, textScript('fixed')]);
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        const failedId = hook.result.current.messages[1].id;
+        await act(async () => {
+            await hook.result.current.retry?.();
+        });
+        const { messages, conversation } = hook.result.current;
+        expect(messages.map(message => message.role)).toEqual(['user', 'assistant']);
+        expect(messages[1].id).not.toBe(failedId);
+        expect(messages[1].parts).toContainEqual({ type: 'text', text: 'fixed' });
+        const stored = await repository.listMessages(conversation!.id);
+        expect(stored.map(message => message.id)).toEqual([messages[0].id, messages[1].id]);
+    });
+
+    it('does not drop a pending open when a send fails before any turn starts', async () => {
+        let provider: ReturnType<AssistantControllerDeps['resolveProvider']> = PROVIDER;
+        const { hook, repository } = setup([textScript('unused')], { resolveProvider: () => provider });
+        await repository.saveConversation(makeConversation('y', 'root@def'));
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        const original = repository.getConversation.bind(repository);
+        jest.spyOn(repository, 'getConversation').mockImplementationOnce(async id => {
+            await gate;
+            return original(id);
+        });
+        let opening!: Promise<void>;
+        act(() => {
+            opening = hook.result.current.openConversation('y');
+        });
+        provider = { error: 'no-provider' };
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        await act(async () => {
+            release();
+            await opening;
+        });
+        expect(hook.result.current.conversation?.id).toBe('y');
+    });
+
     it('lets a send invalidate a pending open', async () => {
         const { hook, repository } = setup([textScript('hello back')]);
         await repository.saveConversation(makeConversation('y', 'root@def'));

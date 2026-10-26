@@ -45,6 +45,10 @@ export class InMemoryConversationRepository implements AssistantConversationRepo
         this.messages.set(message.id, message);
     }
 
+    async deleteMessage(id: string): Promise<void> {
+        this.messages.delete(id);
+    }
+
     private async conversationBytes(conversation: Conversation): Promise<number> {
         const messages = await this.listMessages(conversation.id);
         return jsonBytes(conversation) + messages.reduce((sum, message) => sum + jsonBytes(message), 0);

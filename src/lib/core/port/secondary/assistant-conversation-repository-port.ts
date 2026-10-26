@@ -9,6 +9,7 @@ export interface AssistantConversationRepositoryPort {
     deleteAll(accountKey?: string): Promise<void>; // undefined = every account
     listMessages(conversationId: string): Promise<ChatMessage[]>; // oldest first
     saveMessage(message: ChatMessage): Promise<void>; // insert or replace by id
+    deleteMessage(id: string): Promise<void>; // no-op when the message does not exist
     estimateSizes(accountKey: string): Promise<{ perConversation: Record<string, number>; totalBytes: number }>;
     // returns deleted conversation ids; protectedIds (the open conversation) are never deleted but still count toward the size limit
     enforceRetention(policy: RetentionSettings, now: Date, protectedIds?: readonly string[]): Promise<string[]>;
