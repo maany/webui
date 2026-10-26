@@ -15,6 +15,11 @@ export interface AssistantMemoryControls {
     freeMemory(): Promise<void>;
 }
 
+export interface AssistantConversationControls {
+    deleteConversation(id: string): Promise<void>;
+    deleteAll(): Promise<void>;
+}
+
 export interface AssistantShellValue {
     /** FEATURE_ASSISTANT is on. Everything else is inert when false. */
     enabled: boolean;
@@ -29,6 +34,9 @@ export interface AssistantShellValue {
     registry: AssistantPageActionRegistryPort;
     memoryControls: AssistantMemoryControls | null;
     registerMemoryControls(controls: AssistantMemoryControls): () => void;
+    /** Set while the assistant is mounted, so the settings page deletes through the controller. */
+    conversationControls: AssistantConversationControls | null;
+    registerConversationControls(controls: AssistantConversationControls): () => void;
     /** Bumped when stored conversations change outside the panel (settings page). */
     storageVersion: number;
     notifyStorageChanged(): void;
@@ -59,6 +67,8 @@ const DISABLED_SHELL: AssistantShellValue = {
     registry: createPageActionRegistry(),
     memoryControls: null,
     registerMemoryControls: () => noop,
+    conversationControls: null,
+    registerConversationControls: () => noop,
     storageVersion: 0,
     notifyStorageChanged: noop,
 };
@@ -77,6 +87,7 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
     const [hasOpened, setHasOpened] = useState(false);
     const [registry] = useState(createPageActionRegistry);
     const [memoryControls, setMemoryControls] = useState<AssistantMemoryControls | null>(null);
+    const [conversationControls, setConversationControls] = useState<AssistantConversationControls | null>(null);
     const [storageVersion, setStorageVersion] = useState(0);
 
     const open = useCallback(() => {
@@ -94,6 +105,10 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
     const registerMemoryControls = useCallback((controls: AssistantMemoryControls) => {
         setMemoryControls(controls);
         return () => setMemoryControls(current => (current === controls ? null : current));
+    }, []);
+    const registerConversationControls = useCallback((controls: AssistantConversationControls) => {
+        setConversationControls(controls);
+        return () => setConversationControls(current => (current === controls ? null : current));
     }, []);
     const notifyStorageChanged = useCallback(() => setStorageVersion(version => version + 1), []);
 
@@ -134,6 +149,8 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
                       registry,
                       memoryControls,
                       registerMemoryControls,
+                      conversationControls,
+                      registerConversationControls,
                       storageVersion,
                       notifyStorageChanged,
                   }
@@ -149,6 +166,8 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
             registry,
             memoryControls,
             registerMemoryControls,
+            conversationControls,
+            registerConversationControls,
             storageVersion,
             notifyStorageChanged,
         ],

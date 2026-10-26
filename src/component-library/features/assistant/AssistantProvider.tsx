@@ -97,7 +97,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     };
     const assistant = useAssistantController(deps);
 
-    const { registerMemoryControls, storageVersion } = shell;
+    const { registerMemoryControls, registerConversationControls, storageVersion } = shell;
     useEffect(
         () =>
             registerMemoryControls({
@@ -108,6 +108,18 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
                 },
             }),
         [handles, registerMemoryControls],
+    );
+
+    const { deleteConversation, deleteAllConversations } = assistant;
+    useEffect(
+        () =>
+            registerConversationControls({
+                deleteConversation,
+                deleteAll: async () => {
+                    await deleteAllConversations?.();
+                },
+            }),
+        [deleteConversation, deleteAllConversations, registerConversationControls],
     );
 
     const refresh = assistant.refreshConversations;

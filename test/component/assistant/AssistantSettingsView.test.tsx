@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { AssistantSettingsView, type AssistantSettingsViewProps } from '@/component-library/features/assistant/settings/AssistantSettingsView';
 import { DEFAULT_ASSISTANT_CONFIG } from '@/lib/core/entity/assistant/assistant-config';
 import { getDefaultAssistantSettings } from '@/lib/infrastructure/assistant/settings-storage';
@@ -69,7 +69,7 @@ describe('AssistantSettingsView', () => {
         expect(screen.getByText('Loading operator settings')).toBeInTheDocument();
     });
 
-    it('uses no em dashes in any tab', () => {
+    it('uses no em dashes in any tab', async () => {
         render(<AssistantSettingsView {...props()} />);
         let text = document.body.textContent ?? '';
         ['Display', 'Storage'].forEach(name => {
@@ -77,5 +77,7 @@ describe('AssistantSettingsView', () => {
             text += document.body.textContent ?? '';
         });
         expect(text).not.toMatch(/—/);
+        // Let the storage section finish opening its repository.
+        await act(async () => undefined);
     });
 });

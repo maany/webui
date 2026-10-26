@@ -738,4 +738,54 @@ describe('useAssistantController races', () => {
         const stored = await repository.listMessages(id);
         expect(stored.filter(message => message.role === 'assistant')).toHaveLength(2);
     });
+    it('deleteAllConversations during a streaming turn leaves no conversation behind', async () => {
+        const { hook, repository } = setup([approvalScript]);
+        await repository.saveConversation(makeConversation('other', 'root@def', '2026-10-01T00:00:00.000Z'));
+        await repository.saveConversation(makeConversation('foreign', 'jdoe@def', '2026-10-01T00:00:00.000Z'));
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('delete rule r1');
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals).toHaveLength(1));
+        const id = hook.result.current.conversation!.id;
+        await act(async () => {
+            await hook.result.current.deleteAllConversations?.();
+            await sending;
+        });
+        await act(async () => {
+            await hook.result.current.refreshConversations?.();
+        });
+        expect(await repository.listConversations('root@def')).toEqual([]);
+        expect(await repository.listMessages(id)).toEqual([]);
+        expect(await repository.getConversation('foreign')).toBeDefined();
+        expect(hook.result.current.conversation).toBeUndefined();
+        expect(hook.result.current.messages).toEqual([]);
+        expect(hook.result.current.conversations).toEqual([]);
+    });
+
+    it('keeps saving a conversation when deleteAllConversations fails', async () => {
+        const { hook, repository } = setup([textScript('one'), textScript('two')]);
+        await act(async () => {
+            await hook.result.current.send('first');
+        });
+        const id = hook.result.current.conversation!.id;
+        jest.spyOn(repository, 'deleteAll').mockRejectedValueOnce(new Error('disk full'));
+        await act(async () => {
+            await hook.result.current.deleteAllConversations?.().catch(() => undefined);
+        });
+        await act(async () => {
+            await hook.result.current.openConversation(id);
+        });
+        await act(async () => {
+            await hook.result.current.send('second');
+        });
+        const stored = await repository.listMessages(id);
+        expect(stored.filter(message => message.role === 'assistant')).toHaveLength(2);
+    });
+
+    it('rejects when deleteAllConversations fails', async () => {
+        const { hook, repository } = setup([textScript('one')]);
+        jest.spyOn(repository, 'deleteAll').mockRejectedValueOnce(new Error('disk full'));
+        await expect(hook.result.current.deleteAllConversations!()).rejects.toThrow('disk full');
+    });
 });

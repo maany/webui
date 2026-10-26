@@ -12,6 +12,7 @@ import type { ConnectionTestResult } from '@/lib/infrastructure/assistant/connec
 import { ProvidersTab } from './ProvidersTab';
 import { DisplayTab } from './DisplayTab';
 import { StorageTab } from './StorageTab';
+import { AssistantStorageSection } from './AssistantStorageSection';
 
 export interface AssistantSettingsViewProps {
     config: AssistantConfig;
@@ -33,7 +34,15 @@ export const ASSISTANT_SETTINGS_TABS: { name: string; render(props: AssistantSet
         ),
     },
     { name: 'Display', render: p => <DisplayTab settings={p.settings} onUpdate={p.onUpdate} /> },
-    { name: 'Storage', render: p => <StorageTab onReset={p.onReset} /> },
+    {
+        name: 'Storage',
+        render: p => (
+            <div className="space-y-10">
+                <AssistantStorageSection settings={p.settings} onUpdate={p.onUpdate} />
+                <StorageTab onReset={p.onReset} />
+            </div>
+        ),
+    },
 ];
 
 export const AssistantSettingsView: React.FC<AssistantSettingsViewProps> = props => {

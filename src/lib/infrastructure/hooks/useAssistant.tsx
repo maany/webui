@@ -57,6 +57,8 @@ export interface UseAssistantResult {
     newConversation(): void;
     openConversation(id: string): Promise<void>;
     deleteConversation(id: string): Promise<void>;
+    /** Deletes every conversation of the active account, stopping any running turn first. */
+    deleteAllConversations?(): Promise<void>;
     /** False when IndexedDB is unavailable and history lives in memory only. */
     persistent?: boolean;
     /** Context window of the model used for the last turn, for the gauge label. */
@@ -804,6 +806,25 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         [refreshConversations, resetView],
     );
 
+    const deleteAllConversations = useCallback(async () => {
+        const accountKey = depsRef.current.accountKey;
+        if (!accountKey) return;
+        const { repository } = await depsRef.current.repository;
+        const ids = new Set((await repository.listConversations(accountKey)).map(item => item.id));
+        const open = conversationRef.current;
+        if (open && open.accountKey === accountKey) ids.add(open.id);
+        // Marked first so a streaming turn of any of these skips every later write.
+        for (const id of ids) deletedRef.current.add(id);
+        if (open && ids.has(open.id)) resetView();
+        try {
+            await repository.deleteAll(accountKey);
+        } catch (deleteError) {
+            for (const id of ids) deletedRef.current.delete(id);
+            throw deleteError;
+        }
+        await refreshConversations();
+    }, [refreshConversations, resetView]);
+
     return {
         status,
         conversation,
@@ -819,6 +840,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         newConversation,
         openConversation,
         deleteConversation,
+        deleteAllConversations,
         persistent,
         contextWindow,
         pageContext: deps.pageContext(),
