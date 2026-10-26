@@ -172,4 +172,94 @@ describe('AssistantPanelView', () => {
         expect(onDeleteConversation).toHaveBeenCalledWith('c1');
         expect(screen.getByText('Could not delete this chat.')).toBeInTheDocument();
     });
+
+    it('closes only the history menu on the first Escape and the panel on the second', () => {
+        const conversation = makeConversation('c1', 'root@def');
+        const p = props({ conversation, conversations: [conversation] });
+        render(<AssistantPanelView {...p} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Chat history' }));
+        fireEvent.keyDown(screen.getByRole('list', { name: 'Saved chats' }), { key: 'Escape' });
+        expect(screen.queryByRole('list', { name: 'Saved chats' })).toBeNull();
+        expect(p.onClose).not.toHaveBeenCalled();
+        fireEvent.keyDown(screen.getByLabelText('Message Rucio bot'), { key: 'Escape' });
+        expect(p.onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not close the panel on Escape while an IME composition is active', () => {
+        const p = props();
+        render(<AssistantPanelView {...p} />);
+        fireEvent.keyDown(screen.getByLabelText('Message Rucio bot'), { key: 'Escape', isComposing: true });
+        expect(p.onClose).not.toHaveBeenCalled();
+    });
+
+    it('clears the delete failure message when the history menu is reopened', async () => {
+        const onDeleteConversation = jest.fn().mockRejectedValue(new Error('storage failed'));
+        const conversation = makeConversation('c1', 'root@def');
+        render(<AssistantPanelView {...props({ conversation, conversations: [conversation], onDeleteConversation })} />);
+        const history = screen.getByRole('button', { name: 'Chat history' });
+        fireEvent.click(history);
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: `Delete chat ${conversation.title}` }));
+        });
+        expect(screen.getByText('Could not delete this chat.')).toBeInTheDocument();
+        fireEvent.click(history);
+        fireEvent.click(history);
+        expect(screen.queryByText('Could not delete this chat.')).toBeNull();
+    });
+
+    it('describes the resize separator range', () => {
+        render(<AssistantPanelView {...props()} />);
+        const separator = screen.getByRole('separator', { name: 'Resize Rucio bot panel' });
+        expect(separator).toHaveAttribute('aria-valuemin', '320');
+        expect(separator).toHaveAttribute('aria-valuemax', '720');
+        expect(separator).toHaveAttribute('aria-valuenow', '420');
+    });
+
+    it('removes drag listeners on pointercancel and on unmount', () => {
+        const remove = jest.spyOn(window, 'removeEventListener');
+        const { unmount } = render(<AssistantPanelView {...props()} />);
+        const separator = screen.getByRole('separator', { name: 'Resize Rucio bot panel' });
+        fireEvent.pointerDown(separator);
+        fireEvent(window, new Event('pointercancel'));
+        expect(remove.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining(['pointermove', 'pointerup', 'pointercancel']));
+        remove.mockClear();
+        fireEvent.pointerDown(separator);
+        unmount();
+        expect(remove.mock.calls.map(call => call[0])).toContain('pointermove');
+        remove.mockRestore();
+    });
+
+    it('announces turn progress in a status region instead of making the history live', () => {
+        const { container, rerender } = render(<AssistantPanelView {...props()} />);
+        expect(container.querySelector('[aria-live="polite"]:not([role="status"])')).toBeNull();
+        const region = screen.getByRole('status');
+        expect(region).toHaveTextContent('');
+        rerender(<AssistantPanelView {...props({ status: 'streaming' })} />);
+        expect(region).toHaveTextContent('Rucio bot is responding');
+        rerender(<AssistantPanelView {...props({ status: 'awaiting-approval' })} />);
+        expect(region).toHaveTextContent('Rucio bot needs your approval');
+        rerender(<AssistantPanelView {...props({ status: 'idle' })} />);
+        expect(region).toHaveTextContent('Rucio bot finished responding');
+        rerender(<AssistantPanelView {...props({ status: 'error', error: 'x' })} />);
+        expect(region).toHaveTextContent('Rucio bot hit an error');
+    });
+
+    it('only auto-scrolls when the reader is near the bottom', () => {
+        const scrollIntoView = jest.fn();
+        window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+        const m = (id: string) => ({ ...assistantMessage([{ type: 'text', text: id }]), id });
+        const { rerender } = render(<AssistantPanelView {...props({ messages: [m('a')] })} />);
+        const scroller = screen.getByTestId('assistant-scroll');
+        Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 });
+        Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 300 });
+        scroller.scrollTop = 100;
+        fireEvent.scroll(scroller);
+        scrollIntoView.mockClear();
+        rerender(<AssistantPanelView {...props({ messages: [m('a'), m('b')] })} />);
+        expect(scrollIntoView).not.toHaveBeenCalled();
+        scroller.scrollTop = 650;
+        fireEvent.scroll(scroller);
+        rerender(<AssistantPanelView {...props({ messages: [m('a'), m('b'), m('c')] })} />);
+        expect(scrollIntoView).toHaveBeenCalled();
+    });
 });

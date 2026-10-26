@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { HiOutlineCog, HiPlus, HiSparkles, HiX } from 'react-icons/hi';
 import type { ChatMessage, Conversation } from '@/lib/core/entity/assistant/conversation';
 import type { PageContext } from '@/lib/core/entity/assistant/page-context';
 import { STEP_LIMIT_NOTICE } from '@/lib/infrastructure/assistant/message-reducer';
-import { clampPanelWidth } from '@/lib/infrastructure/assistant/panel-storage';
+import { clampPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from '@/lib/infrastructure/assistant/panel-storage';
 import { cn } from '@/component-library/utils';
 import { AssistantMessage } from './AssistantMessage';
 import { Composer } from './Composer';
@@ -57,10 +57,29 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
     const listEnd = useRef<HTMLDivElement>(null);
     const busy = status === 'streaming' || status === 'awaiting-approval';
 
+    const nearBottom = useRef(true);
+    const stopResize = useRef<(() => void) | null>(null);
+    const previousStatus = useRef(status);
+    const [announcement, setAnnouncement] = useState('');
+
     useEffect(() => {
         const node = listEnd.current;
-        if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'end' });
+        if (nearBottom.current && node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'end' });
     }, [messages]);
+
+    // Announce turn milestones only, never streamed tokens.
+    useEffect(() => {
+        const before = previousStatus.current;
+        previousStatus.current = status;
+        if (before === status) return;
+        if (status === 'streaming') setAnnouncement('Rucio bot is responding');
+        else if (status === 'awaiting-approval') setAnnouncement('Rucio bot needs your approval');
+        else if (status === 'error') setAnnouncement('Rucio bot hit an error');
+        else if (before === 'streaming' || before === 'awaiting-approval') setAnnouncement('Rucio bot finished responding');
+    }, [status]);
+
+    // Drop drag listeners when the panel unmounts or is minimized mid-drag.
+    useEffect(() => () => stopResize.current?.(), [state]);
 
     if (state === 'minimized') {
         return (
@@ -82,9 +101,14 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
         const onUp = () => {
             window.removeEventListener('pointermove', onMove);
             window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onUp);
+            stopResize.current = null;
         };
+        stopResize.current?.();
+        stopResize.current = onUp;
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
     };
 
     return (
@@ -98,7 +122,8 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
             )}
             style={isMobile ? { paddingTop: 'env(safe-area-inset-top)' } : { width }}
             onKeyDown={event => {
-                if (event.key === 'Escape') props.onClose();
+                // A popover inside the panel (history menu) handles its own Escape first.
+                if (event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing) props.onClose();
             }}
         >
             {!isMobile && (
@@ -108,6 +133,8 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
                     role="separator"
                     aria-orientation="vertical"
                     aria-label="Resize Rucio bot panel"
+                    aria-valuemin={PANEL_MIN_WIDTH}
+                    aria-valuemax={PANEL_MAX_WIDTH}
                     aria-valuenow={width}
                     // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
                     tabIndex={0}
@@ -158,7 +185,17 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
                     History is not saved in this browser. Chats last until you close this tab.
                 </p>
             )}
-            <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4" aria-live="polite">
+            <div role="status" className="sr-only">
+                {announcement}
+            </div>
+            <div
+                data-testid="assistant-scroll"
+                className="flex-1 overflow-y-auto px-3 py-4 space-y-4"
+                onScroll={event => {
+                    const node = event.currentTarget;
+                    nearBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 80;
+                }}
+            >
                 {messages.length === 0
                     ? props.emptyState ?? (
                           <p className="text-sm text-neutral-500 dark:text-neutral-400">

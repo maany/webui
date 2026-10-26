@@ -4,7 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeSanitize from 'rehype-sanitize';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import Highlight from 'react-highlight';
 import { cn } from '@/component-library/utils';
 
@@ -18,6 +18,36 @@ export function isInAppHref(href: string | undefined): href is string {
     }
     return true;
 }
+
+/**
+ * Model output must never make the browser fetch anything on render, so
+ * markdown images become plain links (alt text, click to open) and img is not
+ * an allowed element.
+ */
+interface MdNode {
+    type: string;
+    url?: string;
+    alt?: string | null;
+    children?: MdNode[];
+    [key: string]: unknown;
+}
+
+function imagesToLinks(node: MdNode): void {
+    if (!node.children) return;
+    node.children = node.children.map(child => {
+        if (child.type === 'image') {
+            return { type: 'link', url: child.url ?? '', children: [{ type: 'text', value: child.alt || child.url || 'image' }] } as MdNode;
+        }
+        imagesToLinks(child);
+        return child;
+    });
+}
+
+function remarkImagesToLinks() {
+    return (tree: MdNode) => imagesToLinks(tree);
+}
+
+const sanitizeSchema = { ...defaultSchema, tagNames: (defaultSchema.tagNames ?? []).filter(tag => tag !== 'img') };
 
 const components: Components = {
     a({ href, children }) {
@@ -67,7 +97,11 @@ const components: Components = {
 export function Markdown({ text, className }: { text: string; className?: string }) {
     return (
         <div className={cn('text-sm leading-relaxed space-y-2 break-words [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5', className)}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={components}>
+            <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkImagesToLinks]}
+                rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}
+                components={components}
+            >
                 {text}
             </ReactMarkdown>
         </div>

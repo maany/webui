@@ -26,7 +26,13 @@ export function HistoryMenu({ conversations, currentId, onOpen, onDelete }: Hist
         }
     };
     return (
-        <Popover.Root open={open} onOpenChange={setOpen}>
+        <Popover.Root
+            open={open}
+            onOpenChange={next => {
+                if (next) setDeleteFailed(false);
+                setOpen(next);
+            }}
+        >
             <Popover.Trigger asChild>
                 <button type="button" className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800" aria-label="Chat history">
                     <HiOutlineClock className="h-5 w-5" />
