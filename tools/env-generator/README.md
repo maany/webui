@@ -54,8 +54,39 @@ The `PARAMS_ENCODING_ENABLED` in the helm chart config of the Rucio WebUI tells 
 | AMI_BASE_URL              | RUCIO_WEBUI_AMI_BASE_URL              | Base URL of the AMI instance used for tag links (`/?subapp=tagsShow&userdata=<tag>`) and tag lookups (`/AMI2/FrontEnd`). atlas-ami.cern.ch uses a CERN Grid CA certificate: the CA bundle in SERVER_CA_BUNDLE must include the CERN Grid CA and CERN Root CA 2, otherwise lookups fail and chips show links only. | https://atlas-ami.cern.ch      | https://atlas-ami.cern.ch |
 | FEATURE_DIDS_PANDA_TASK   | RUCIO_WEBUI_FEATURE_DIDS_PANDA_TASK   | ATLAS only. Show the PanDA task ID parsed from DID names (tid suffix of the Version field, or the task field of file names) on the DID details and DID list side panel, linked to BigPanDA. | true                           | false              |
 | PANDA_BASE_URL            | RUCIO_WEBUI_PANDA_BASE_URL            | Base URL of the BigPanDA monitor used for task links (`/task/?jeditaskid=<id>`). | https://bigpanda.cern.ch       | https://bigpanda.cern.ch |
+| FEATURE_ASSISTANT         | RUCIO_WEBUI_FEATURE_ASSISTANT         | Enable Rucio bot, the in-app AI assistant (panel, settings page, config route and relays). | true                           | false              |
+| FEATURE_ASSISTANT_WRITE   | RUCIO_WEBUI_FEATURE_ASSISTANT_WRITE   | Let Rucio bot offer write tools, always behind the approval policy. Requires FEATURE_ASSISTANT. | true                      | false              |
+| FEATURE_ASSISTANT_BAD_REPLICAS | RUCIO_WEBUI_FEATURE_ASSISTANT_BAD_REPLICAS | Let Rucio bot offer the declare bad replicas tool. Requires FEATURE_ASSISTANT_WRITE. | true                 | false              |
 
 **Feature flags** gate whole pages, in-page sections, and their API routes per deployment. Unset flags fall back to the defaults above (core features on), so existing deployments are unaffected. Flags are hierarchical: disabling a parent (e.g. `FEATURE_RULES`) also disables its children (`FEATURE_RULES_CREATE`, `FEATURE_RULES_APPROVE`), and `FEATURE_ACCOUNTS_MANAGE=false` turns off every `FEATURE_ACCOUNTS_MANAGE_*` area. The generator warns when a flag is set to true while one of its parents is false, since that flag then has no effect. Disabled pages and API routes return 404.
+
+### Rucio bot (assistant) configuration
+
+Only read when `FEATURE_ASSISTANT` is true. Invalid values fall back to the defaults below.
+
+| Variable Name | Full Name | Description | Example | Default |
+|---------------|-----------|-------------|---------|---------|
+| ASSISTANT_WRITE_POLICY_CAP | RUCIO_WEBUI_ASSISTANT_WRITE_POLICY_CAP | Most permissive policy users may choose for write tools: deny, ask or allow | deny | ask |
+| ASSISTANT_HIGH_RISK_POLICY_CAP | RUCIO_WEBUI_ASSISTANT_HIGH_RISK_POLICY_CAP | Cap for high-risk tools: deny or ask (allow is not accepted) | deny | ask |
+| ASSISTANT_ALLOW_BYOK | RUCIO_WEBUI_ASSISTANT_ALLOW_BYOK | Whether users may add their own providers and keys | false | true |
+| ASSISTANT_ALLOWED_PROVIDER_KINDS | RUCIO_WEBUI_ASSISTANT_ALLOWED_PROVIDER_KINDS | CSV of provider kinds users may add: anthropic, openai, openai-compatible, ollama | ollama,openai-compatible | all |
+| ASSISTANT_DEFAULT_PROVIDER_KIND | RUCIO_WEBUI_ASSISTANT_DEFAULT_PROVIDER_KIND | API shape of the operator default model: openai-compatible or anthropic | anthropic | openai-compatible |
+| ASSISTANT_DEFAULT_BASE_URL | RUCIO_WEBUI_ASSISTANT_DEFAULT_BASE_URL | Upstream of the relay. openai-compatible: up to /v1 (the relay adds /chat/completions); anthropic: https://api.anthropic.com (the relay adds /v1/messages) | https://litellm.example.org/v1 | |
+| ASSISTANT_DEFAULT_API_KEY | RUCIO_WEBUI_ASSISTANT_DEFAULT_API_KEY | Key for the operator default model. Stays on the server | sk-... | |
+| ASSISTANT_DEFAULT_MODEL | RUCIO_WEBUI_ASSISTANT_DEFAULT_MODEL | Model id; with ASSISTANT_DEFAULT_BASE_URL it enables the operator default | gpt-oss-120b | |
+| ASSISTANT_DEFAULT_MODEL_LABEL | RUCIO_WEBUI_ASSISTANT_DEFAULT_MODEL_LABEL | Name shown to users | CERN GPT-OSS | the model id |
+| ASSISTANT_DEFAULT_CONTEXT_WINDOW | RUCIO_WEBUI_ASSISTANT_DEFAULT_CONTEXT_WINDOW | Context window in tokens, for models the WebUI does not know | 131072 | built-in catalog |
+| ASSISTANT_SKILLS_DIR | RUCIO_WEBUI_ASSISTANT_SKILLS_DIR | Directory of operator SKILL.md bundles | /opt/rucio/assistant-skills | |
+| ASSISTANT_TELEMETRY_OTLP_ENDPOINT | RUCIO_WEBUI_ASSISTANT_TELEMETRY_OTLP_ENDPOINT | Operator OTLP traces endpoint. Users opt in per browser before their traces are sent here | https://cloud.langfuse.com/api/public/otel/v1/traces | |
+| ASSISTANT_TELEMETRY_OTLP_HEADERS | RUCIO_WEBUI_ASSISTANT_TELEMETRY_OTLP_HEADERS | Headers for the operator sink (secret) | Authorization=Basic ... | |
+| ASSISTANT_TELEMETRY_ALLOW_USER_SINKS | RUCIO_WEBUI_ASSISTANT_TELEMETRY_ALLOW_USER_SINKS | Whether users may export traces themselves | false | true |
+| ASSISTANT_TELEMETRY_CONTENT_CAP | RUCIO_WEBUI_ASSISTANT_TELEMETRY_CONTENT_CAP | Most detailed trace content: metadata or full | full | metadata |
+| ASSISTANT_TELEMETRY_HASH_USER | RUCIO_WEBUI_ASSISTANT_TELEMETRY_HASH_USER | Hash account@vo in traces. Needs ASSISTANT_TELEMETRY_USER_SALT, otherwise operator trace export is off | true | false |
+| ASSISTANT_TELEMETRY_USER_SALT | RUCIO_WEBUI_ASSISTANT_TELEMETRY_USER_SALT | Secret salt for hashing account@vo in operator traces, at least 16 characters. Stays on the server | output of `openssl rand -hex 32` | |
+| ASSISTANT_PRICES_JSON | RUCIO_WEBUI_ASSISTANT_PRICES_JSON | Price overrides per model id, USD per million tokens | {"gpt-oss-120b":{"inputPerMTok":0.1,"outputPerMTok":0.5}} | |
+| ASSISTANT_RELAY_RATE_LIMIT | RUCIO_WEBUI_ASSISTANT_RELAY_RATE_LIMIT | Relay requests per minute per session (1 to 10000) | 60 | 30 |
+
+LiteLLM users: pin the LiteLLM version or container image digest (the PyPI package was compromised in March 2026).
 
 ### NextAuth Configuration
 
