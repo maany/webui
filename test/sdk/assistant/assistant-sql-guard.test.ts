@@ -197,4 +197,13 @@ describe('checkReadOnlySql', () => {
             },
         );
     });
+
+    describe('fix round 2', () => {
+        it('does not split identifiers at non-ASCII characters when tracking the FROM clause', () => {
+            expect(rejected("SELECT * FROM rules_1 AS éselect, '/etc/passwd'")).toContain('file');
+            expect(rejected("SELECT * FROM rules_1 éwhere, 'https://h/x.parquet'")).toContain('file');
+            expect(rejected("SELECT * FROM rules_1 t JOIN rses_1 éorder ON true, 'x.csv'")).toContain('file');
+            expect(rejected("SELECT * FROM rules_1 AS selecté, 'x.csv'")).toContain('file');
+        });
+    });
 });

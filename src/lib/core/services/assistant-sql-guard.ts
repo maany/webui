@@ -90,7 +90,7 @@ function tableReferenceLiterals(skeleton: string, literals: string[]): string[] 
     const clauses: boolean[] = [false];
     let previous = '';
     let literalIndex = 0;
-    for (const token of skeleton.matchAll(/''|""|[A-Za-z_][A-Za-z0-9_$]*|[(),]/g)) {
+    for (const token of skeleton.matchAll(/''|""|[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_$\u0080-\uFFFF]*|[(),]/g)) {
         const text = token[0];
         const upper = text.toUpperCase();
         if (text === "''" || text === '""') {
