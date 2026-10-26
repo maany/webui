@@ -40,19 +40,24 @@ export const NAVIGATE_PAGES = [
 export type NavigatePage = (typeof NAVIGATE_PAGES)[number];
 
 export const NavigateParamsSchema = z.object({
-    scope: z.string().min(1).optional().describe('DID scope (did, dids, rules)'),
+    scope: z.string().min(1).max(255).optional().describe('DID scope (did, dids, rules)'),
     name: z
         .string()
         .min(1)
+        .max(255)
         .optional()
         .describe('DID name (did, dids, rules) or subscription name (subscription). * wildcards work on dids and rules'),
     type: z.enum(DID_TYPE_NAMES).optional().describe('DID type for dids: all (default), dataset, container or file'),
-    id: z.string().min(1).optional().describe('Rule id (rule)'),
-    rse: z.string().min(1).optional().describe('RSE name (rse)'),
-    expression: z.string().min(1).optional().describe('RSE expression (rses)'),
-    account: z.string().min(1).optional().describe('Account name (account, subscription, subscriptions, rules)'),
+    id: z
+        .string()
+        .regex(/^[0-9a-fA-F]{32}$/, 'Rule ids are 32 hexadecimal characters.')
+        .optional()
+        .describe('Rule id (rule)'),
+    rse: z.string().min(1).max(255).optional().describe('RSE name (rse)'),
+    expression: z.string().min(1).max(1000).optional().describe('RSE expression (rses)'),
+    account: z.string().min(1).max(255).optional().describe('Account name (account, subscription, subscriptions, rules)'),
     tab: z.enum(ACCOUNT_TABS).optional().describe('Tab of the account page'),
-    activity: z.string().min(1).optional().describe('Rule activity (rules)'),
+    activity: z.string().min(1).max(255).optional().describe('Rule activity (rules)'),
     state: z.enum(RuleState).optional().describe('Rule state (rules)'),
     updatedAfter: DATE_PARAM.optional().describe('Rules updated after this day, YYYY-MM-DD'),
     updatedBefore: DATE_PARAM.optional().describe('Rules updated before this day, YYYY-MM-DD'),
@@ -103,6 +108,11 @@ const ACTION_PREFIX: Partial<Record<NavigatePage, string>> = {
     subscriptions: 'subscriptions',
     rule_create: 'rule_create',
 };
+
+/** True for actions of a list or wizard page (rules.filter, rule_create.prefill, ...). */
+export function isListOrWizardAction(name: string): boolean {
+    return Object.values(ACTION_PREFIX).includes(name.split('.')[0]);
+}
 
 function missing(page: NavigatePage, names: string[]): ToolError {
     return toolError('invalid_args', `Opening ${page} needs params.${names.join(' and params.')}.`);

@@ -7,7 +7,9 @@ import { buildPageContext, neutraliseDataTags } from '@/lib/infrastructure/assis
 export const READ_PAGE_TEXT_MAX = 4000;
 const FIELD_LIMIT = 20;
 const FIELD_VALUE_MAX = 200;
-const STRIPPED_SELECTOR = 'script, style, noscript, template, svg, [hidden], [aria-hidden="true"], input[type="password"], input[type="hidden"]';
+const HIDDEN_SELECTOR = '[hidden], [aria-hidden="true"], [inert], dialog:not([open])';
+const STRIPPED_SELECTOR = `script, style, noscript, template, svg, textarea, select, option, input[type="password"], input[type="hidden"], ${HIDDEN_SELECTOR}`;
+const FIELD_LABEL_MAX = 200;
 const SKIPPED_INPUT_TYPES = new Set(['password', 'hidden', 'file', 'submit', 'button', 'reset', 'image']);
 
 export const ReadCurrentPageInputSchema = z.object({});
@@ -89,11 +91,14 @@ function readFields(main: Element): PageField[] {
     const fields: PageField[] = [];
     main.querySelectorAll<FieldElement>('input, textarea, select').forEach(element => {
         if (fields.length >= FIELD_LIMIT) return;
-        if (element.closest('[hidden], [aria-hidden="true"]')) return;
+        if (element.closest(HIDDEN_SELECTOR)) return;
         if (isSecretField(element)) return;
         const value = fieldValue(element);
         if (!value) return;
-        fields.push({ label: fieldLabel(element), value: value.slice(0, FIELD_VALUE_MAX) });
+        fields.push({
+            label: neutraliseDataTags(fieldLabel(element).slice(0, FIELD_LABEL_MAX)),
+            value: neutraliseDataTags(value.slice(0, FIELD_VALUE_MAX)),
+        });
     });
     return fields;
 }
@@ -144,6 +149,11 @@ export function createReadCurrentPageTool(): RegisteredTool<ReadCurrentPageInput
 
             const main = document.querySelector('main#main-content');
             if (!main) {
+                const result: CurrentPageResult = { ...base, text: '', fields: [], truncated: false };
+                return result;
+            }
+
+            if (main.closest(HIDDEN_SELECTOR)) {
                 const result: CurrentPageResult = { ...base, text: '', fields: [], truncated: false };
                 return result;
             }

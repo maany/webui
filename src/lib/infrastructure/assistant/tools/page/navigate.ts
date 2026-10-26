@@ -2,7 +2,7 @@ import type { AssistantPageActionRegistryPort, PageActionInfo } from '@/lib/core
 import type { RegisteredTool } from '@/lib/infrastructure/assistant/tool-types';
 import { isToolError, toolError } from '@/lib/infrastructure/assistant/page-tool-errors';
 import { isSafeNavigateUrl } from '@/lib/infrastructure/assistant/in-app-href';
-import { NavigateInput, NavigateInputSchema, navigateLabel, resolveNavigateTarget } from './navigate-targets';
+import { isListOrWizardAction, NavigateInput, NavigateInputSchema, navigateLabel, resolveNavigateTarget } from './navigate-targets';
 import { accountFromKey, isMobileViewport, samePathname, sleep } from './page-tool-utils';
 
 export const NAVIGATE_WAIT_MS = 5000;
@@ -45,13 +45,19 @@ async function waitForPageActions(
     signal: AbortSignal,
 ): Promise<PageActionInfo[]> {
     for (;;) {
-        if (pages.list().some(action => action.name.startsWith(`${prefix}.`))) return pages.list();
+        const own = pages.list().filter(action => action.name.startsWith(`${prefix}.`));
+        if (own.length > 0) return own;
         const remaining = deadline - Date.now();
         if (signal.aborted || remaining <= 0) return [];
         const started = Date.now();
         await pages.waitForActions(Math.min(remaining, ACTION_WAIT_SLICE_MS));
         if (Date.now() - started < MIN_WAIT_MS) await sleep(Math.min(PATHNAME_POLL_MS, Math.max(remaining, 0)));
     }
+}
+
+/** Actions that belong to the target page only, so those of a previous page are never reported. */
+function pageActionsOf(pages: AssistantPageActionRegistryPort, prefix: string | undefined): PageActionInfo[] {
+    return pages.list().filter(action => (prefix ? action.name.startsWith(`${prefix}.`) : !isListOrWizardAction(action.name)));
 }
 
 export function createNavigateTool(options: NavigateToolOptions = {}): RegisteredTool<NavigateInput> {
@@ -81,8 +87,10 @@ export function createNavigateTool(options: NavigateToolOptions = {}): Registere
                 const result: NavigateResult = {
                     url: target.url,
                     navigated: false,
-                    actions: ctx.pages.list(),
-                    note: `The user is already on ${target.label}. Use page_action to change what it shows.`,
+                    actions: pageActionsOf(ctx.pages, target.actionPrefix),
+                    note: target.actionPrefix
+                        ? `The user is already on ${target.label}. Use page_action to change what it shows.`
+                        : `The user is already on ${target.label}. This page has no actions; tell the user what to change on it.`,
                 };
                 return result;
             }
@@ -104,7 +112,11 @@ export function createNavigateTool(options: NavigateToolOptions = {}): Registere
             }
 
             if (!target.actionPrefix) {
-                const result: NavigateResult = { url: target.url, navigated: true, actions: ctx.pages.list() };
+                const result: NavigateResult = {
+                    url: target.url,
+                    navigated: true,
+                    actions: pageActionsOf(ctx.pages, undefined),
+                };
                 return result;
             }
 

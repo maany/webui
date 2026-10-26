@@ -1,5 +1,10 @@
 import { Role } from '@/lib/core/entity/auth-models';
-import { NavigateInputSchema, navigateLabel, resolveNavigateTarget } from '@/lib/infrastructure/assistant/tools/page/navigate-targets';
+import {
+    isListOrWizardAction,
+    NavigateInputSchema,
+    navigateLabel,
+    resolveNavigateTarget,
+} from '@/lib/infrastructure/assistant/tools/page/navigate-targets';
 import { allFlags } from 'test/fixtures/page-tool-context';
 
 const env = { flags: allFlags(), role: Role.USER, account: 'jdoe' };
@@ -11,7 +16,7 @@ describe('resolveNavigateTarget', () => {
         [{ page: 'dashboard' }, '/dashboard'],
         [{ page: 'dids' }, '/dids'],
         [{ page: 'did', params: { scope: 'user.jdoe', name: 'file 1' } }, '/did/user.jdoe/file%201'],
-        [{ page: 'rule', params: { id: 'abc123' } }, '/rule/abc123'],
+        [{ page: 'rule', params: { id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' } }, '/rule/a1b2c3d4e5f60718293a4b5c6d7e8f90'],
         [{ page: 'rule_create' }, '/rule/create'],
         [{ page: 'rses', params: { expression: 'tier=1' } }, '/rses?expression=tier%3D1&autoSearch=true'],
         [{ page: 'rse', params: { rse: 'CERN-PROD' } }, '/rse/CERN-PROD'],
@@ -41,7 +46,9 @@ describe('resolveNavigateTarget', () => {
         expect(resolve({ page: 'rule_create' })).toMatchObject({ actionPrefix: 'rule_create' });
         expect(resolve({ page: 'rses' })).toMatchObject({ actionPrefix: 'rses' });
         expect(resolve({ page: 'subscriptions' })).toMatchObject({ actionPrefix: 'subscriptions' });
-        expect((resolve({ page: 'rule', params: { id: 'abc' } }) as { actionPrefix?: string }).actionPrefix).toBeUndefined();
+        expect(
+            (resolve({ page: 'rule', params: { id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' } }) as { actionPrefix?: string }).actionPrefix,
+        ).toBeUndefined();
     });
 
     it('asks for missing params', () => {
@@ -78,8 +85,29 @@ describe('resolveNavigateTarget', () => {
         expect(NavigateInputSchema.safeParse({ page: 'account', params: { account: 'jdoe', tab: 'billing' } }).success).toBe(false);
     });
 
+    it('rejects rule ids that are not 32 hex characters', () => {
+        expect(NavigateInputSchema.safeParse({ page: 'rule', params: { id: 'create' } }).success).toBe(false);
+        expect(NavigateInputSchema.safeParse({ page: 'rule', params: { id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' } }).success).toBe(true);
+    });
+
+    it('caps the length of free text params', () => {
+        expect(NavigateInputSchema.safeParse({ page: 'rses', params: { expression: 'a'.repeat(1001) } }).success).toBe(false);
+        expect(NavigateInputSchema.safeParse({ page: 'rses', params: { expression: 'a'.repeat(1000) } }).success).toBe(true);
+        for (const key of ['scope', 'name', 'rse', 'account', 'activity']) {
+            expect(NavigateInputSchema.safeParse({ page: 'rules', params: { [key]: 'a'.repeat(256) } }).success).toBe(false);
+            expect(NavigateInputSchema.safeParse({ page: 'rules', params: { [key]: 'a'.repeat(255) } }).success).toBe(true);
+        }
+    });
+
+    it('knows which action names belong to list and wizard pages', () => {
+        expect(isListOrWizardAction('rules.filter')).toBe(true);
+        expect(isListOrWizardAction('rule_create.prefill')).toBe(true);
+        expect(isListOrWizardAction('dids.search')).toBe(true);
+        expect(isListOrWizardAction('other.thing')).toBe(false);
+    });
+
     it('labels calls for the activity timeline', () => {
-        expect(navigateLabel({ page: 'rule', params: { id: 'abc' } })).toBe('rule abc');
+        expect(navigateLabel({ page: 'rule', params: { id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' } })).toBe('rule a1b2c3d4e5f60718293a4b5c6d7e8f90');
         expect(navigateLabel({ page: 'did' })).toBe('did');
         expect(navigateLabel({ page: 'rule_create' })).toBe('the create rule wizard');
     });

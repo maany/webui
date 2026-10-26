@@ -27,7 +27,9 @@ describe('navigate tool', () => {
     it('is an always-on read tool in the core domain', () => {
         expect(tool.spec).toMatchObject({ name: 'navigate', domain: 'core', risk: 'read', executor: 'page', output: 'object', alwaysOn: true });
         expect(tool.spec.requires).toEqual({ flags: [] });
-        expect(tool.spec.describeCall({ page: 'rule', params: { id: 'abc' } })).toBe('Open rule abc');
+        expect(tool.spec.describeCall({ page: 'rule', params: { id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' } })).toBe(
+            'Open rule a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        );
         expect(() => z.toJSONSchema(tool.spec.input)).not.toThrow();
     });
 
@@ -49,7 +51,18 @@ describe('navigate tool', () => {
         const navigate = routerThatLands(registry, 'dids.search');
         const result = (await tool.execute({ page: 'dids' }, makeTestToolContext({ pages: registry, navigate }))) as NavigateResult;
 
-        expect(result.actions.map(action => action.name)).toContain('dids.search');
+        expect(result.actions.map(action => action.name)).toEqual(['dids.search']);
+    });
+
+    it('does not report actions of a previous list page on pages without actions', async () => {
+        const registry = new FakePageActionRegistry();
+        offer(registry, 'rules.filter');
+        const navigate = routerThatLands(registry);
+        const result = (await tool.execute(
+            { page: 'rule', params: { id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' } },
+            makeTestToolContext({ pages: registry, navigate }),
+        )) as NavigateResult;
+        expect(result.actions).toEqual([]);
     });
 
     it('returns right away for pages that offer no actions', async () => {
@@ -57,11 +70,11 @@ describe('navigate tool', () => {
         const navigate = routerThatLands(registry);
         const started = Date.now();
         const result = (await createNavigateTool({ waitMs: 2000, pollMs: 5 }).execute(
-            { page: 'rule', params: { id: 'abc' } },
+            { page: 'rule', params: { id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' } },
             makeTestToolContext({ pages: registry, navigate }),
         )) as NavigateResult;
 
-        expect(result).toEqual({ url: '/rule/abc', navigated: true, actions: [] });
+        expect(result).toEqual({ url: '/rule/a1b2c3d4e5f60718293a4b5c6d7e8f90', navigated: true, actions: [] });
         expect(Date.now() - started).toBeLessThan(500);
     });
 
@@ -103,6 +116,20 @@ describe('navigate tool', () => {
         expect(result.navigated).toBe(false);
         expect(result.actions.map(action => action.name)).toEqual(['rules.filter']);
         expect(result.note).toContain('page_action');
+    });
+
+    it('does not mention page_action when the page has no actions', async () => {
+        window.history.pushState({}, '', '/account/jdoe');
+        const navigate = jest.fn();
+        const result = (await tool.execute(
+            { page: 'account', params: { account: 'jdoe', tab: 'quotas' } },
+            makeTestToolContext({ navigate }),
+        )) as NavigateResult;
+        expect(navigate).not.toHaveBeenCalled();
+        expect(result.navigated).toBe(false);
+        expect(result.actions).toEqual([]);
+        expect(result.note).toContain('already on');
+        expect(result.note).not.toContain('page_action');
     });
 
     it('refuses pages that are off or not allowed before navigating', async () => {
@@ -159,7 +186,7 @@ describe('navigate tool', () => {
             const registry = new FakePageActionRegistry();
             const minimizePanel = jest.fn();
             await tool.execute(
-                { page: 'rule', params: { id: 'abc' } },
+                { page: 'rule', params: { id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' } },
                 makeTestToolContext({ pages: registry, navigate: routerThatLands(registry), minimizePanel }),
             );
             expect(minimizePanel).toHaveBeenCalledTimes(calls);
