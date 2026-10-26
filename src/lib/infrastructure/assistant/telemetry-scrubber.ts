@@ -164,10 +164,11 @@ const SCRUB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
     // SITE-token-<hex> are kept. Only run starts are tried.
     [new RegExp(String.raw`${TOKEN_START}[A-Za-z0-9_]+-[^${TOKEN_DELIMITERS}\\]*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`, 'g'), REDACTED],
     // Tokens whose identity is an x509 DN or OIDC subject: the run holds a `/` or `=` before the tail. Query strings
-    // (`?scope=user.jdoe&name=...`) are not identities, so `?` and `&` end the run; a JSON `\/` counts as a slash.
+    // (`?scope=user.jdoe&name=...`) are not identities, so `?` and `&` end the run. A JSON `\/` (or `\\/` one level
+    // deeper) counts as a slash.
     [
         new RegExp(
-            String.raw`${TOKEN_START}[^${TOKEN_DELIMITERS}\\:/=?&]*(?:\\?/|=)(?:\\/|[^${TOKEN_DELIMITERS}\\?&])*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`,
+            String.raw`${TOKEN_START}[^${TOKEN_DELIMITERS}\\:/=?&]*(?:(?:\\\\?)?/|=)(?:\\\\?/|[^${TOKEN_DELIMITERS}\\?&])*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`,
             'g',
         ),
         REDACTED,

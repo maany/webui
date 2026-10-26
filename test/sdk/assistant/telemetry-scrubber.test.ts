@@ -24,6 +24,11 @@ describe('scrubText', () => {
             expect(scrubText(String.raw`{"c":"jdoe-SUB=abc-123, ISS=https:\/\/iam.example\/-webui-${HEX}"}`)).not.toContain(HEX);
         });
 
+        it('redacts OIDC tokens with escaped slashes inside stringified messages', () => {
+            const tool = JSON.stringify({ c: `jdoe-SUB=abc, ISS=https://iam.example/-webui-${HEX}` }).replace(/\//g, '\\/');
+            expect(scrubText(JSON.stringify([{ role: 'tool', content: tool }]))).not.toContain(HEX);
+        });
+
         it('keeps a DID in the next markdown table cell after a DN', () => {
             const row = `| /DC=ch/CN=John Doe | user.jdoe:run-v2-${HEX} |`;
             expect(scrubText(row)).toBe(row);
@@ -276,6 +281,7 @@ describe('scrubText', () => {
         ['AIza prefixes', 'AIza'.repeat(20000)],
         ['xai prefixes', 'xai-'.repeat(20000)],
         ['escaped quotes', '\\"token\\": '.repeat(6000)],
+        ['double escaped slash oidc runs', ' a=' + '\\\\/a-'.repeat(16000)],
         ['escaped slash oidc runs', ' a\\/-'.repeat(16000)],
         ['dn space rule first', '/CN=a b-x-'.repeat(8000)],
         ['escaped newline token starts', '\\na-'.repeat(20000)],
