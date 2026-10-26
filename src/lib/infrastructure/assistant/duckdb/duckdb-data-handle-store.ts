@@ -7,7 +7,9 @@ import { ENGINE_INIT_SQL, type DuckDbEngine, type DuckDbEngineFactory, type Duck
 import { normalizeRows } from './row-normalizer';
 
 export const DEFAULT_IDLE_MS = 10 * 60 * 1000;
-export const DEFAULT_MAX_ROWS = 100;
+/** Fallback for a non-finite or negative maxRows; the model sees at most 200 SQL rows. */
+export const DEFAULT_MAX_ROWS = 200;
+/** Fallback for a non-finite or negative rowCap; the low-memory cap, the usual default comes from defaultRowCap(). */
 export const DEFAULT_ROW_CAP = 10_000;
 export const HANDLE_NAME_PATTERN = /^[a-z][a-z0-9_]{0,62}$/;
 
