@@ -7,10 +7,13 @@ export function isAbortError(error: unknown): boolean {
     return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError';
 }
 
+const MAX_MESSAGE_LENGTH = 1000;
+
 export function errorMessage(error: unknown): string {
-    if (error instanceof Error) return error.message;
-    if (typeof error === 'object' && error !== null && typeof (error as { message?: unknown }).message === 'string') {
-        return (error as { message: string }).message;
-    }
-    return String(error);
+    let message: string;
+    if (error instanceof Error) message = error.message;
+    else if (typeof error === 'object' && error !== null && typeof (error as { message?: unknown }).message === 'string') {
+        message = (error as { message: string }).message;
+    } else message = String(error);
+    return message.slice(0, MAX_MESSAGE_LENGTH);
 }
