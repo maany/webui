@@ -24,6 +24,9 @@ const flags = (accounts: boolean): FeatureFlagMap =>
         'dids.mutate': true,
         'dids.ami_tags': false,
         'dids.panda_task': false,
+        assistant: false,
+        'assistant.write': false,
+        'assistant.bad_replicas': false,
     } as FeatureFlagMap);
 
 const renderDropdown = (accounts: boolean, account = 'jdoe') =>

@@ -13,6 +13,7 @@ import { DeleteAccountLimitSchema } from './delete-account-limit';
 import { GetAccountInfoSchema } from './get-account-info';
 import { GetAccountQuotasSchema } from './get-account-quotas';
 import { GetAmiTagInfoSchema } from './get-ami-tag-info';
+import { GetAssistantConfigSchema } from './get-assistant-config';
 import { GetDdmLinkSchema } from './get-ddm-link';
 import { GetDidKeyvaluepairsSchema } from './get-did-keyvaluepairs';
 import { GetDidMetaSchema } from './get-did-meta';
@@ -64,6 +65,7 @@ export * from './delete-account-limit';
 export * from './get-account-info';
 export * from './get-account-quotas';
 export * from './get-ami-tag-info';
+export * from './get-assistant-config';
 export * from './get-ddm-link';
 export * from './get-did-keyvaluepairs';
 export * from './get-did-meta';
@@ -119,6 +121,7 @@ export const API_ROUTE_NAMES = [
     'get-account-info',
     'get-account-quotas',
     'get-ami-tag-info',
+    'get-assistant-config',
     'get-ddm-link',
     'get-did-keyvaluepairs',
     'get-did-meta',
@@ -175,6 +178,7 @@ export const API_SCHEMAS: Record<RouteName, z.ZodType> = {
     'get-account-info': GetAccountInfoSchema,
     'get-account-quotas': GetAccountQuotasSchema,
     'get-ami-tag-info': GetAmiTagInfoSchema,
+    'get-assistant-config': GetAssistantConfigSchema,
     'get-ddm-link': GetDdmLinkSchema,
     'get-did-keyvaluepairs': GetDidKeyvaluepairsSchema,
     'get-did-meta': GetDidMetaSchema,

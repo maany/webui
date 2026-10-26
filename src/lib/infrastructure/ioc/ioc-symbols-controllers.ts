@@ -57,6 +57,7 @@ const CONTROLLERS = {
     UPDATE_RULE: Symbol.for('UpdateRuleController'),
     LIST_SUSPICIOUS_REPLICAS: Symbol.for('ListSuspiciousReplicasController'),
     DECLARE_BAD_REPLICAS: Symbol.for('DeclareBadReplicasController'),
+    GET_ASSISTANT_CONFIG: Symbol.for('GetAssistantConfigController'),
 };
 
 export default CONTROLLERS;

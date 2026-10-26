@@ -58,6 +58,7 @@ const USECASE_FACTORY = {
     UPDATE_RULE: Symbol.for('Factory<UpdateRuleUseCase>'),
     LIST_SUSPICIOUS_REPLICAS: Symbol.for('Factory<ListSuspiciousReplicasUseCase>'),
     DECLARE_BAD_REPLICAS: Symbol.for('Factory<DeclareBadReplicasUseCase>'),
+    GET_ASSISTANT_CONFIG: Symbol.for('Factory<GetAssistantConfigUseCase>'),
 };
 
 export default USECASE_FACTORY;

@@ -91,6 +91,7 @@ import AMIGatewayOutputPort from '@/lib/core/port/secondary/ami-gateway-output-p
 import AMIGateway from '../gateway/ami-gateway/ami-gateway';
 import GetAMITagInfoFeature from '@/lib/infrastructure/ioc/features/get-ami-tag-info-feature';
 import GetPandaTaskLinkFeature from '@/lib/infrastructure/ioc/features/get-panda-task-link-feature';
+import GetAssistantConfigFeature from '@/lib/infrastructure/ioc/features/get-assistant-config-feature';
 import { isFeatureEnabledInEnv } from '@/lib/core/entity/feature-config';
 
 /**
@@ -215,6 +216,10 @@ if (isFeatureEnabledInEnv('dids.panda_task', process.env)) {
     loadFeaturesSync(appContainer, pandaTaskFeatures);
 }
 
+// Features: Rucio bot (assistant). Always bound; withFeature answers 404 while FEATURE_ASSISTANT is off.
+const assistantFeatures = [new GetAssistantConfigFeature(appContainer)];
+loadFeaturesSync(appContainer, assistantFeatures);
+
 export const CONTROLLER_FLAG_MAP = buildControllerFlagMap([
     ...commonFeatures,
     ...authFeatures,
@@ -231,6 +236,7 @@ export const CONTROLLER_FLAG_MAP = buildControllerFlagMap([
     ...dashboardFeatures,
     ...amiTagFeatures,
     ...pandaTaskFeatures,
+    ...assistantFeatures,
 ]);
 
 appContainer.bind<SetX509LoginSessionInputPort>(INPUT_PORT.SET_X509_LOGIN_SESSION).to(SetX509LoginSessionUseCase).inRequestScope();

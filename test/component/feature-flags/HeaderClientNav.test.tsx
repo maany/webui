@@ -34,6 +34,9 @@ function renderNav(overrides: Partial<FeatureFlagMap>) {
         'dids.mutate': true,
         'dids.ami_tags': false,
         'dids.panda_task': false,
+        assistant: false,
+        'assistant.write': false,
+        'assistant.bad_replicas': false,
         ...overrides,
     };
     return render(

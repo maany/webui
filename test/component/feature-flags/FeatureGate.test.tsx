@@ -19,6 +19,9 @@ const baseMap: FeatureFlagMap = {
     'dids.mutate': true,
     'dids.ami_tags': false,
     'dids.panda_task': false,
+    assistant: false,
+    'assistant.write': false,
+    'assistant.bad_replicas': false,
 };
 
 describe('FeatureGate', () => {
