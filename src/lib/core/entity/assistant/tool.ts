@@ -24,6 +24,7 @@ export interface ToolSpec<I = unknown> {
     route?: { path: string; method: HttpMethod }; // feature executor only, path like '/api/feature/list-rules'
     alwaysOn?: boolean; // core tools offered every turn; others load via find_tools
     describeCall(args: I): string; // one line, no em dashes
+    sensitiveArgs?: readonly string[]; // top-level arg keys masked on approval cards (and available to timeline and telemetry scrubbing)
 }
 
 export type ToolErrorCode =
