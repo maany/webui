@@ -9,7 +9,7 @@ function ctx(over: Partial<Parameters<typeof buildPageContext>[0]> = {}) {
 describe('buildPageContext hardening', () => {
     it('collapses newlines to a single space in route, title, summary, param keys and values', () => {
         const c = buildPageContext({
-            pathname: '/a\r\nb c d',
+            pathname: '/a\r\nb\u2028c\u2029d',
             searchParams: new URLSearchParams([['k\ney', 'v\r\nal']]),
             title: 'T\nU',
             accountKey: 'root@def',
@@ -54,20 +54,31 @@ describe('buildPageContext hardening', () => {
         expect(v).toBe(`${'y'.repeat(256)}...`);
     });
 
-    it.each(['token', 'Code', 'access_token', 'id-token', 'refresh_token', 'password', 'secret', 'key', 'apikey', 'api-key', 'session', 'auth', 'Authorization'])(
-        'drops the token-like param %s without mentioning it',
-        name => {
-            const c = ctx({
-                searchParams: new URLSearchParams([
-                    [name, 'sekrit-value'],
-                    ['scope', 'user'],
-                ]),
-            });
-            expect(c.params).toEqual({ scope: 'user' });
-            expect(formatPageContext(c)).not.toContain(name);
-            expect(formatPageContext(c)).not.toContain('sekrit-value');
-        },
-    );
+    it.each([
+        'token',
+        'Code',
+        'access_token',
+        'id-token',
+        'refresh_token',
+        'password',
+        'secret',
+        'key',
+        'apikey',
+        'api-key',
+        'session',
+        'auth',
+        'Authorization',
+    ])('drops the token-like param %s without mentioning it', name => {
+        const c = ctx({
+            searchParams: new URLSearchParams([
+                [name, 'sekrit-value'],
+                ['scope', 'user'],
+            ]),
+        });
+        expect(c.params).toEqual({ scope: 'user' });
+        expect(formatPageContext(c)).not.toContain(name);
+        expect(formatPageContext(c)).not.toContain('sekrit-value');
+    });
 });
 
 describe('prompt closing-tag neutralisation', () => {
@@ -101,12 +112,20 @@ describe('fix round 1', () => {
         expect(ctx({ searchParams: new URLSearchParams([['state', 'STUCK']]) }).params).toEqual({ state: 'STUCK' });
     });
 
-    it.each(['X-Api-Key', 'client_secret', 'jwt', 'auth_token', 'X-Rucio-Auth-Token', 'accessToken', 'sessionid', 'Bearer', 'db_password', 'my-apikey'])(
-        'drops %s by rule',
-        name => {
-            expect(ctx({ searchParams: new URLSearchParams([[name, 'v']]) }).params).toEqual({});
-        },
-    );
+    it.each([
+        'X-Api-Key',
+        'client_secret',
+        'jwt',
+        'auth_token',
+        'X-Rucio-Auth-Token',
+        'accessToken',
+        'sessionid',
+        'Bearer',
+        'db_password',
+        'my-apikey',
+    ])('drops %s by rule', name => {
+        expect(ctx({ searchParams: new URLSearchParams([[name, 'v']]) }).params).toEqual({});
+    });
 
     it('is not fooled by prototype keys', () => {
         const params = new URLSearchParams();
