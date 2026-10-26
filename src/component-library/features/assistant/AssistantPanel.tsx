@@ -7,6 +7,7 @@ import { useAssistantSettings } from '@/lib/infrastructure/hooks/useAssistantSet
 import { useVisualViewportInset } from '@/lib/infrastructure/hooks/useVisualViewportInset';
 import { clampPanelWidth, loadPanelWidth, savePanelWidth } from '@/lib/infrastructure/assistant/panel-storage';
 import { AssistantPanelView } from './AssistantPanelView';
+import { StarterPrompts } from './StarterPrompts';
 
 const OFFSET_PROPERTY = '--rucio-assistant-offset';
 
@@ -93,6 +94,12 @@ export function AssistantPanel() {
             onDeleteConversation={id => assistant.deleteConversation(id)}
             onClose={shell.close}
             onRestore={shell.open}
+            emptyState={
+                <StarterPrompts
+                    onSelect={text => void assistant.send(text)}
+                    disabled={assistant.status === 'streaming' || assistant.status === 'awaiting-approval'}
+                />
+            }
         />
     );
 }
