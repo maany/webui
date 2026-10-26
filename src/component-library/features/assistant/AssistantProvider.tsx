@@ -57,15 +57,17 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     const queryClient = useQueryClient();
     const shell = useAssistantPanel();
     const [bus] = useState(createAssistantEventBus);
-    // find_tools active set of the open conversation, persisted as Conversation.activeTools by withToolState.
-    const activeToolsRef = useRef<{ conversationId: string | undefined; names: string[] }>({ conversationId: undefined, names: [] });
+    // find_tools active set per conversation, persisted as Conversation.activeTools by withToolState.
+    const activeToolsRef = useRef<Map<string, string[]>>(new Map());
+    const openConversationIdRef = useRef<string | undefined>(undefined);
+    const activeNames = (): string[] => (openConversationIdRef.current ? activeToolsRef.current.get(openConversationIdRef.current) ?? [] : []);
     const messagesRef = useRef<ChatMessage[]>([]);
     const conversationAllowRef = useRef<string[]>([]);
     const [handles] = useState(() => overrides?.handles ?? getAssistantDataHandleStore());
     // Every save goes through the wrapper: rows never reach IndexedDB and handle provenance is stored.
     const [repository] = useState(() =>
         (overrides?.repository ?? createConversationRepository()).then(({ repository: stored, persistent }) => ({
-            repository: withToolState(stored, id => (activeToolsRef.current.conversationId === id ? activeToolsRef.current.names : undefined)),
+            repository: withToolState(stored, id => activeToolsRef.current.get(id)),
             persistent,
         })),
     );
@@ -75,6 +77,12 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     const settingsRef = useRef(settings);
     settingsRef.current = settings;
 
+    const makePolicyFor: AssistantControllerDeps['makePolicyFor'] = getConversationAllow =>
+        createPolicyFor(
+            () => configRef.current,
+            () => settingsRef.current,
+            getConversationAllow,
+        );
     const isVisible = (spec: Pick<ToolSpec, 'requires' | 'risk'>): boolean =>
         !!flags && toolVisibility(spec, { flags, role, permissionsReady: isReady }).visible;
     // Live checks shared by find_tools, refresh_handle and the Refresh button on SQL results.
@@ -82,12 +90,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
         const tool = getTool(name);
         return tool !== undefined && isVisible(tool.spec);
     };
-    const toolPolicy = (name: string) =>
-        createPolicyFor(
-            () => configRef.current,
-            () => settingsRef.current,
-            () => new Set(conversationAllowRef.current),
-        )(name);
+    const toolPolicy = (name: string) => makePolicyFor(() => new Set(conversationAllowRef.current))(name);
 
     const deps: AssistantControllerDeps = {
         accountKey,
@@ -101,20 +104,15 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
                 : resolved;
         },
         // Visible tools that are always on or were loaded by find_tools in this conversation.
-        visibleTools: () => selectRunTools(allTools(), isVisible, new Set(activeToolsRef.current.names)),
+        visibleTools: () => selectRunTools(allTools(), isVisible, new Set(activeNames())),
         systemPromptSections: () => [ASSISTANT_DATA_TOOLS_PROMPT],
-        makePolicyFor: getConversationAllow =>
-            createPolicyFor(
-                () => configRef.current,
-                () => settingsRef.current,
-                getConversationAllow,
-            ),
+        makePolicyFor,
         toolContextExtras: () => ({
             ...(flags ? { flags } : {}),
             ...(role ? { role } : {}),
             minimizePanel: shell.minimize,
-            activateTools: (names: string[]) => {
-                activeToolsRef.current = { ...activeToolsRef.current, names: addActiveTools(activeToolsRef.current.names, names) };
+            activateTools: (names: string[], conversationId: string) => {
+                activeToolsRef.current.set(conversationId, addActiveTools(activeToolsRef.current.get(conversationId) ?? [], names));
             },
             isToolVisible,
             toolPolicy,
@@ -148,8 +146,11 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     const openConversationRef = useRef(assistant.conversation);
     openConversationRef.current = assistant.conversation;
     const openConversationId = assistant.conversation?.id;
+    openConversationIdRef.current = openConversationId;
     useEffect(() => {
-        activeToolsRef.current = { conversationId: openConversationId, names: openConversationRef.current?.activeTools ?? [] };
+        // A conversation seen before keeps what find_tools loaded in this session; others start from the stored set.
+        if (openConversationId && !activeToolsRef.current.has(openConversationId))
+            activeToolsRef.current.set(openConversationId, openConversationRef.current?.activeTools ?? []);
     }, [openConversationId]);
     useDataHandleLifecycle(handles);
 

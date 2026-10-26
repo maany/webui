@@ -28,8 +28,8 @@ export interface BuildToolsOptions {
     makeToolContext(toolCallId: string): ToolExecutionContext;
     onResult: ToolResultObserver;
     /**
-     * Policy to build a tool with instead of the live one. A rebuild during a run keeps the approval mode of tools
-     * built earlier, so a pending approval still matches its tool; execution checks stay live.
+     * Policies tools were built with earlier in a run. A tool built as ask is rebuilt as ask even if its live policy relaxed,
+     * so a pending approval still matches its tool; every other policy, and every execution check, stays live.
      */
     builtWith?: ReadonlyMap<string, ToolPolicy>;
 }
@@ -90,7 +90,8 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
     const builtPolicy = new Map<string, ToolPolicy>();
 
     for (const tool of tools) {
-        const policy = options.builtWith?.get(tool.spec.name) ?? options.policyFor(tool.spec.name);
+        // Only a stricter build is pinned: a tool built as ask keeps asking so its pending approval still resumes.
+        const policy = options.builtWith?.get(tool.spec.name) === 'ask' ? 'ask' : options.policyFor(tool.spec.name);
         builtPolicy.set(tool.spec.name, policy);
 
         const execute = async (args: unknown, tanstackContext?: { toolCallId?: string }): Promise<unknown> => {

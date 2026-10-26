@@ -95,7 +95,8 @@ export interface AssistantControllerDeps {
         role?: Role;
         minimizePanel?: () => void;
         /** Phase 2: find_tools active set, live tool visibility and policy, handle provenance. */
-        activateTools?: ToolExecutionContext['activateTools'];
+        /** Called with the conversation the tool context belongs to, which may no longer be the open one. */
+        activateTools?: (names: string[], conversationId: string) => void;
         isToolVisible?: ToolExecutionContext['isToolVisible'];
         toolPolicy?: ToolExecutionContext['toolPolicy'];
         handleRecords?: ToolExecutionContext['handleRecords'];
@@ -461,19 +462,23 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                         extraSections: depsRef.current.systemPromptSections?.() ?? [],
                     }),
                     emit: event => depsRef.current.bus.emit(event),
-                    makeToolContext: (toolCallId, toolTurnId) => ({
-                        signal: controller.signal,
-                        conversationId: startConversation.id,
-                        turnId: toolTurnId,
-                        toolCallId,
-                        accountKey: startConversation.accountKey,
-                        handles: depsRef.current.handles,
-                        pages: depsRef.current.pages,
-                        navigate: url => depsRef.current.navigate(url),
-                        queryClient: depsRef.current.queryClient,
-                        emit: event => depsRef.current.bus.emit(event),
-                        ...depsRef.current.toolContextExtras(),
-                    }),
+                    makeToolContext: (toolCallId, toolTurnId) => {
+                        const { activateTools, ...extras } = depsRef.current.toolContextExtras();
+                        return {
+                            signal: controller.signal,
+                            conversationId: startConversation.id,
+                            turnId: toolTurnId,
+                            toolCallId,
+                            accountKey: startConversation.accountKey,
+                            handles: depsRef.current.handles,
+                            pages: depsRef.current.pages,
+                            navigate: url => depsRef.current.navigate(url),
+                            queryClient: depsRef.current.queryClient,
+                            emit: event => depsRef.current.bus.emit(event),
+                            ...extras,
+                            ...(activateTools ? { activateTools: (names: string[]) => activateTools(names, startConversation.id) } : {}),
+                        };
+                    },
                     maxSteps: d.maxSteps ?? DEFAULT_MAX_STEPS,
                 };
             });

@@ -376,15 +376,21 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
             onResult: recordDuration,
         });
         // Reads deps() again so tools loaded mid-turn by find_tools are offered on the next model call.
+        let liveClient: ChatClient | null = null;
+        const pinnedAsk = new Map(built.builtPolicy);
         const buildTools = () => {
             const fresh = deps();
-            return buildTanstackTools(fresh.tools, {
+            const rebuilt = buildTanstackTools(fresh.tools, {
                 policyFor: name => fresh.policyFor(name),
                 makeToolContext: toolCallId => fresh.makeToolContext(toolCallId, input.turnId),
                 onResult: recordDuration,
                 // Tools built at the start keep their approval mode, so a pending approval still resumes.
-                builtWith: built.builtPolicy,
-            }).serverTools;
+                builtWith: pinnedAsk,
+            });
+            // The client resumes approvals through its own tool list, so a tool loaded mid-turn must be added to it.
+            rebuilt.builtPolicy.forEach((policy, name) => policy === 'ask' && pinnedAsk.set(name, 'ask'));
+            liveClient?.updateOptions({ tools: rebuilt.approvalClientTools });
+            return rebuilt.serverTools;
         };
         // Later phases append to this list (for example telemetry or skill middleware). The refresh stays first.
         const middleware: ChatMiddleware[] = [
@@ -553,6 +559,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                     },
                 });
                 const activeClient = client;
+                liveClient = client;
                 mine = (toolCallId: string, approved: boolean) => void resolveInterrupt(toolCallId, approved);
                 resolveActive = mine;
                 onAbort = () => {

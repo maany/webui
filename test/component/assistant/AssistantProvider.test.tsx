@@ -121,6 +121,29 @@ describe('AssistantProvider data tools wiring', () => {
         });
     });
 
+    it('credits a late find_tools to the conversation it ran in', async () => {
+        const { assistant, runnerDeps } = setup();
+        await act(async () => {
+            await assistant().send('first');
+        });
+        const firstId = assistant().conversation?.id as string;
+        const lateContext = runnerDeps[0]().makeToolContext('call-1', 't');
+        act(() => assistant().newConversation());
+        await waitFor(() => expect(assistant().conversation).toBeUndefined());
+        lateContext.activateTools?.(['list_rules']);
+        await act(async () => {
+            await assistant().send('second');
+        });
+        expect(runnerDeps[runnerDeps.length - 1]().tools.map(tool => tool.spec.name)).not.toContain('list_rules');
+        await act(async () => {
+            await assistant().openConversation(firstId);
+        });
+        await act(async () => {
+            await assistant().send('back again');
+        });
+        expect(runnerDeps[runnerDeps.length - 1]().tools.map(tool => tool.spec.name)).toContain('list_rules');
+    });
+
     it('keeps the refresh gate on user visibility, not on the active set', () => {
         const { gate, runnerDeps } = setup();
         expect(runnerDeps).toHaveLength(0);
