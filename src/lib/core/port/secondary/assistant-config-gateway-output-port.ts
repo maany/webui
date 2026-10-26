@@ -13,6 +13,23 @@ export interface AssistantRelayConfig {
     rateLimitPerMinute: number;
 }
 
+/**
+ * Server-only operator telemetry sink for POST /api/assistant/telemetry.
+ * Contains the OTLP headers and the user salt (credentials): never send this object to a browser.
+ */
+export interface AssistantTelemetryRelayConfig {
+    /** ASSISTANT_TELEMETRY_OTLP_ENDPOINT without trailing slashes */
+    endpoint: string;
+    /** ASSISTANT_TELEMETRY_OTLP_HEADERS parsed from `k=v,k2=v2` */
+    headers: Record<string, string>;
+    /** ASSISTANT_RELAY_RATE_LIMIT, parsed like the LLM relay limit */
+    rateLimitPerMinute: number;
+    /** ASSISTANT_TELEMETRY_HASH_USER */
+    hashUser: boolean;
+    /** getTelemetryUserSalt(); always set when hashUser is true */
+    userSalt?: string;
+}
+
 export default interface AssistantConfigGatewayOutputPort {
     /** Operator configuration that is safe to send to the browser. Never throws: invalid values fall back to defaults. */
     getAssistantConfig(): Promise<AssistantConfig>;
@@ -24,4 +41,9 @@ export default interface AssistantConfigGatewayOutputPort {
      * Separate from getRelayConfig(), which is undefined whenever no operator model is configured.
      */
     getTelemetryUserSalt(): Promise<string | undefined>;
+    /**
+     * Operator OTLP sink for the telemetry relay (phase 6), or undefined when ASSISTANT_TELEMETRY_OTLP_ENDPOINT
+     * is not a valid http(s) URL or hashUser is on without a valid salt (the cases where operatorSink is false).
+     */
+    getTelemetryRelayConfig?(): Promise<AssistantTelemetryRelayConfig | undefined>;
 }

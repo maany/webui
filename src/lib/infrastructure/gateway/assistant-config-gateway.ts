@@ -2,7 +2,8 @@ import { inject, injectable } from 'inversify';
 import { z } from 'zod';
 import type EnvConfigGatewayOutputPort from '@/lib/core/port/secondary/env-config-gateway-output-port';
 import type AssistantConfigGatewayOutputPort from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
-import type { AssistantRelayConfig } from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
+import type { AssistantRelayConfig, AssistantTelemetryRelayConfig } from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
+import { parseOtlpHeaders } from '@/lib/infrastructure/assistant/otlp-headers';
 import { DEFAULT_ASSISTANT_CONFIG, type AssistantConfig, type TelemetryContentLevel } from '@/lib/core/entity/assistant/assistant-config';
 import {
     BYOK_PROVIDER_KINDS,
@@ -236,6 +237,23 @@ class AssistantConfigGateway implements AssistantConfigGatewayOutputPort {
     async getTelemetryUserSalt(): Promise<string | undefined> {
         const env = await readAssistantEnv(this.envConfigGateway);
         return parseUserSalt(env.ASSISTANT_TELEMETRY_USER_SALT);
+    }
+
+    /** Same checks as `telemetry.operatorSink`, so the relay and the browser always agree. */
+    async getTelemetryRelayConfig(): Promise<AssistantTelemetryRelayConfig | undefined> {
+        const env = await readAssistantEnv(this.envConfigGateway);
+        const endpoint = parseHttpUrl(env.ASSISTANT_TELEMETRY_OTLP_ENDPOINT);
+        if (endpoint === undefined) return undefined;
+        const hashUser = parseBool(env.ASSISTANT_TELEMETRY_HASH_USER, DEFAULT_ASSISTANT_CONFIG.telemetry.hashUser);
+        const userSalt = hashUser ? await this.getTelemetryUserSalt() : undefined;
+        if (hashUser && userSalt === undefined) return undefined;
+        return {
+            endpoint,
+            headers: parseOtlpHeaders(env.ASSISTANT_TELEMETRY_OTLP_HEADERS),
+            rateLimitPerMinute: parsePositiveInt(env.ASSISTANT_RELAY_RATE_LIMIT, MAX_RELAY_RATE_LIMIT) ?? DEFAULT_RELAY_RATE_LIMIT,
+            hashUser,
+            ...(userSalt !== undefined ? { userSalt } : {}),
+        };
     }
 }
 
