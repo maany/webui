@@ -48,7 +48,7 @@ const FORBIDDEN_FUNCTION =
     /^(read_[a-z0-9_]*|[a-z0-9_]+_scan|glob|sniff_csv|query|query_table|parquet_metadata|parquet_file_metadata|parquet_kv_metadata|parquet_schema)$/i;
 
 /** A name that DuckDB would resolve as a file or URL (replacement scan): a path, a URL, a glob or a file extension. */
-const FILE_LIKE_NAME = /[\\/*]|:\/\/|\.[A-Za-z0-9]{1,8}$/;
+const FILE_LIKE_NAME = /[\\/*]|:\/\/|^[A-Za-z][A-Za-z0-9+.-]+:|\.[A-Za-z0-9]{1,8}$/;
 
 interface Lexed {
     /** Original text with comments replaced by a space. */
@@ -62,7 +62,56 @@ interface Lexed {
     error?: string;
 }
 
-const isIdentChar = (char: string | undefined): boolean => char !== undefined && /[A-Za-z0-9_]/.test(char);
+/** Matches DuckDB's scanner: letters, digits, underscore, `$` after the first character, and any non-ASCII code point. */
+const isIdentChar = (char: string | undefined): boolean => char !== undefined && (/[A-Za-z0-9_$]/.test(char) || char.charCodeAt(0) >= 0x80);
+
+const CLAUSE_RESET_KEYWORDS = new Set([
+    'SELECT',
+    'WHERE',
+    'GROUP',
+    'HAVING',
+    'ORDER',
+    'LIMIT',
+    'OFFSET',
+    'QUALIFY',
+    'WINDOW',
+    'UNION',
+    'INTERSECT',
+    'EXCEPT',
+    'WITH',
+]);
+
+/**
+ * Returns the contents of every string literal or quoted identifier that sits in a table reference position:
+ * directly after FROM, JOIN or LATERAL, or after a comma inside a FROM clause (at the same parenthesis depth).
+ */
+function tableReferenceLiterals(skeleton: string, literals: string[]): string[] {
+    const found: string[] = [];
+    const clauses: boolean[] = [false];
+    let previous = '';
+    let literalIndex = 0;
+    for (const token of skeleton.matchAll(/''|""|[A-Za-z_][A-Za-z0-9_$]*|[(),]/g)) {
+        const text = token[0];
+        const upper = text.toUpperCase();
+        if (text === "''" || text === '""') {
+            const inFromClause = clauses[clauses.length - 1];
+            if (previous === 'FROM' || previous === 'JOIN' || previous === 'LATERAL' || (previous === ',' && inFromClause)) {
+                found.push(literals[literalIndex] ?? '');
+            }
+            literalIndex += 1;
+        } else if (text === '(') {
+            clauses.push(false);
+        } else if (text === ')') {
+            if (clauses.length > 1) clauses.pop();
+        } else if (upper === 'FROM' || upper === 'JOIN') {
+            clauses[clauses.length - 1] = true;
+        } else if (CLAUSE_RESET_KEYWORDS.has(upper)) {
+            clauses[clauses.length - 1] = false;
+        }
+        previous = text === "''" || text === '""' ? 'LITERAL' : upper;
+    }
+    return found;
+}
 
 function isEscapeStringStart(sql: string, quoteIndex: number): boolean {
     const prefix = sql[quoteIndex - 1];
@@ -223,13 +272,8 @@ export function checkReadOnlySql(sql: string): SqlGuardResult {
         return { ok: false, reason: 'A quoted identifier cannot be used as a function name' };
     }
 
-    const sources = skeleton.matchAll(/\b(?:FROM|JOIN)\s*(?:''|"")/gi);
-    for (const source of sources) {
-        const placeholder = source.index + source[0].length - 2;
-        const position = (skeleton.slice(0, placeholder).match(/''|""/g) ?? []).length;
-        if (FILE_LIKE_NAME.test(literals[position] ?? '')) {
-            return { ok: false, reason: 'Reading a file or URL is not allowed. Query the data handles instead.' };
-        }
+    if (tableReferenceLiterals(skeleton, literals).some(name => FILE_LIKE_NAME.test(name))) {
+        return { ok: false, reason: 'Reading a file or URL is not allowed. Query the data handles instead.' };
     }
 
     const calls = skeleton.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*\(/g);

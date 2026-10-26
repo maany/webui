@@ -164,4 +164,37 @@ describe('checkReadOnlySql', () => {
         expect(accepted("SELECT 'FROM ''x.csv''' AS note, name FROM rses_1")).toContain('rses_1');
         expect(accepted("SELECT * FROM rses_1 WHERE name = '/etc/passwd'")).toContain('/etc/passwd');
     });
+
+    describe('fix round 1', () => {
+        it('treats $ and non-ASCII characters as identifier characters', () => {
+            expect(rejected('SELECT 1 AS a$$$; DROP TABLE rules_1; SELECT 1 AS b$$')).toBeTruthy();
+            expect(rejected('SELECT 1 AS é$$; DROP TABLE rules_1; SELECT é$$')).toBeTruthy();
+            expect(rejected("SELECT éE'\\'; DROP TABLE x; SELECT '")).toBeTruthy();
+            expect(accepted('SELECT 1 AS a$b')).toBe('SELECT 1 AS a$b');
+            expect(accepted("SELECT 'é' AS x")).toBe("SELECT 'é' AS x");
+        });
+
+        it('rejects file-like names in every table reference position', () => {
+            expect(rejected("SELECT * FROM rules_1, '/etc/passwd'")).toContain('file');
+            expect(rejected("SELECT * FROM rules_1 JOIN rses_1 ON true, 'https://h/x.parquet'")).toContain('file');
+            expect(rejected("SELECT * FROM LATERAL '/etc/passwd'")).toContain('file');
+            expect(rejected("SELECT * FROM rules_1 a, LATERAL 'x.csv'")).toContain('file');
+            expect(rejected('SELECT * FROM rules_1, "data.parquet"')).toContain('file');
+            expect(rejected("SELECT * FROM (SELECT 1) t, 'x.csv'")).toContain('file');
+        });
+
+        it('allows literals in the select list, where and function arguments', () => {
+            expect(accepted("SELECT a, 'x.csv' AS f FROM t")).toContain('x.csv');
+            expect(accepted("SELECT * FROM t WHERE a IN ('x.csv', 'y.csv')")).toContain('y.csv');
+            expect(accepted("SELECT * FROM t GROUP BY a, 'x.csv'")).toContain('x.csv');
+            expect(accepted("SELECT concat(a, 'x.csv') FROM t")).toContain('x.csv');
+        });
+
+        it.each(['s3:bucket/key', 'gcs:b/k', 'http:x', 'https:x', 'hf:datasets/x', 'az:c/b', 'azure:c/b', 'r2:b/k', 'S3:b'])(
+            'rejects the scheme prefix in %s',
+            name => {
+                expect(rejected(`SELECT * FROM '${name}'`)).toContain('file');
+            },
+        );
+    });
 });
