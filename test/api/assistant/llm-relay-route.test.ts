@@ -93,14 +93,18 @@ describe('/api/assistant/llm/[...path]', () => {
         expect(upstream).not.toHaveBeenCalled();
     });
 
-    it.each([[['v1', 'embeddings']], [['..', '..', 'admin']], [['chat', 'completions', 'extra']], [['v1', 'messages']]])(
-        'returns 404 for the subpath %p',
-        async path => {
-            const res = await POST(post(`http://localhost/api/assistant/llm/${path.join('/')}`, BODY), ctx(...path));
-            expect(res.status).toBe(404);
-            expect(upstream).not.toHaveBeenCalled();
-        },
-    );
+    it.each([
+        [['v1', 'embeddings']],
+        [['..', '..', 'admin']],
+        [['chat', 'completions', 'extra']],
+        [['v1', 'messages']],
+        [['__proto__']],
+        [['constructor']],
+    ])('returns 404 for the subpath %p', async path => {
+        const res = await POST(post(`http://localhost/api/assistant/llm/${path.join('/')}`, BODY), ctx(...path));
+        expect(res.status).toBe(404);
+        expect(upstream).not.toHaveBeenCalled();
+    });
 
     it('returns 405 for the wrong method', async () => {
         const res = await GET(new NextRequest(COMPLETIONS_URL), ctx('chat', 'completions'));
@@ -118,6 +122,54 @@ describe('/api/assistant/llm/[...path]', () => {
         const big = { ...BODY, messages: [{ role: 'user', content: 'x'.repeat(RELAY_MAX_BODY_BYTES) }] };
         expect((await POST(post(COMPLETIONS_URL, big), ctx('chat', 'completions'))).status).toBe(413);
         expect(upstream).not.toHaveBeenCalled();
+    });
+
+    it('returns 413 when the declared content-length exceeds the cap', async () => {
+        const res = await POST(post(COMPLETIONS_URL, BODY, { 'content-length': String(RELAY_MAX_BODY_BYTES + 1) }), ctx('chat', 'completions'));
+        expect(res.status).toBe(413);
+        expect(upstream).not.toHaveBeenCalled();
+    });
+
+    it('returns 413 for a body of exactly the cap', async () => {
+        const req = new NextRequest(COMPLETIONS_URL, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: 'x'.repeat(RELAY_MAX_BODY_BYTES),
+        });
+        expect((await POST(req, ctx('chat', 'completions'))).status).toBe(413);
+        expect(upstream).not.toHaveBeenCalled();
+    });
+
+    it('returns 415 when application/json only appears in a parameter', async () => {
+        const res = await POST(post(COMPLETIONS_URL, BODY, { 'content-type': 'text/plain; x=application/json' }), ctx('chat', 'completions'));
+        expect(res.status).toBe(415);
+        expect(upstream).not.toHaveBeenCalled();
+    });
+
+    it('accepts application/json with a charset parameter', async () => {
+        const res = await POST(post(COMPLETIONS_URL, BODY, { 'content-type': 'Application/JSON; charset=utf-8' }), ctx('chat', 'completions'));
+        expect(res.status).toBe(200);
+    });
+
+    it('does not forward upstream set-cookie or www-authenticate headers', async () => {
+        upstream.mockResolvedValueOnce(
+            new Response('{}', {
+                status: 401,
+                headers: { 'content-type': 'application/json', 'set-cookie': 'a=b', 'www-authenticate': 'Basic realm="x"' },
+            }),
+        );
+        const res = await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'));
+        expect(res.headers.has('set-cookie')).toBe(false);
+        expect(res.headers.has('www-authenticate')).toBe(false);
+    });
+
+    it('cancels the upstream body on a redirect', async () => {
+        jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        const cancel = jest.fn();
+        const body = new ReadableStream({ cancel });
+        upstream.mockResolvedValueOnce(new Response(body, { status: 302, headers: { location: 'http://x/' } }));
+        expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(502);
+        expect(cancel).toHaveBeenCalled();
     });
 
     it('forwards the body to the env upstream with the operator key', async () => {

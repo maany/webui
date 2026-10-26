@@ -76,11 +76,11 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
     let body: string | undefined;
     if (method === 'POST') {
         const contentType = request.headers.get('content-type') ?? '';
-        if (!contentType.toLowerCase().includes('application/json')) return reply(415, 'unsupported_media_type');
+        if (contentType.split(';')[0].trim().toLowerCase() !== 'application/json') return reply(415, 'unsupported_media_type');
         const declaredLength = Number(request.headers.get('content-length') ?? '0');
         if (declaredLength > RELAY_MAX_BODY_BYTES) return reply(413, 'payload_too_large');
         body = await request.text();
-        if (Buffer.byteLength(body) > RELAY_MAX_BODY_BYTES) return reply(413, 'payload_too_large');
+        if (Buffer.byteLength(body) >= RELAY_MAX_BODY_BYTES) return reply(413, 'payload_too_large');
     }
 
     const headers = new Headers({ accept: request.headers.get('accept') ?? 'application/json' });
@@ -109,6 +109,11 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
 
     if (upstream.status >= 300 && upstream.status < 400) {
         console.error('[assistant relay] upstream answered with a redirect, not following it');
+        try {
+            await upstream.body?.cancel();
+        } catch {
+            // the connection is released best-effort
+        }
         return reply(502, 'upstream_redirect');
     }
 
