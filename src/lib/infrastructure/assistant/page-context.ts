@@ -2,7 +2,48 @@ import type { PageContext } from '@/lib/core/entity/assistant/page-context';
 
 export const PAGE_SUMMARY_MAX_CHARS = 500;
 const TITLE_MAX_CHARS = 200;
-const PARAM_VALUE_MAX_CHARS = 200;
+const PATHNAME_MAX_CHARS = 512;
+const PARAM_KEY_MAX_CHARS = 64;
+const PARAM_VALUE_MAX_CHARS = 256;
+const MAX_PARAMS = 30;
+
+/** Param names that commonly carry credentials; matched case-insensitively with - and _ ignored. */
+const SENSITIVE_PARAM_KEYS = new Set(
+    [
+        'token',
+        'code',
+        'state',
+        'access_token',
+        'id_token',
+        'refresh_token',
+        'password',
+        'secret',
+        'key',
+        'apikey',
+        'api_key',
+        'session',
+        'auth',
+        'authorization',
+    ].map(normaliseParamKey),
+);
+
+function normaliseParamKey(key: string): string {
+    return key.toLowerCase().replace(/[-_]/g, '');
+}
+
+/** Breaks the closing tags of the untrusted-data blocks so text cannot end the block early. */
+export function neutraliseDataTags(text: string): string {
+    return text.replace(/<\s*\/(?=\s*(?:page_context|conversation_summary)\b)/gi, '<\\/');
+}
+
+/** Single-line, tag-safe text for a field of the page context. */
+export function toSingleLine(text: string): string {
+    return neutraliseDataTags(text.replace(/[\r\n\u2028\u2029]+/g, ' '));
+}
+
+function truncate(text: string, limit: number): string {
+    return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
 
 export interface PageContextInput {
     pathname: string;
@@ -20,15 +61,18 @@ export interface PageContextInput {
 export function buildPageContext(input: PageContextInput): PageContext {
     const params: Record<string, string> = {};
     input.searchParams?.forEach((value, key) => {
-        params[key] = value.slice(0, PARAM_VALUE_MAX_CHARS);
+        if (SENSITIVE_PARAM_KEYS.has(normaliseParamKey(key))) return;
+        const safeKey = toSingleLine(truncate(key, PARAM_KEY_MAX_CHARS));
+        if (!(safeKey in params) && Object.keys(params).length >= MAX_PARAMS) return;
+        params[safeKey] = toSingleLine(truncate(value, PARAM_VALUE_MAX_CHARS));
     });
     const summary = input.summary?.trim();
     return {
-        route: input.pathname,
+        route: toSingleLine(truncate(input.pathname, PATHNAME_MAX_CHARS)),
         params,
-        title: input.title.slice(0, TITLE_MAX_CHARS),
+        title: toSingleLine(input.title.slice(0, TITLE_MAX_CHARS)),
         accountKey: input.accountKey,
-        ...(summary ? { summary: summary.slice(0, PAGE_SUMMARY_MAX_CHARS) } : {}),
+        ...(summary ? { summary: toSingleLine(summary.slice(0, PAGE_SUMMARY_MAX_CHARS)) } : {}),
     };
 }
 

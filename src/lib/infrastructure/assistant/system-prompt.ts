@@ -1,5 +1,6 @@
 import type { ChatMessage } from '@/lib/core/entity/assistant/conversation';
 import type { PageContext } from '@/lib/core/entity/assistant/page-context';
+import { neutraliseDataTags, toSingleLine } from './page-context';
 
 export interface SystemPromptInput {
     /** Names of the tools offered this turn. */
@@ -48,9 +49,12 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     for (const section of input.extraSections ?? []) if (section.trim()) sections.push(section);
     if (input.compactedSummary) {
         sections.push(
-            ['Summary of the earlier part of this conversation:', '<conversation_summary>', input.compactedSummary, '</conversation_summary>'].join(
-                '\n',
-            ),
+            [
+                'Summary of the earlier part of this conversation:',
+                '<conversation_summary>',
+                neutraliseDataTags(input.compactedSummary),
+                '</conversation_summary>',
+            ].join('\n'),
         );
     }
     return sections.join('\n\n');
@@ -58,10 +62,10 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
 
 /** Renders a page context as a delimited data block. */
 export function formatPageContext(context: PageContext): string {
-    const lines = ['<page_context>', `route: ${context.route}`];
-    if (Object.keys(context.params).length > 0) lines.push(`params: ${JSON.stringify(context.params)}`);
-    lines.push(`title: ${context.title}`, `account: ${context.accountKey}`);
-    if (context.summary) lines.push(`summary: ${context.summary}`);
+    const lines = ['<page_context>', `route: ${toSingleLine(context.route)}`];
+    if (Object.keys(context.params).length > 0) lines.push(`params: ${toSingleLine(JSON.stringify(context.params))}`);
+    lines.push(`title: ${toSingleLine(context.title)}`, `account: ${toSingleLine(context.accountKey)}`);
+    if (context.summary) lines.push(`summary: ${toSingleLine(context.summary)}`);
     lines.push('</page_context>');
     return lines.join('\n');
 }
@@ -103,5 +107,5 @@ export function transcriptForSummary(messages: ChatMessage[], previousSummary?: 
             }
         }
     }
-    return lines.join('\n');
+    return neutraliseDataTags(lines.join('\n'));
 }
