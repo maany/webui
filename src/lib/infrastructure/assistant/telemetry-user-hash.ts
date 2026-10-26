@@ -20,42 +20,76 @@ function records(value: unknown): JsonRecord[] {
     return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
+export interface OtlpUserIds {
+    /** Every `account@vo` of the signed-in session (active and other logged-in accounts). */
+    accountKeys: string[];
+    /** Salted hash per session account key. */
+    hashedIds: Record<string, string>;
+    /** Hash of the active account: what any user id that is not a session account becomes. */
+    defaultHashedUserId: string;
+}
+
+/** Nesting deeper than this is replaced, so a hostile payload cannot exhaust the stack. */
+export const OTLP_MAX_DEPTH = 64;
+
 /**
  * Rewrites an OTLP/HTTP JSON trace export (ExportTraceServiceRequest) in place and returns it.
- * Every user id attribute becomes `hashedUserId`, whatever the browser sent, and the raw
- * `accountKey` is replaced by `hashedUserId` in span and event names, status messages and all
- * string attribute values (resource, scope, span, event and link attributes, including array
- * and key-value list values). Anything that is not a trace export is returned unchanged.
+ * Every session account key is replaced by its own hash in span and event names, status messages and
+ * all string attribute values (resource, scope, span, event and link attributes, including array and
+ * key-value list values), longest key first. A user id attribute whose value is a session account key
+ * becomes that key's hash; any other value becomes the active account's hash, so a spoofed id cannot
+ * inject a raw id. Values nested deeper than OTLP_MAX_DEPTH are replaced by `{ stringValue: '[REDACTED]' }`.
+ * Anything that is not a trace export is returned unchanged.
  */
-export function rewriteOtlpUserIds(payload: unknown, ids: { accountKey: string; hashedUserId: string }): unknown {
+export function rewriteOtlpUserIds(payload: unknown, ids: OtlpUserIds): unknown {
+    const keys = ids.accountKeys.filter(key => key !== '' && ids.hashedIds[key] !== undefined).sort((a, b) => b.length - a.length);
+
     function replaceText(text: string): string {
-        return ids.accountKey === '' ? text : text.split(ids.accountKey).join(ids.hashedUserId);
+        let result = text;
+        for (const key of keys) {
+            result = result.split(key).join(ids.hashedIds[key]);
+        }
+        return result;
     }
 
-    function rewriteValue(value: JsonRecord): void {
+    function userIdHash(value: unknown): string {
+        const raw = isRecord(value) && typeof value.stringValue === 'string' ? value.stringValue : undefined;
+        return raw !== undefined && keys.includes(raw) ? ids.hashedIds[raw] : ids.defaultHashedUserId;
+    }
+
+    function rewriteValue(value: JsonRecord, depth: number): void {
         if (typeof value.stringValue === 'string') {
             value.stringValue = replaceText(value.stringValue);
         }
         const arrayValue = value.arrayValue;
         if (isRecord(arrayValue)) {
-            records(arrayValue.values).forEach(rewriteValue);
+            if (depth >= OTLP_MAX_DEPTH) {
+                delete value.arrayValue;
+                value.stringValue = '[REDACTED]';
+                return;
+            }
+            records(arrayValue.values).forEach(inner => rewriteValue(inner, depth + 1));
         }
         const kvlistValue = value.kvlistValue;
         if (isRecord(kvlistValue)) {
-            rewriteAttributes(kvlistValue.values);
+            if (depth >= OTLP_MAX_DEPTH) {
+                delete value.kvlistValue;
+                value.stringValue = '[REDACTED]';
+                return;
+            }
+            rewriteAttributes(kvlistValue.values, depth + 1);
         }
     }
 
-    function rewriteAttributes(attributes: unknown): void {
+    function rewriteAttributes(attributes: unknown, depth = 0): void {
         for (const entry of records(attributes)) {
             if (typeof entry.key === 'string' && USER_ID_ATTRIBUTE_KEYS.includes(entry.key)) {
-                entry.value = { stringValue: ids.hashedUserId };
+                entry.value = { stringValue: userIdHash(entry.value) };
             } else if (isRecord(entry.value)) {
-                rewriteValue(entry.value);
+                rewriteValue(entry.value, depth);
             }
         }
     }
-
     if (!isRecord(payload)) {
         return payload;
     }

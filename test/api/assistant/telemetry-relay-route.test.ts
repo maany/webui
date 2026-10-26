@@ -4,11 +4,13 @@ import fetchMock from 'jest-fetch-mock';
 
 const signedIn = { rucioIdentity: 'jdoe', rucioAccount: 'jdoe', rucioVO: 'def', isLoggedIn: true };
 const getSessionUser = jest.fn<Promise<unknown>, []>(async () => signedIn);
+const getSession = jest.fn<Promise<unknown>, []>(async () => ({ user: signedIn, allUsers: [] }));
 
 jest.mock('@/lib/infrastructure/auth/nextauth-session-utils', () => ({
     __esModule: true,
     ...jest.requireActual('@/lib/infrastructure/auth/nextauth-session-utils'),
     getSessionUser: () => getSessionUser(),
+    getSession: () => getSession(),
 }));
 
 import { POST } from '@/app/api/assistant/telemetry/route';
@@ -51,6 +53,24 @@ const otlpBody = (userId: string) => ({
     ],
 });
 
+const directRequest = (bytes: Uint8Array, signal?: AbortSignal) => {
+    const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+        },
+    });
+    return { headers: new Headers({ 'content-type': 'application/json' }), body: stream, signal } as unknown as Request;
+};
+
+const directDeps = (fetchImpl: unknown) => ({
+    assistantEnabled: async () => true,
+    session: async () => ({ rateLimitKey: 'k', accountKey: 'jdoe@def', accountKeys: ['jdoe@def'] }),
+    upstream: async () => ({ endpoint: UPSTREAM, headers: { Authorization: 'Basic x' }, rateLimitPerMinute: 30, hashUser: false }),
+    rateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }),
+    fetchImpl: fetchImpl as typeof fetch,
+});
+
 let account = 0;
 let saltSpy: jest.SpyInstance | undefined;
 
@@ -69,6 +89,7 @@ describe('POST /api/assistant/telemetry', () => {
         // A fresh account per test keeps the in-memory rate limit window separate.
         account += 1;
         getSessionUser.mockResolvedValue({ ...signedIn, rucioAccount: `jdoe${account}` });
+        getSession.mockResolvedValue({ user: { ...signedIn, rucioAccount: `jdoe${account}` }, allUsers: [] });
     });
 
     afterEach(() => {
@@ -117,6 +138,7 @@ describe('POST /api/assistant/telemetry', () => {
         expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    // jsdom's NextRequest has no web stream body, so this exercises the arrayBuffer fallback; the streaming cap is covered by the direct relayTelemetry test below.
     it('rejects bodies over 1 MiB', async () => {
         const res = await POST(req(new Uint8Array(1048577)));
         expect(res.status).toBe(413);
@@ -142,7 +164,7 @@ describe('POST /api/assistant/telemetry', () => {
         const fetchImpl = jest.fn();
         const res = await relayTelemetry(request, {
             assistantEnabled: async () => true,
-            session: async () => ({ rateLimitKey: 'k', accountKey: 'jdoe@def' }),
+            session: async () => ({ rateLimitKey: 'k', accountKey: 'jdoe@def', accountKeys: ['jdoe@def'] }),
             upstream: async () => ({ endpoint: UPSTREAM, headers: {}, rateLimitPerMinute: 30, hashUser: false }),
             rateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }),
             fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -161,7 +183,13 @@ describe('POST /api/assistant/telemetry', () => {
         const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
         expect(url).toBe(UPSTREAM);
         expect(init.method).toBe('POST');
-        expect(init.headers).toEqual({ Authorization: 'Basic cGs6c2s=', 'x-langfuse-ingestion-version': '4', 'content-type': 'application/json' });
+        const sent = new Headers(init.headers as HeadersInit);
+        expect(Array.from(sent.keys()).sort()).toEqual(['authorization', 'content-type', 'x-langfuse-ingestion-version']);
+        expect(sent.get('authorization')).toBe('Basic cGs6c2s=');
+        expect(sent.get('x-langfuse-ingestion-version')).toBe('4');
+        expect(sent.get('content-type')).toBe('application/json');
+        expect(sent.has('cookie')).toBe(false);
+        expect(init.redirect).toBe('error');
         expect(Buffer.from(init.body as ArrayBuffer).toString()).toBe(BODY);
     });
 
@@ -222,5 +250,99 @@ describe('POST /api/assistant/telemetry', () => {
         expect(res.status).toBe(504);
         expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('span-content-should-not-be-logged');
         errorSpy.mockRestore();
+    });
+
+    it('passes a numeric upstream retry-after on 429 and replaces anything else with 10', async () => {
+        fetchMock.mockResponseOnce('{}', { status: 429, headers: { 'retry-after': '42' } });
+        const ok = await POST(req());
+        expect(ok.status).toBe(429);
+        expect(ok.headers.get('retry-after')).toBe('42');
+        fetchMock.mockResponseOnce('{}', { status: 429, headers: { 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' } });
+        expect((await POST(req())).headers.get('retry-after')).toBe('10');
+        fetchMock.mockResponseOnce('{}', { status: 429 });
+        expect((await POST(req())).headers.get('retry-after')).toBe('10');
+    });
+
+    it('does not echo upstream set-cookie or www-authenticate headers', async () => {
+        fetchMock.mockResponseOnce('{"secret":"upstream"}', {
+            status: 401,
+            headers: { 'set-cookie': 'sid=abc', 'www-authenticate': 'Basic realm="x"' },
+        });
+        const res = await POST(req());
+        expect(res.headers.get('set-cookie')).toBeNull();
+        expect(res.headers.get('www-authenticate')).toBeNull();
+        expect(await res.text()).not.toContain('upstream"');
+    });
+
+    it.each([200, 429, 503])('cancels the upstream body for status %s', async status => {
+        const cancel = jest.fn(async () => undefined);
+        const fetchImpl = jest.fn(async () => ({ ok: status < 300, status, headers: new Headers(), body: { cancel } } as unknown as Response));
+        const res = await relayTelemetry(directRequest(new TextEncoder().encode(BODY)), directDeps(fetchImpl));
+        expect(res.status).toBe(status);
+        expect(cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it('hashes each session account with its own hash and maps a foreign id to the active hash', async () => {
+        process.env.ASSISTANT_TELEMETRY_HASH_USER = 'true';
+        mockSalt(SALT);
+        const active = `jdoe${account}@def`;
+        const inactive = 'asmith@def';
+        getSession.mockResolvedValue({
+            user: { ...signedIn, rucioAccount: `jdoe${account}` },
+            allUsers: [
+                { ...signedIn, rucioAccount: `jdoe${account}` },
+                { ...signedIn, rucioAccount: 'asmith' },
+            ],
+        });
+        fetchMock.mockResponse('{}', { status: 200 });
+        const hash = (key: string) => createHmac('sha256', SALT).update(key).digest('hex');
+        await POST(req(JSON.stringify(otlpBody(inactive))));
+        let forwarded = String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body);
+        expect(forwarded).not.toContain(inactive);
+        expect(forwarded).not.toContain(active);
+        expect(JSON.parse(forwarded).resourceSpans[0].scopeSpans[0].spans[0].attributes[0].value.stringValue).toBe(hash(inactive));
+        await POST(req(JSON.stringify(otlpBody('mallory@def'))));
+        forwarded = String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body);
+        expect(forwarded).not.toContain('mallory');
+        expect(JSON.parse(forwarded).resourceSpans[0].scopeSpans[0].spans[0].attributes[0].value.stringValue).toBe(hash(active));
+    });
+
+    it('answers 400, never 500, for a deeply nested body when hashing', async () => {
+        process.env.ASSISTANT_TELEMETRY_HASH_USER = 'true';
+        mockSalt(SALT);
+        fetchMock.mockResponse('{}', { status: 200 });
+        const deep = '{"a":'.repeat(100000) + '1' + '}'.repeat(100000);
+        const res = await POST(req(deep));
+        expect(res.status).toBe(400);
+        const nested = '{"arrayValue":{"values":['.repeat(5000) + '{"stringValue":"x"}' + ']}}'.repeat(5000);
+        const res2 = await POST(req(`{"resourceSpans":[{"scopeSpans":[{"spans":[{"attributes":[{"key":"k","value":${nested}}]}]}]}]}`));
+        expect([200, 400]).toContain(res2.status);
+    });
+
+    it('answers 400 when the client aborts mid-body', async () => {
+        const stream = new ReadableStream<Uint8Array>({
+            pull() {
+                throw new Error('aborted');
+            },
+        });
+        const request = { headers: new Headers({ 'content-type': 'application/json' }), body: stream } as unknown as Request;
+        const fetchImpl = jest.fn();
+        const res = await relayTelemetry(request, directDeps(fetchImpl));
+        expect(res.status).toBe(400);
+        expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it('aborts the upstream fetch when the client request is aborted', async () => {
+        const clientAbort = new AbortController();
+        let upstreamSignal: AbortSignal | undefined;
+        const fetchImpl = jest.fn(async (_url: unknown, init?: RequestInit) => {
+            upstreamSignal = init?.signal as AbortSignal;
+            return { ok: true, status: 200, headers: new Headers(), body: null } as unknown as Response;
+        });
+        const request = directRequest(new TextEncoder().encode(BODY), clientAbort.signal);
+        await relayTelemetry(request, directDeps(fetchImpl));
+        expect(upstreamSignal).toBeDefined();
+        clientAbort.abort();
+        expect(upstreamSignal?.aborted).toBe(true);
     });
 });

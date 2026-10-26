@@ -16,6 +16,8 @@ export interface TelemetryRelaySession {
     rateLimitKey: string;
     /** `account@vo` of the signed-in session; the only account the relay hashes. */
     accountKey: string;
+    /** Every `account@vo` of the session (active plus other logged-in accounts), deduped. */
+    accountKeys: string[];
 }
 
 export interface TelemetryRelayDeps {
@@ -49,17 +51,22 @@ async function readCappedBody(request: Request, maxBytes: number): Promise<Uint8
     const reader = request.body.getReader();
     const chunks: Uint8Array[] = [];
     let total = 0;
-    for (;;) {
-        const { done, value } = await reader.read();
-        if (done) {
-            break;
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) {
+                break;
+            }
+            total += value.byteLength;
+            if (total > maxBytes) {
+                await reader.cancel().catch(() => undefined);
+                return undefined;
+            }
+            chunks.push(value);
         }
-        total += value.byteLength;
-        if (total > maxBytes) {
-            await reader.cancel();
-            return undefined;
-        }
-        chunks.push(value);
+    } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        throw error;
     }
     const body = new Uint8Array(total);
     let offset = 0;
@@ -68,6 +75,30 @@ async function readCappedBody(request: Request, maxBytes: number): Promise<Uint8
         offset += chunk.byteLength;
     }
     return body;
+}
+
+/** Best effort: releases the upstream connection; never throws (some runtimes expose a body without cancel). */
+async function discardBody(response: Response): Promise<void> {
+    try {
+        await response.body?.cancel();
+    } catch {
+        // ignore
+    }
+}
+
+/** Aborts with either signal: AbortSignal.any when it accepts both (cross-realm signals can throw), else the timeout signal alone. */
+function linkSignals(clientSignal: AbortSignal | undefined, timeoutSignal: AbortSignal): AbortSignal {
+    if (!clientSignal) {
+        return timeoutSignal;
+    }
+    try {
+        if (typeof AbortSignal.any === 'function') {
+            return AbortSignal.any([clientSignal, timeoutSignal]);
+        }
+    } catch {
+        // fall through to the timeout signal
+    }
+    return timeoutSignal;
 }
 
 /**
@@ -99,41 +130,56 @@ export async function relayTelemetry(request: Request, deps: TelemetryRelayDeps)
     if (!decision.allowed) {
         return json({ error: 'Too many requests' }, 429, { 'retry-after': String(decision.retryAfterSeconds) });
     }
-    const body = await readCappedBody(request, TELEMETRY_RELAY_MAX_BYTES);
+    let body: Uint8Array | undefined;
+    try {
+        body = await readCappedBody(request, TELEMETRY_RELAY_MAX_BYTES);
+    } catch {
+        return json({ error: 'Request body could not be read' }, 400);
+    }
     if (!body) {
         return json({ error: 'Payload too large' }, 413);
     }
     let forwarded: Uint8Array | string = body;
     if (upstream.hashUser && upstream.userSalt) {
-        let payload: unknown;
         try {
-            payload = JSON.parse(new TextDecoder().decode(body));
+            const payload: unknown = JSON.parse(new TextDecoder().decode(body));
+            const hashedIds: Record<string, string> = {};
+            for (const key of session.accountKeys) {
+                hashedIds[key] = hashAccountKey(upstream.userSalt, key);
+            }
+            const defaultHashedUserId = hashAccountKey(upstream.userSalt, session.accountKey);
+            forwarded = JSON.stringify(rewriteOtlpUserIds(payload, { accountKeys: session.accountKeys, hashedIds, defaultHashedUserId }));
         } catch {
             return json({ error: 'Body is not OTLP JSON' }, 400);
         }
-        const hashedUserId = hashAccountKey(upstream.userSalt, session.accountKey);
-        forwarded = JSON.stringify(rewriteOtlpUserIds(payload, { accountKey: session.accountKey, hashedUserId }));
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TELEMETRY_RELAY_TIMEOUT_MS);
     try {
+        const headers = new Headers(upstream.headers);
+        headers.set('content-type', contentType);
+        const signal = linkSignals(request.signal, controller.signal);
         const response = await deps.fetchImpl(upstream.endpoint, {
             method: 'POST',
-            headers: { ...upstream.headers, 'content-type': contentType },
+            headers,
             body: forwarded,
             redirect: 'error',
-            signal: controller.signal,
+            signal,
         });
+        const status = response.status;
+        const upstreamRetryAfter = response.headers.get('retry-after') ?? '';
+        // The upstream body is never used: release the connection.
+        await discardBody(response);
         if (response.ok) {
             return json({}, 200);
         }
-        if (response.status === 429) {
-            return json({ error: 'Upstream rate limited' }, 429, { 'retry-after': response.headers.get('retry-after') ?? '10' });
+        if (status === 429) {
+            return json({ error: 'Upstream rate limited' }, 429, { 'retry-after': /^\d{1,6}$/.test(upstreamRetryAfter) ? upstreamRetryAfter : '10' });
         }
-        if (response.status >= 500) {
+        if (status >= 500) {
             return json({ error: 'Upstream unavailable' }, 503);
         }
-        return json({ error: 'Upstream rejected the export', status: response.status }, 500);
+        return json({ error: 'Upstream rejected the export', status }, 500);
     } catch (error) {
         console.error('assistant telemetry relay: upstream request failed', error instanceof Error ? error.name : 'unknown');
         return json({ error: 'Upstream unreachable' }, 504);

@@ -4,7 +4,7 @@ import appContainer from '@/lib/infrastructure/ioc/container-config';
 import GATEWAYS from '@/lib/infrastructure/ioc/ioc-symbols-gateway';
 import type FeatureConfigGatewayOutputPort from '@/lib/core/port/secondary/feature-config-gateway-output-port';
 import type AssistantConfigGatewayOutputPort from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
-import { getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
+import { getSession, getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
 import { relayTelemetry, telemetryRelayRateLimiter } from '@/lib/infrastructure/assistant/telemetry-relay';
 
 /**
@@ -22,7 +22,12 @@ export async function POST(request: NextRequest) {
                 return undefined;
             }
             const accountKey = `${user.rucioAccount}@${user.rucioVO}`;
-            return { rateLimitKey: `${user.rucioIdentity}|${accountKey}`, accountKey };
+            const accountKeys = new Set<string>([accountKey]);
+            const session = await getSession();
+            for (const other of session?.allUsers ?? []) {
+                accountKeys.add(`${other.rucioAccount}@${other.rucioVO}`);
+            }
+            return { rateLimitKey: `${user.rucioIdentity}|${accountKey}`, accountKey, accountKeys: Array.from(accountKeys) };
         },
         upstream: async () => (assistantConfig.getTelemetryRelayConfig ? assistantConfig.getTelemetryRelayConfig() : undefined),
         rateLimit: async (rateLimitKey, limitPerMinute) => telemetryRelayRateLimiter.hit(rateLimitKey, limitPerMinute),
