@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -82,6 +83,55 @@ describe('operator skills loader', () => {
             addSkill(`skill-${String(i).padStart(3, '0')}`, skillMd(`skill-${String(i).padStart(3, '0')}`));
         const skills = await loadOperatorSkills(dir, logger);
         expect(skills).toHaveLength(MAX_OPERATOR_SKILLS);
+        expect(logger.warn).toHaveBeenCalledTimes(1);
         expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(`more than ${MAX_OPERATOR_SKILLS} skills`));
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('1 more entries ignored'));
+        expect(skills.map(s => s.name)).not.toContain('skill-050');
+    });
+
+    it('warns when the root is a file', async () => {
+        const file = path.join(dir, 'plain-file');
+        fs.writeFileSync(file, 'x');
+        expect(await loadOperatorSkills(file, logger)).toEqual([]);
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('is not a directory'));
+    });
+
+    it('skips a SKILL.md that is a directory', async () => {
+        fs.mkdirSync(path.join(dir, 'odd'));
+        fs.mkdirSync(path.join(dir, 'odd', 'SKILL.md'));
+        expect(await loadOperatorSkills(dir, logger)).toEqual([]);
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Skipping operator skill "odd": SKILL.md is not a regular file'));
+    });
+
+    it('skips a symlinked SKILL.md that points to an oversized file outside the directory', async () => {
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'assistant-outside-'));
+        try {
+            fs.writeFileSync(path.join(outside, 'big.md'), 'x'.repeat(MAX_SKILL_BYTES + 10));
+            fs.mkdirSync(path.join(dir, 'linked'));
+            fs.symlinkSync(path.join(outside, 'big.md'), path.join(dir, 'linked', 'SKILL.md'));
+            expect(await loadOperatorSkills(dir, logger)).toEqual([]);
+            expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Skipping operator skill "linked": SKILL.md is larger than 32 KB'));
+        } finally {
+            fs.rmSync(outside, { recursive: true, force: true });
+        }
+    });
+
+    (process.platform === 'win32' ? it.skip : it)(
+        'skips a FIFO SKILL.md without hanging',
+        async () => {
+            fs.mkdirSync(path.join(dir, 'fifo'));
+            execFileSync('mkfifo', [path.join(dir, 'fifo', 'SKILL.md')]);
+            expect(await loadOperatorSkills(dir, logger)).toEqual([]);
+            expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Skipping operator skill "fifo": SKILL.md is not a regular file'));
+        },
+        3000,
+    );
+
+    it('renders entry names as escaped JSON so they cannot forge log lines', async () => {
+        addSkill('evil\nname', skillMd('x'));
+        await loadOperatorSkills(dir, logger);
+        const message = logger.warn.mock.calls[0][0] as string;
+        expect(message).not.toContain('\n');
+        expect(message).toContain('"evil\\nname"');
     });
 });

@@ -8,8 +8,18 @@ const skillMd = (name: string) => `---\nname: ${name}\ndescription: ${name} for 
 
 describe('AssistantConfigGateway operator skills', () => {
     let dir: string;
+    const saved = { upper: process.env.ASSISTANT_SKILLS_DIR, lower: process.env.assistant_skills_dir };
+
+    afterAll(() => {
+        if (saved.upper === undefined) delete process.env.ASSISTANT_SKILLS_DIR;
+        else process.env.ASSISTANT_SKILLS_DIR = saved.upper;
+        if (saved.lower === undefined) delete process.env.assistant_skills_dir;
+        else process.env.assistant_skills_dir = saved.lower;
+    });
 
     beforeEach(() => {
+        delete process.env.ASSISTANT_SKILLS_DIR;
+        delete process.env.assistant_skills_dir;
         dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assistant-config-skills-'));
     });
     afterEach(() => {
