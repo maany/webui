@@ -22,6 +22,8 @@ import { WarningField } from '@/component-library/features/fields/WarningField';
 import { useFeature } from '@/component-library/features/feature-flags/FeatureProvider';
 import { DetailsDIDDatasetReplicas } from './views/DetailsDIDDatasetReplicas';
 import { Alert } from '@/component-library/atoms/feedback/Alert';
+import { usePageDescribe } from '@/lib/infrastructure/hooks/usePageDescribe';
+import { describeDIDPage } from '@/lib/infrastructure/assistant/page-summaries';
 
 type DetailsDIDTablesProps = {
     scope: string;
@@ -121,6 +123,8 @@ export const DetailsDID = ({ scope, name }: DetailsDIDProps) => {
         retry: false,
         refetchOnWindowFocus: false,
     });
+
+    usePageDescribe(() => describeDIDPage({ scope, name, meta }));
 
     if (metaError) {
         return (

@@ -40,6 +40,8 @@ import { accountKeys, accountQueryDefaults, invalidateForMutation, QUERY_KEYS } 
 import { AccountStatus } from '@/lib/core/entity/rucio';
 import { AccountAttribute, AccountIdentity } from '@/lib/core/entity/account';
 import { isValidAccountAttribute, toAttributeValueString } from '@/lib/core/utils/account-validation';
+import { usePageDescribe } from '@/lib/infrastructure/hooks/usePageDescribe';
+import { describeAccountPage } from '@/lib/infrastructure/assistant/page-summaries';
 import {
     AccountAttributesViewModel,
     AccountIdentitiesViewModel,
@@ -167,6 +169,8 @@ export const DetailsAccountClient = ({ account, sessionAccount, initialInfo, ini
         enabled: isActive && quotasTabVisited.current,
         ...accountQueryDefaults,
     });
+
+    usePageDescribe(() => describeAccountPage({ account, info, tab, quotas: quotasQuery.data }));
 
     // Dialogs: one open at a time. `dialog` outlives `open` so a closing dialog keeps its content.
     const [dialog, setDialog] = useState<DialogState | null>(null);
