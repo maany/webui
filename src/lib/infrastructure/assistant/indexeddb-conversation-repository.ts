@@ -108,7 +108,9 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
 
     async saveConversation(conversation: Conversation): Promise<void> {
         await this.run(
-            db => db.put('conversations', conversation),
+            async db => {
+                await db.put('conversations', conversation);
+            },
             memory => memory.saveConversation(conversation),
         );
     }
@@ -151,7 +153,9 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
 
     async saveMessage(message: ChatMessage): Promise<void> {
         await this.run(
-            db => db.put('messages', message),
+            async db => {
+                await db.put('messages', message);
+            },
             memory => memory.saveMessage(message),
         );
     }
