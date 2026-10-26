@@ -11,6 +11,7 @@ import type { ResolvedProvider } from '@/lib/core/entity/assistant/provider-conf
 import type { ConnectionTestResult } from '@/lib/infrastructure/assistant/connection-test';
 import { ProvidersTab } from './ProvidersTab';
 import { DisplayTab } from './DisplayTab';
+import { PermissionsTabContainer } from './PermissionsTabContainer';
 import { StorageTab } from './StorageTab';
 import { AssistantStorageSection } from './AssistantStorageSection';
 
@@ -32,6 +33,10 @@ export const ASSISTANT_SETTINGS_TABS: { name: string; render(props: AssistantSet
         render: p => (
             <ProvidersTab config={p.config} settings={p.settings} onUpdate={p.onUpdate} onTestConnection={p.onTestConnection} newId={p.newId} />
         ),
+    },
+    {
+        name: 'Permissions',
+        render: p => <PermissionsTabContainer config={p.config} configError={p.configError} settings={p.settings} onUpdate={p.onUpdate} />,
     },
     { name: 'Display', render: p => <DisplayTab settings={p.settings} onUpdate={p.onUpdate} /> },
     {
