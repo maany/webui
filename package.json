@@ -4,6 +4,9 @@
   "private": true,
   "scripts": {
     "clean": "rimraf .next .swc build",
+    "predev": "node tools/assistant/copy-duckdb-assets.mjs",
+    "predev:https": "node tools/assistant/copy-duckdb-assets.mjs",
+    "prebuild": "node tools/assistant/copy-duckdb-assets.mjs",
     "dev": "next dev",
     "dev:https": "next dev --experimental-https",
     "build": "next build",
@@ -27,6 +30,7 @@
     "build-storybook": "storybook build"
   },
   "dependencies": {
+    "@duckdb/duckdb-wasm": "1.32.0",
     "@heroicons/react": "^2.2.0",
     "@preact/signals": "^1.2.2",
     "@primer/css": "^20.8.2",
