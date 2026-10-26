@@ -206,6 +206,8 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     /** Approval decisions being saved, so a double click cannot decide twice. */
     const decidingRef = useRef(new Set<string>());
     /** Calls whose approval could not be saved: the stored result says so instead of the generic rejection. */
+    /** Approval decisions still running (saving, or revoking a grant). */
+    const decisionsRef = useRef(new Set<Promise<void>>());
     const unrecordedRef = useRef(new Map<string, ToolError>());
 
     const setConversation = useCallback((next: Conversation | undefined) => {
@@ -624,6 +626,8 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 return;
             }
 
+            // A decision still saving may add or revoke a conversation grant; read the conversation only after it settled.
+            await Promise.allSettled([...decisionsRef.current]);
             // A conversation deleted while the turn ran must not be written back.
             await saveMessage(finalMessage);
             let updatedConversation: Conversation | undefined;
@@ -788,7 +792,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         setPending([]);
     }, [approvals, setPending]);
 
-    const resolveApproval = useCallback(
+    const decideApproval = useCallback(
         async (toolCallId: string, decision: 'approved' | 'rejected', scope: 'once' | 'conversation'): Promise<void> => {
             const d = depsRef.current;
             const accountKey = d.accountKey;
@@ -916,8 +920,14 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                         part => part.type === 'tool-call' && part.toolCallId === toolCallId && part.status === (approved ? 'running' : 'denied'),
                     ) &&
                     latest.parts.some(part => part.type === 'approval' && part.toolCallId === toolCallId && part.decision === decision);
-                if (!isLive() || (saved && !stillOurs)) {
+                if (!isLive()) {
                     await revokeGrant(repository);
+                    return;
+                }
+                if (saved && !stillOurs) {
+                    // The turn is live but its state moved on: never leave the runner waiting, and never lose the decision.
+                    await revokeGrant(repository);
+                    runner.resolveApproval(toolCallId, false);
                     return;
                 }
                 if (!saved) {
@@ -951,6 +961,20 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             }
         },
         [replaceMessage, setConversation, setPending],
+    );
+
+    // Tracked so the end-of-turn save can wait for decisions still saving or revoking a grant.
+    const resolveApproval = useCallback(
+        (toolCallId: string, decision: 'approved' | 'rejected', scope: 'once' | 'conversation'): Promise<void> => {
+            const decision$ = decideApproval(toolCallId, decision, scope);
+            decisionsRef.current.add(decision$);
+            const done = () => {
+                decisionsRef.current.delete(decision$);
+            };
+            decision$.then(done, done);
+            return decision$;
+        },
+        [decideApproval],
     );
 
     const newConversation = useCallback(() => {

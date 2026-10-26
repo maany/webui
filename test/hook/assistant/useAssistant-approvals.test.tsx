@@ -19,18 +19,30 @@ const PROVIDER: ResolvedProvider = {
 };
 
 /** Asks for approval of call-1, then waits until it is resolved or the turn is aborted. */
-function approvalRunner(toolName: string, log: string[]) {
+interface RunnerScript {
+    /** After call-1 is resolved, asks for approval of a second call of the same tool. */
+    second: boolean;
+    /** When it settles before the decision, the runner reports call-1 as done (a crafted state change mid-save). */
+    poke: Promise<void> | null;
+}
+
+function approvalRunner(toolName: string, log: string[], script: RunnerScript) {
     const resolveSpy = jest.fn<void, [string, boolean]>();
     let decide: ((outcome: boolean | 'aborted') => void) | null = null;
     const runner: AgentRunner = {
         async *run(input): AsyncGenerator<RunnerUpdate> {
             yield { type: 'tool-call', toolCallId: 'call-1', toolName, args: { id: 'r1' }, policy: 'ask' };
             yield { type: 'approval-required', toolCallId: 'call-1' };
-            const outcome = await new Promise<boolean | 'aborted'>(resolve => {
+            const decided = new Promise<boolean | 'aborted'>(resolve => {
                 decide = resolve;
                 if (input.signal.aborted) resolve('aborted');
                 input.signal.addEventListener('abort', () => resolve('aborted'));
             });
+            if (script.poke) {
+                const first = await Promise.race([decided, script.poke.then(() => 'poked' as const)]);
+                if (first === 'poked') yield { type: 'tool-result', toolCallId: 'call-1', result: { ok: true }, durationMs: 1 };
+            }
+            const outcome = await decided;
             if (outcome === 'aborted') {
                 yield { type: 'finished', status: 'stopped' };
                 return;
@@ -38,6 +50,13 @@ function approvalRunner(toolName: string, log: string[]) {
             yield outcome
                 ? { type: 'tool-result', toolCallId: 'call-1', result: { ok: true }, durationMs: 1 }
                 : { type: 'tool-result', toolCallId: 'call-1', result: null, error: { error: 'rejected_by_user', message: 'no' }, durationMs: 0 };
+            if (script.second) {
+                yield { type: 'tool-call', toolCallId: 'call-2', toolName, args: { id: 'r2' }, policy: 'ask' };
+                yield { type: 'approval-required', toolCallId: 'call-2' };
+                await new Promise<void>(resolve => input.signal.addEventListener('abort', () => resolve()));
+                yield { type: 'finished', status: 'stopped' };
+                return;
+            }
             yield { type: 'finished', status: 'completed' };
         },
         resolveApproval(toolCallId, approved) {
@@ -64,7 +83,8 @@ function setup(options: { toolName?: string; risk?: 'write' | 'high' } = {}) {
         await originalSaveConversation(conversation);
         if (conversation.conversationAllow.length > 0) log.push(`saved-conversation:${conversation.conversationAllow.join(',')}`);
     });
-    const { runner, resolveSpy } = approvalRunner(toolName, log);
+    const script: RunnerScript = { second: false, poke: null };
+    const { runner, resolveSpy } = approvalRunner(toolName, log, script);
     const tool = makeTool(toolName, options.risk ?? 'write', z.object({ id: z.string() }), async () => ({ ok: true }));
     registerTools([tool]);
     const bus = createAssistantEventBus();
@@ -102,6 +122,7 @@ function setup(options: { toolName?: string; risk?: 'write' | 'high' } = {}) {
         events,
         allow: () => liveAllow(),
         originalSaveConversation,
+        script,
         saveMessage,
         saveConversation,
         originalSaveMessage,
@@ -170,6 +191,149 @@ describe('useAssistantController approvals (phase 4 hardening)', () => {
         expect(resolveSpy).not.toHaveBeenCalledWith('call-1', true);
         expect(hook.result.current.conversation?.conversationAllow).toEqual([]);
         expect(allow().has('do_write')).toBe(false);
+    });
+
+    it('keeps no grant when Stop lands while the conversation save is in flight (I1b)', async () => {
+        const { hook, repository, originalSaveConversation } = setup();
+        const { sending } = await startTurn(hook);
+        let release: () => void = () => undefined;
+        let releaseTurnSave: () => void = () => undefined;
+        let held = false;
+        let turnHeld = false;
+        // The first grant save is the decision's. A second one carrying the grant is the end-of-turn save, held until after the revoke.
+        jest.spyOn(repository, 'saveConversation').mockImplementation(async conversation => {
+            if (conversation.conversationAllow.length > 0) {
+                if (!held) {
+                    held = true;
+                    await new Promise<void>(resolve => (release = resolve));
+                } else if (!turnHeld) {
+                    turnHeld = true;
+                    await new Promise<void>(resolve => (releaseTurnSave = resolve));
+                }
+            }
+            await originalSaveConversation(conversation);
+        });
+        let deciding!: Promise<void>;
+        act(() => {
+            deciding = hook.result.current.resolveApproval('call-1', 'approved', 'conversation') as Promise<void>;
+        });
+        await waitFor(() => expect(held).toBe(true));
+        act(() => {
+            hook.result.current.stop();
+        });
+        // Let the turn wind down and reach its end-of-turn save while the decision save is still held.
+        await act(async () => {
+            await new Promise(resolve => setTimeout(resolve, 30));
+        });
+        await act(async () => {
+            release();
+            await deciding;
+            releaseTurnSave();
+            await sending;
+        });
+        expect(hook.result.current.conversation?.conversationAllow).toEqual([]);
+        const [stored] = await repository.listConversations('root@def');
+        expect(stored.conversationAllow).toEqual([]);
+    });
+
+    it('keeps no grant when the account switches while the conversation save is in flight (I1b)', async () => {
+        const { hook, repository, originalSaveConversation } = setup();
+        const { sending } = await startTurn(hook);
+        let release: () => void = () => undefined;
+        let releaseTurnSave: () => void = () => undefined;
+        let held = false;
+        let turnHeld = false;
+        // The first grant save is the decision's. A second one carrying the grant is the end-of-turn save, held until after the revoke.
+        jest.spyOn(repository, 'saveConversation').mockImplementation(async conversation => {
+            if (conversation.conversationAllow.length > 0) {
+                if (!held) {
+                    held = true;
+                    await new Promise<void>(resolve => (release = resolve));
+                } else if (!turnHeld) {
+                    turnHeld = true;
+                    await new Promise<void>(resolve => (releaseTurnSave = resolve));
+                }
+            }
+            await originalSaveConversation(conversation);
+        });
+        let deciding!: Promise<void>;
+        act(() => {
+            deciding = hook.result.current.resolveApproval('call-1', 'approved', 'conversation') as Promise<void>;
+        });
+        await waitFor(() => expect(held).toBe(true));
+        act(() => {
+            hook.rerender({ accountKey: 'jdoe@def' });
+        });
+        // Let the turn wind down and reach its end-of-turn save while the decision save is still held.
+        await act(async () => {
+            await new Promise(resolve => setTimeout(resolve, 30));
+        });
+        await act(async () => {
+            release();
+            await deciding;
+            releaseTurnSave();
+            await sending;
+        });
+        const [stored] = await repository.listConversations('root@def');
+        expect(stored.conversationAllow).toEqual([]);
+        expect(hook.result.current.conversation?.conversationAllow ?? []).toEqual([]);
+    });
+
+    it('rejects the call instead of waiting forever when the stored state changed during the save (m1)', async () => {
+        const { hook, repository, resolveSpy, allow, script, originalSaveMessage } = setup();
+        let poke: () => void = () => undefined;
+        script.poke = new Promise<void>(resolve => (poke = resolve));
+        const { sending } = await startTurn(hook);
+        let held = false;
+        let release: () => void = () => undefined;
+        jest.spyOn(repository, 'saveMessage').mockImplementation(async message => {
+            if (!held && message.parts.some(part => part.type === 'approval')) {
+                held = true;
+                await new Promise<void>(resolve => (release = resolve));
+            }
+            await originalSaveMessage(message);
+        });
+        let deciding!: Promise<void>;
+        act(() => {
+            deciding = hook.result.current.resolveApproval('call-1', 'approved', 'conversation') as Promise<void>;
+        });
+        await waitFor(() => expect(held).toBe(true));
+        // The runner reports call-1 as done while the decision is being saved.
+        act(() => {
+            poke();
+        });
+        await waitFor(() => expect(hook.result.current.messages[1].parts.find(part => part.type === 'tool-call')).toMatchObject({ status: 'done' }));
+        await act(async () => {
+            release();
+            await deciding;
+            await sending;
+        });
+        expect(resolveSpy).toHaveBeenCalledWith('call-1', false);
+        expect(resolveSpy).not.toHaveBeenCalledWith('call-1', true);
+        expect(allow().has('do_write')).toBe(false);
+    });
+
+    it('still asks for a second call of the same tool after a failed conversation grant (m2)', async () => {
+        const { hook, repository, allow, script, originalSaveMessage } = setup();
+        script.second = true;
+        const { sending } = await startTurn(hook);
+        let failed = false;
+        jest.spyOn(repository, 'saveMessage').mockImplementation(async message => {
+            if (!failed && message.parts.some(part => part.type === 'approval')) {
+                failed = true;
+                throw new Error('quota exceeded');
+            }
+            await originalSaveMessage(message);
+        });
+        await act(async () => {
+            await hook.result.current.resolveApproval('call-1', 'approved', 'conversation');
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals.map(item => item.toolCallId)).toEqual(['call-2']));
+        expect(allow().has('do_write')).toBe(false);
+        await act(async () => {
+            hook.result.current.stop();
+            await sending;
+        });
     });
 
     it('grants the conversation scope only once the runner resumes (I1)', async () => {
