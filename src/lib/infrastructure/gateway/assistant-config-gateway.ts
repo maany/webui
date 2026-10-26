@@ -12,6 +12,7 @@ import {
 } from '@/lib/core/entity/assistant/provider-config';
 import { TOOL_POLICIES, type ToolPolicy } from '@/lib/core/entity/assistant/tool';
 import GATEWAYS from '@/lib/infrastructure/ioc/ioc-symbols-gateway';
+import { loadOperatorSkills } from '@/lib/infrastructure/assistant/operator-skills-loader';
 
 /** Every operator variable of spec section 5.2, plus ASSISTANT_TELEMETRY_USER_SALT (server-only). */
 export const ASSISTANT_ENV_KEYS = [
@@ -204,8 +205,8 @@ class AssistantConfigGateway implements AssistantConfigGatewayOutputPort {
                 contentCap: parseChoice(env.ASSISTANT_TELEMETRY_CONTENT_CAP, CONTENT_LEVELS, DEFAULT_ASSISTANT_CONFIG.telemetry.contentCap),
                 hashUser,
             },
-            // Filled from ASSISTANT_SKILLS_DIR in phase 5
-            operatorSkills: [],
+            // Read on every request so operators can add skills without a restart; invalid ones are logged and skipped.
+            operatorSkills: await loadOperatorSkills(env.ASSISTANT_SKILLS_DIR),
         };
         if (operator) {
             config.defaultProvider = {
