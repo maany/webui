@@ -151,7 +151,10 @@ describe('AssistantPanel', () => {
         it('shows the login link when the controller reports an expired session', () => {
             renderPanel(assistantResult({ status: 'error', error: 'Your Rucio session expired.', sessionExpired: true }));
             openPanel();
-            expect(screen.getByRole('link', { name: 'Log in again' })).toHaveAttribute('href', '/auth/login');
+            expect(screen.getByRole('link', { name: 'Log in again' })).toHaveAttribute(
+                'href',
+                expect.stringContaining('/auth/login?expired=true&callbackUrl='),
+            );
         });
 
         it('has no login link for other errors', () => {

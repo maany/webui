@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { HiOutlineCog, HiPlus, HiSparkles, HiX } from 'react-icons/hi';
 import type { ChatMessage, Conversation } from '@/lib/core/entity/assistant/conversation';
 import type { PageContext } from '@/lib/core/entity/assistant/page-context';
+import { deriveHandleRecords } from '@/lib/infrastructure/assistant/message-selectors';
 import { STEP_LIMIT_NOTICE } from '@/lib/infrastructure/assistant/message-reducer';
 import { clampPanelWidth, panelMaxWidth, PANEL_MIN_WIDTH } from '@/lib/infrastructure/assistant/panel-storage';
 import { cn } from '@/component-library/utils';
@@ -12,6 +13,7 @@ import { AssistantMessage } from './AssistantMessage';
 import { Composer } from './Composer';
 import { ContextGauge } from './ContextGauge';
 import { HistoryMenu } from './HistoryMenu';
+import { SessionExpiredBanner } from './SessionExpiredBanner';
 
 export interface AssistantPanelViewProps {
     state: 'open' | 'minimized';
@@ -25,7 +27,7 @@ export interface AssistantPanelViewProps {
     contextFraction: number | null;
     contextWindow?: number;
     error?: string;
-    /** True when the error is an expired Rucio session; adds a login link. */
+    /** True when the controller reports an expired Rucio session; shows the session banner above the composer. */
     sessionExpired?: boolean;
     persistent: boolean;
     pageContext?: PageContext;
@@ -56,6 +58,7 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
     const { state, isMobile, width, onResize, messages, status } = props;
     const listEnd = useRef<HTMLDivElement>(null);
     const composerRef = useRef<HTMLTextAreaElement>(null);
+    const handleRecords = useMemo(() => deriveHandleRecords(messages), [messages]);
     const busy = status === 'streaming' || status === 'awaiting-approval';
 
     const nearBottom = useRef(true);
@@ -218,18 +221,15 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
                               Ask about your data, rules or storage. Rucio bot sees the page you are on.
                           </p>
                       )
-                    : messages.map(message => <AssistantMessage key={message.id} message={message} detail={props.detail} />)}
+                    : messages.map(message => (
+                          <AssistantMessage key={message.id} message={message} detail={props.detail} handleRecords={handleRecords} />
+                      ))}
                 {status === 'error' && props.error && (
                     <div
                         role="alert"
                         className="rounded-md border border-base-error-300 bg-base-error-100 dark:bg-base-error-900/40 px-3 py-2 text-sm text-base-error-700 dark:text-base-error-300"
                     >
                         <p>{props.error}</p>
-                        {props.sessionExpired && (
-                            <Link href="/auth/login" className="mt-1 mr-3 inline-block font-semibold underline">
-                                Log in again
-                            </Link>
-                        )}
                         <button type="button" className="mt-1 font-semibold underline" onClick={props.onRetry}>
                             Retry
                         </button>
@@ -246,6 +246,7 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
                 )}
                 <div ref={listEnd} />
             </div>
+            <SessionExpiredBanner messages={messages} pathname={props.pageContext?.route ?? '/'} forced={props.sessionExpired} />
             <Composer
                 busy={busy}
                 pageContext={props.pageContext}

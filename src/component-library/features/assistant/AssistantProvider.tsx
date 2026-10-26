@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useRef, useState, type Rea
 import { useSession } from 'next-auth/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
+import { DataHandleStoreProvider } from './DataHandleStoreContext';
 import { useFeatureFlags } from '@/component-library/features/feature-flags/FeatureProvider';
 import type { AssistantEventListener } from '@/lib/core/entity/assistant/events';
 import { resolveActiveProvider } from '@/lib/core/services/assistant-provider';
@@ -97,6 +98,14 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     };
     const assistant = useAssistantController(deps);
 
+    // The same live checks refresh_handle applies, for the Refresh button on SQL results.
+    const conversationAllowRef = useRef<string[]>([]);
+    conversationAllowRef.current = assistant.conversation?.conversationAllow ?? [];
+    const refreshGate = {
+        isToolVisible: (name: string) => deps.visibleTools().some(tool => tool.spec.name === name),
+        toolPolicy: (name: string) => deps.makePolicyFor(() => new Set(conversationAllowRef.current))(name),
+    };
+
     const { registerMemoryControls, registerConversationControls, storageVersion } = shell;
     useEffect(
         () =>
@@ -132,7 +141,11 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
 
     return (
         <AssistantEventBusContext.Provider value={bus}>
-            <AssistantContext.Provider value={assistant}>{children}</AssistantContext.Provider>
+            <AssistantContext.Provider value={assistant}>
+                <DataHandleStoreProvider store={handles} isToolVisible={refreshGate.isToolVisible} toolPolicy={refreshGate.toolPolicy}>
+                    {children}
+                </DataHandleStoreProvider>
+            </AssistantContext.Provider>
         </AssistantEventBusContext.Provider>
     );
 }

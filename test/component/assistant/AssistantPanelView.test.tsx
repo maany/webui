@@ -154,11 +154,44 @@ describe('AssistantPanelView', () => {
         expect(p.onResize).toHaveBeenCalledWith(436);
     });
 
-    it('offers a login link when the session expired', () => {
+    it('shows one session banner above the composer and no link in the error block', () => {
         const { rerender } = render(<AssistantPanelView {...props({ status: 'error', error: 'Your session expired.', sessionExpired: true })} />);
-        expect(screen.getByRole('link', { name: 'Log in again' })).toHaveAttribute('href', '/auth/login');
+        expect(screen.getAllByRole('link', { name: 'Log in again' })).toHaveLength(1);
+        expect(screen.getByRole('link', { name: 'Log in again' })).toHaveAttribute('href', '/auth/login?expired=true&callbackUrl=%2Frules');
         rerender(<AssistantPanelView {...props({ status: 'error', error: 'Boom.' })} />);
         expect(screen.queryByRole('link', { name: 'Log in again' })).toBeNull();
+    });
+
+    it('shows the session banner when the latest turn has an expired-session tool error', () => {
+        const message = assistantMessage([
+            {
+                type: 'tool-call',
+                toolCallId: 't1',
+                toolName: 'list_rules',
+                args: {},
+                policy: 'allow',
+                status: 'error',
+                error: { error: 'session_expired', message: 'x' },
+            },
+        ]);
+        render(<AssistantPanelView {...props({ messages: [message] })} />);
+        expect(screen.getAllByRole('link', { name: 'Log in again' })).toHaveLength(1);
+    });
+
+    it('reopens a stored conversation with a run_sql result without rows', () => {
+        const message = assistantMessage([
+            {
+                type: 'tool-call',
+                toolCallId: 't1',
+                toolName: 'run_sql',
+                args: { sql: 'SELECT 1' },
+                policy: 'allow',
+                status: 'done',
+                result: { columns: ['n'], totalRows: 4, rowsOmitted: true },
+            },
+        ]);
+        render(<AssistantPanelView {...props({ messages: [message], detail: 'verbose' })} />);
+        expect(screen.getByText(/Rows not stored/)).toBeInTheDocument();
     });
 
     it('shows an inline message when deleting a chat fails and never rejects unhandled', async () => {

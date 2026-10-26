@@ -3,7 +3,9 @@
 import React from 'react';
 import type { ChatMessage, MessagePart } from '@/lib/core/entity/assistant/conversation';
 import { cn } from '@/component-library/utils';
-import { ActivityLine } from './ActivityLine';
+import type { HandleRecord } from '@/lib/infrastructure/assistant/message-selectors';
+import { ActivityTimeline } from './ActivityTimeline';
+import { LiveSqlResult } from './LiveSqlResult';
 import { Markdown } from './Markdown';
 import { ToolApprovalSlot, type ApprovalPart } from './ToolApprovalSlot';
 
@@ -26,9 +28,11 @@ function Notice({ part }: { part: Extract<MessagePart, { type: 'notice' }> }) {
 export interface AssistantMessageProps {
     message: ChatMessage;
     detail: 'compact' | 'verbose';
+    /** Handle provenance derived from the whole transcript; lets SQL results refresh the handles they read. */
+    handleRecords?: HandleRecord[];
 }
 
-export function AssistantMessage({ message, detail }: AssistantMessageProps) {
+export function AssistantMessage({ message, detail, handleRecords = [] }: AssistantMessageProps) {
     if (message.role === 'user') {
         const text = message.parts.map(part => (part.type === 'text' ? part.text : '')).join('');
         const context = message.parts.find(part => part.type === 'page-context');
@@ -43,7 +47,7 @@ export function AssistantMessage({ message, detail }: AssistantMessageProps) {
     for (const part of message.parts) if (part.type === 'approval') approvals.set(part.toolCallId, part);
     return (
         <div className="flex flex-col gap-2">
-            <ActivityLine message={message} defaultExpanded={detail === 'verbose'} />
+            <ActivityTimeline message={message} detail={detail} renderSqlResult={entry => <LiveSqlResult entry={entry} records={handleRecords} />} />
             {message.parts.map(part =>
                 part.type === 'tool-call' ? (
                     <ToolApprovalSlot key={`approval-${part.toolCallId}`} part={part} approval={approvals.get(part.toolCallId)} />
