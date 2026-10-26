@@ -51,6 +51,7 @@ let state: GateState;
 let world: ScriptedWorld;
 let events: AssistantEvent[];
 let runAbort: AbortController;
+let unexpectedApprovals: string[];
 
 function freshState(overrides: Partial<GateState> = {}): GateState {
     return {
@@ -78,7 +79,7 @@ function livePolicyFor() {
     );
 }
 
-function makeRunner(): AgentRunner {
+function makeRunner(toolSignal?: AbortSignal): AgentRunner {
     const policyFor = livePolicyFor();
     return createAgentRunner(() => ({
         provider,
@@ -86,7 +87,8 @@ function makeRunner(): AgentRunner {
         policyFor,
         systemPrompt: 'You are a test assistant.',
         emit: event => events.push(event),
-        makeToolContext: (toolCallId, turnId) => makeToolContext({ toolCallId, turnId, signal: runAbort.signal, emit: event => events.push(event) }),
+        makeToolContext: (toolCallId, turnId) =>
+            makeToolContext({ toolCallId, turnId, signal: toolSignal ?? runAbort.signal, emit: event => events.push(event) }),
         maxSteps: 5,
     }));
 }
@@ -152,6 +154,11 @@ async function drive(
     for await (const update of runner.run(input)) {
         updates.push(update);
         if (onUpdate) await onUpdate(update);
+        else if (update.type === 'approval-required') {
+            // No handler means the test expects no approval: record it and reject so the failure is fast and explicit.
+            unexpectedApprovals.push(update.toolCallId);
+            runner.resolveApproval(update.toolCallId, false);
+        }
     }
     return updates;
 }
@@ -166,9 +173,14 @@ beforeEach(() => {
     resetToolRegistryForTests();
     registerTools([CREATE_RULE, findToolsTool]);
     events = [];
+    unexpectedApprovals = [];
     state = freshState();
     world = createScriptedWorld(callCreateRuleThenAnswer);
     global.fetch = world.fetch as unknown as typeof fetch;
+});
+
+afterEach(() => {
+    expect(world.unexpectedUrls).toEqual([]);
 });
 
 afterAll(() => {
@@ -281,6 +293,23 @@ describe('Review Focus 4: the gate reads the live policy', () => {
         expect(createRuleCalls()).toHaveLength(0);
     });
 
+    it('rejects the pending interrupt itself when the policy becomes deny before the model call finishes', async () => {
+        // Built as ask (default caps). The flip happens after the tools were built for this model call. The runner's own
+        // guard rejects the interrupt; execute and the policy middleware would deny too.
+        world = createScriptedWorld((body, index) => {
+            if (index === 0) state = { ...state, prefs: { create_rule: 'deny' } };
+            return callCreateRuleThenAnswer(body, index);
+        });
+        global.fetch = world.fetch as unknown as typeof fetch;
+        const updates = await drive(makeRunner(), 'Make a rule');
+
+        expect(approvals(updates)).toHaveLength(0);
+        expect(unexpectedApprovals).toEqual([]);
+        expect(createRuleCalls()).toHaveLength(0);
+        expect(toolResults(updates)[0].error).toMatchObject({ error: 'denied_by_policy' });
+        expect(finished(updates)).toMatchObject({ status: 'completed' });
+    });
+
     it('denies writes while the operator config is not loaded', async () => {
         state = freshState({ config: undefined, prefs: { create_rule: 'allow' } });
         const updates = await drive(makeRunner(), 'Make a rule');
@@ -303,18 +332,26 @@ describe('Review Focus 5: a pending write never runs without an explicit Approve
     });
 
     it('does not run after the turn is stopped, even when Approve arrives late', async () => {
-        const runner = makeRunner();
+        // The tool context gets its own, never aborted signal, so only the runner can prevent the run.
+        const toolSignal = new AbortController();
+        const runner = makeRunner(toolSignal.signal);
         let pendingId = '';
+        let requestsAtStop = -1;
         const updates = await drive(runner, 'Make a rule', update => {
             if (update.type !== 'approval-required') return;
             pendingId = update.toolCallId;
+            requestsAtStop = world.modelRequests.length;
             runAbort.abort();
         });
 
         expect(finished(updates)).toMatchObject({ status: 'stopped' });
+        const eventsAtStop = events.length;
         runner.resolveApproval(pendingId, true);
         await sleep(300);
         expect(createRuleCalls()).toHaveLength(0);
+        expect(world.modelRequests).toHaveLength(requestsAtStop);
+        expect(events.slice(eventsAtStop)).toEqual([]);
+        expect(events.some(event => event.type === 'tool-call-finished')).toBe(false);
     });
 
     it('reports an approval left pending before a reload as rejected_by_user and never runs it', async () => {

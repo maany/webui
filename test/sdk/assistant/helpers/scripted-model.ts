@@ -25,6 +25,8 @@ export interface FeatureCall {
 export interface ScriptedWorld {
     modelRequests: OpenAIRequestBody[];
     featureCalls: FeatureCall[];
+    /** URLs the routed fetch did not expect; a throw inside a tool fetch only becomes a tool error, so tests assert this stays empty. */
+    unexpectedUrls: string[];
     fetch: jest.Mock;
 }
 
@@ -76,7 +78,7 @@ export function createScriptedWorld(
         json: { status: 'success', rule_ids: ['r-new'] },
     }),
 ): ScriptedWorld {
-    const world: ScriptedWorld = { modelRequests: [], featureCalls: [], fetch: jest.fn() };
+    const world: ScriptedWorld = { modelRequests: [], featureCalls: [], unexpectedUrls: [], fetch: jest.fn() };
     world.fetch.mockImplementation(async (input: string | URL | { url: string }, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         if (url.endsWith('/chat/completions')) {
@@ -90,6 +92,7 @@ export function createScriptedWorld(
             const answer = featureResponse(call);
             return new UndiciResponse(JSON.stringify(answer.json), { status: answer.status, headers: { 'content-type': 'application/json' } });
         }
+        world.unexpectedUrls.push(url);
         throw new Error(`Unexpected fetch in test: ${url}`);
     });
     return world;
