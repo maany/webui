@@ -68,7 +68,7 @@ describe('AssistantStorageView', () => {
         render(<AssistantStorageView {...p} />);
         fireEvent.change(screen.getByLabelText('Delete chats older than (days)'), { target: { value: '7' } });
         expect(p.onRetentionChange).toHaveBeenCalledWith({ maxAgeDays: 7, maxTotalMB: 50, clearOnLogout: false });
-        fireEvent.click(screen.getByLabelText('Delete all Rucio bot chats when I sign out'));
+        fireEvent.click(screen.getByLabelText('Delete my Rucio bot chats when I sign out'));
         expect(p.onRetentionChange).toHaveBeenCalledWith({ maxAgeDays: 30, maxTotalMB: 50, clearOnLogout: true });
     });
 

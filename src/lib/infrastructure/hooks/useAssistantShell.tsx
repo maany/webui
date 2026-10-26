@@ -1,9 +1,11 @@
 'use client';
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useSession } from 'next-auth/react';
 import { useFeature } from '@/component-library/features/feature-flags/FeatureProvider';
 import type { AssistantPageActionRegistryPort } from '@/lib/core/port/secondary/assistant-page-action-registry-port';
 import { attachPageActionRegistry, useAttachedPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-bridge';
+import { toAccountKey } from '@/lib/infrastructure/assistant/page-context';
 import { createPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-registry';
 import { loadAssistantSettings } from '@/lib/infrastructure/assistant/settings-storage';
 import { useCommandPaletteOpen } from '@/lib/infrastructure/hooks/useCommandPalette';
@@ -99,12 +101,14 @@ const AssistantShellContext = createContext<AssistantShellValue | null>(null);
 
 /**
  * Light, always-mounted part of Rucio bot: panel open state, the keyboard
- * shortcut, the page action registry and the clear-on-logout hook. The chat
+ * shortcut, the page action registry and the sign-out cleanup hook. The chat
  * itself (runner, provider SDKs, markdown) loads with next/dynamic only after
  * the panel is opened for the first time.
  */
 export function AssistantShellProvider({ children }: { children: ReactNode }) {
     const enabled = useFeature('assistant');
+    const { data: session } = useSession();
+    const accountKey = toAccountKey(session?.user?.rucioAccount, session?.user?.rucioVO);
     const paletteOpenRef = useRef(false);
     const paletteOpen = useCommandPaletteOpen();
     const [panelState, setPanelState] = useState<AssistantPanelState>('closed');
@@ -175,12 +179,39 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [enabled, toggle]);
 
+    // Read by the sign-out hook at the moment of sign-out, so it always targets the account that is leaving.
+    const accountKeyRef = useRef<string | undefined>(undefined);
+    accountKeyRef.current = accountKey;
+    const conversationControlsRef = useRef<AssistantConversationControls | null>(null);
+    conversationControlsRef.current = conversationControls;
+
     useEffect(() => {
         if (!enabled) return;
         return registerSignOutHook(async () => {
             if (!loadAssistantSettings().retention.clearOnLogout) return;
-            const { deleteAssistantDatabase } = await import('@/lib/infrastructure/assistant/indexeddb-conversation-repository');
-            await deleteAssistantDatabase();
+            const accountKey = accountKeyRef.current;
+            if (!accountKey) return;
+            // The mounted controller aborts a running turn and tombstones the ids, so the turn cannot save them again.
+            const controls = conversationControlsRef.current;
+            if (controls) {
+                try {
+                    await controls.deleteAll();
+                    return;
+                } catch {
+                    // Fall through: the chats must still go.
+                }
+            }
+            try {
+                const { createConversationRepository } = await import('@/lib/infrastructure/assistant/indexeddb-conversation-repository');
+                const { repository } = await createConversationRepository();
+                try {
+                    await repository.deleteAll(accountKey);
+                } finally {
+                    (repository as { close?: () => void }).close?.();
+                }
+            } catch {
+                // Best effort: sign-out must never fail because of cleanup.
+            }
         });
     }, [enabled]);
 

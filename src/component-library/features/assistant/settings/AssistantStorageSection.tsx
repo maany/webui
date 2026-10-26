@@ -201,7 +201,7 @@ export function AssistantStorageView(props: AssistantStorageViewProps) {
                         checked={retention.clearOnLogout}
                         onChange={event => props.onRetentionChange({ ...retention, clearOnLogout: event.target.checked })}
                     />
-                    Delete all Rucio bot chats when I sign out
+                    Delete my Rucio bot chats when I sign out
                 </label>
             </fieldset>
 

@@ -1,3 +1,4 @@
+jest.mock('next-auth/react', () => ({ useSession: () => ({ data: null }) }));
 jest.mock('next/link', () => ({
     __esModule: true,
     default: ({ href, children, prefetch, ...rest }: { href: string; children: React.ReactNode; prefetch?: boolean }) => (

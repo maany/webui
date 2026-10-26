@@ -1,5 +1,12 @@
+const mockSession: { current: { user: { rucioAccount: string; rucioVO: string } } | null } = {
+    current: { user: { rucioAccount: 'alice', rucioVO: 'def' } },
+};
+jest.mock('next-auth/react', () => ({
+    useSession: () => ({ data: mockSession.current }),
+}));
 jest.mock('@/lib/infrastructure/assistant/indexeddb-conversation-repository', () => ({
     deleteAssistantDatabase: jest.fn().mockResolvedValue(undefined),
+    createConversationRepository: jest.fn(),
 }));
 jest.mock('@/component-library/features/assistant/AssistantRoot', () => ({ __esModule: true, default: () => <div data-testid="assistant-root" /> }));
 
@@ -8,12 +15,14 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { FeatureProvider } from '@/component-library/features/feature-flags/FeatureProvider';
 import { AssistantHeaderButton } from '@/component-library/features/assistant/AssistantHeaderButton';
 import { AssistantMount } from '@/component-library/features/assistant/AssistantMount';
-import { deleteAssistantDatabase } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
+import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/in-memory-conversation-repository';
+import { createConversationRepository, deleteAssistantDatabase } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
 import { getAttachedPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-bridge';
 import { ASSISTANT_SETTINGS_KEY, getDefaultAssistantSettings } from '@/lib/infrastructure/assistant/settings-storage';
 import { runSignOutHooks } from '@/lib/infrastructure/auth/sign-out-hooks';
-import { AssistantShellProvider, useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
+import { AssistantShellProvider, useAssistantPanel, type AssistantConversationControls } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { CommandPaletteProvider, useCommandPalette } from '@/lib/infrastructure/hooks/useCommandPalette';
+import { makeConversation } from 'test/fixtures/assistant-fixtures';
 import { flagMap } from 'test/fixtures/assistant-flags';
 
 function PanelState() {
@@ -55,6 +64,8 @@ describe('Rucio bot shell', () => {
         setMobile(false);
         localStorage.clear();
         (deleteAssistantDatabase as jest.Mock).mockClear();
+        (createConversationRepository as jest.Mock).mockReset();
+        mockSession.current = { user: { rucioAccount: 'alice', rucioVO: 'def' } };
     });
 
     it('renders nothing, loads nothing and ignores the shortcut when the flag is off', async () => {
@@ -119,18 +130,105 @@ describe('Rucio bot shell', () => {
         unmount();
     });
 
-    it('deletes stored chats on sign-out only when clear on logout is on', async () => {
+    function enableClearOnLogout() {
+        const defaults = getDefaultAssistantSettings();
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...defaults, retention: { ...defaults.retention, clearOnLogout: true } }));
+    }
+
+    async function seedTwoAccounts() {
+        const repository = new InMemoryConversationRepository();
+        await repository.saveConversation(makeConversation('a1', 'alice@def', '2026-10-24T08:00:00.000Z'));
+        await repository.saveConversation(makeConversation('a2', 'alice@def', '2026-10-23T08:00:00.000Z'));
+        await repository.saveConversation(makeConversation('b1', 'bob@def', '2026-10-24T08:00:00.000Z'));
+        (createConversationRepository as jest.Mock).mockResolvedValue({ repository, persistent: true });
+        return repository;
+    }
+
+    it('deletes only the signed-out account chats, and only when clear on logout is on', async () => {
+        const repository = await seedTwoAccounts();
         renderShell(true);
         await act(async () => {
             await runSignOutHooks();
         });
-        expect(deleteAssistantDatabase).not.toHaveBeenCalled();
-        const defaults = getDefaultAssistantSettings();
-        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...defaults, retention: { ...defaults.retention, clearOnLogout: true } }));
+        expect((await repository.listConversations('alice@def')).length).toBe(2);
+        enableClearOnLogout();
         await act(async () => {
             await runSignOutHooks();
         });
-        expect(deleteAssistantDatabase).toHaveBeenCalledTimes(1);
+        expect(await repository.listConversations('alice@def')).toEqual([]);
+        expect((await repository.listConversations('bob@def')).map(c => c.id)).toEqual(['b1']);
+        expect(deleteAssistantDatabase).not.toHaveBeenCalled();
+    });
+
+    it('deletes through the conversation controller when the panel registered one', async () => {
+        const repository = await seedTwoAccounts();
+        enableClearOnLogout();
+        const controls: AssistantConversationControls = {
+            deleteConversation: jest.fn().mockResolvedValue(undefined),
+            deleteAll: jest.fn().mockResolvedValue(undefined),
+        };
+        function Register() {
+            const { registerConversationControls } = useAssistantPanel();
+            React.useEffect(() => registerConversationControls(controls), [registerConversationControls]);
+            return null;
+        }
+        render(
+            <FeatureProvider features={flagMap({ assistant: true })}>
+                <AssistantShellProvider>
+                    <Register />
+                </AssistantShellProvider>
+            </FeatureProvider>,
+        );
+        await act(async () => {
+            await runSignOutHooks();
+        });
+        expect(controls.deleteAll).toHaveBeenCalledTimes(1);
+        expect(createConversationRepository).not.toHaveBeenCalled();
+        expect((await repository.listConversations('alice@def')).length).toBe(2);
+    });
+
+    it('falls back to the repository when the controller delete fails, and never throws', async () => {
+        const repository = await seedTwoAccounts();
+        enableClearOnLogout();
+        const controls: AssistantConversationControls = {
+            deleteConversation: jest.fn(),
+            deleteAll: jest.fn().mockRejectedValue(new Error('boom')),
+        };
+        function Register() {
+            const { registerConversationControls } = useAssistantPanel();
+            React.useEffect(() => registerConversationControls(controls), [registerConversationControls]);
+            return null;
+        }
+        render(
+            <FeatureProvider features={flagMap({ assistant: true })}>
+                <AssistantShellProvider>
+                    <Register />
+                </AssistantShellProvider>
+            </FeatureProvider>,
+        );
+        await act(async () => {
+            await runSignOutHooks();
+        });
+        expect(await repository.listConversations('alice@def')).toEqual([]);
+        expect((await repository.listConversations('bob@def')).length).toBe(1);
+    });
+
+    it('does nothing when there is no signed-in account, or the repository cannot open', async () => {
+        const repository = await seedTwoAccounts();
+        enableClearOnLogout();
+        mockSession.current = null;
+        renderShell(true);
+        await act(async () => {
+            await runSignOutHooks();
+        });
+        expect(createConversationRepository).not.toHaveBeenCalled();
+        mockSession.current = { user: { rucioAccount: 'alice', rucioVO: 'def' } };
+        (createConversationRepository as jest.Mock).mockRejectedValue(new Error('no idb'));
+        renderShell(true);
+        await act(async () => {
+            await runSignOutHooks();
+        });
+        expect((await repository.listConversations('alice@def')).length).toBe(2);
     });
 
     it('returns focus to the element that opened the panel when it closes', () => {
