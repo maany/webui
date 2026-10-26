@@ -1,0 +1,155 @@
+import {
+    ASSISTANT_SESSION_KEYS_KEY,
+    ASSISTANT_SETTINGS_KEY,
+    clearAssistantSettings,
+    getDefaultAssistantSettings,
+    loadAssistantSettings,
+    saveAssistantSettings,
+} from '@/lib/infrastructure/assistant/settings-storage';
+import type { AssistantSettings } from '@/lib/core/entity/assistant/settings';
+import type { ProviderConfig } from '@/lib/core/entity/assistant/provider-config';
+
+const claude: ProviderConfig = { id: 'p-claude', kind: 'anthropic', label: 'My Claude', apiKey: 'sk-ant-secret', model: 'claude-sonnet-5-5' };
+const ollama: ProviderConfig = { id: 'p-ollama', kind: 'ollama', label: 'Local', model: 'qwen3', baseURL: 'http://localhost:11434' };
+
+const withProviders = (overrides: Partial<AssistantSettings> = {}): AssistantSettings => ({
+    ...getDefaultAssistantSettings(),
+    providers: [claude, ollama],
+    activeProviderId: 'p-claude',
+    toolPolicies: { create_rule: 'allow', 'group:accounts': 'deny' },
+    display: { detail: 'verbose' },
+    ...overrides,
+});
+
+describe('assistant settings storage', () => {
+    beforeEach(() => {
+        localStorage.clear();
+        sessionStorage.clear();
+        jest.restoreAllMocks();
+    });
+
+    it('returns the defaults when nothing is stored', () => {
+        expect(loadAssistantSettings()).toEqual({
+            version: 1,
+            providers: [],
+            activeProviderId: 'operator',
+            keyStorage: 'local',
+            toolPolicies: {},
+            skills: { enabled: {}, user: [] },
+            telemetry: { contentLevel: 'metadata', enabled: false, shareWithOperator: false },
+            display: { detail: 'compact' },
+            retention: { maxAgeDays: 30, maxTotalMB: 50, clearOnLogout: false },
+        });
+    });
+
+    it('returns fresh default objects', () => {
+        const first = getDefaultAssistantSettings();
+        first.providers.push(claude);
+        first.display.detail = 'verbose';
+        expect(getDefaultAssistantSettings().providers).toEqual([]);
+        expect(getDefaultAssistantSettings().display.detail).toBe('compact');
+    });
+
+    it('round-trips settings through localStorage', () => {
+        const settings = withProviders();
+        saveAssistantSettings(settings);
+        expect(JSON.parse(localStorage.getItem(ASSISTANT_SETTINGS_KEY) ?? '{}')).toEqual(settings);
+        expect(loadAssistantSettings()).toEqual(settings);
+    });
+
+    it('resets to the defaults on corrupt JSON', () => {
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, '{"version":1,"providers":[');
+        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
+    });
+
+    it('resets to the defaults on an old version', () => {
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...withProviders(), version: 0 }));
+        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
+    });
+
+    it('resets to the defaults on tampered values', () => {
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...withProviders(), toolPolicies: { create_rule: 'always' } }));
+        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...withProviders(), providers: [{ ...claude, kind: 'gemini' }] }));
+        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify('just a string'));
+        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
+    });
+
+    it('drops unknown fields', () => {
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...withProviders(), injected: '<script>' }));
+        expect(loadAssistantSettings()).not.toHaveProperty('injected');
+    });
+
+    it('reads settings saved without shareWithOperator as not sharing with the operator', () => {
+        const saved = withProviders({ telemetry: { contentLevel: 'full', enabled: true, shareWithOperator: true } });
+        const { shareWithOperator, ...oldTelemetry } = saved.telemetry;
+        expect(shareWithOperator).toBe(true);
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...saved, telemetry: oldTelemetry }));
+        const loaded = loadAssistantSettings();
+        expect(loaded.telemetry).toEqual({ contentLevel: 'full', enabled: true, shareWithOperator: false });
+        expect(loaded.providers).toEqual(saved.providers);
+    });
+
+    it('keeps an explicit operator opt-in', () => {
+        saveAssistantSettings(withProviders({ telemetry: { contentLevel: 'metadata', enabled: true, shareWithOperator: true } }));
+        expect(loadAssistantSettings().telemetry.shareWithOperator).toBe(true);
+    });
+
+    it('resets to the defaults when shareWithOperator is not a boolean', () => {
+        localStorage.setItem(
+            ASSISTANT_SETTINGS_KEY,
+            JSON.stringify({ ...withProviders(), telemetry: { contentLevel: 'metadata', enabled: true, shareWithOperator: 'yes' } }),
+        );
+        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
+    });
+
+    it('keeps API keys out of localStorage when keyStorage is session', () => {
+        saveAssistantSettings(withProviders({ keyStorage: 'session' }));
+        const stored = localStorage.getItem(ASSISTANT_SETTINGS_KEY) ?? '';
+        expect(stored).not.toContain('sk-ant-secret');
+        expect(JSON.parse(sessionStorage.getItem(ASSISTANT_SESSION_KEYS_KEY) ?? '{}')).toEqual({ 'p-claude': 'sk-ant-secret' });
+        expect(loadAssistantSettings().providers[0].apiKey).toBe('sk-ant-secret');
+    });
+
+    it('loads providers without keys once the session keys are gone', () => {
+        saveAssistantSettings(withProviders({ keyStorage: 'session' }));
+        sessionStorage.clear();
+        const loaded = loadAssistantSettings();
+        expect(loaded.providers[0]).toEqual({ id: 'p-claude', kind: 'anthropic', label: 'My Claude', model: 'claude-sonnet-5-5' });
+        expect(loaded.keyStorage).toBe('session');
+    });
+
+    it('ignores corrupt session keys', () => {
+        saveAssistantSettings(withProviders({ keyStorage: 'session' }));
+        sessionStorage.setItem(ASSISTANT_SESSION_KEYS_KEY, '{oops');
+        expect(loadAssistantSettings().providers[0].apiKey).toBeUndefined();
+    });
+
+    it('moves keys back to localStorage and clears sessionStorage when switching to local', () => {
+        saveAssistantSettings(withProviders({ keyStorage: 'session' }));
+        saveAssistantSettings(withProviders({ keyStorage: 'local' }));
+        expect(sessionStorage.getItem(ASSISTANT_SESSION_KEYS_KEY)).toBeNull();
+        expect(localStorage.getItem(ASSISTANT_SETTINGS_KEY)).toContain('sk-ant-secret');
+    });
+
+    it('clears both storages', () => {
+        saveAssistantSettings(withProviders({ keyStorage: 'session' }));
+        clearAssistantSettings();
+        expect(localStorage.getItem(ASSISTANT_SETTINGS_KEY)).toBeNull();
+        expect(sessionStorage.getItem(ASSISTANT_SESSION_KEYS_KEY)).toBeNull();
+        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
+    });
+
+    it('survives a storage that throws', () => {
+        jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+            throw new Error('denied');
+        });
+        jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+            throw new Error('quota');
+        });
+        jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
+        expect(() => saveAssistantSettings(withProviders())).not.toThrow();
+    });
+});
