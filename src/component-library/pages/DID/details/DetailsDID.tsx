@@ -24,6 +24,7 @@ import { DetailsDIDDatasetReplicas } from './views/DetailsDIDDatasetReplicas';
 import { Alert } from '@/component-library/atoms/feedback/Alert';
 import { usePageDescribe } from '@/lib/infrastructure/hooks/usePageDescribe';
 import { describeDIDPage } from '@/lib/infrastructure/assistant/page-summaries';
+import { QUERY_KEYS } from '@/lib/infrastructure/query';
 
 type DetailsDIDTablesProps = {
     scope: string;
@@ -111,7 +112,7 @@ export const DetailsDID = ({ scope, name }: DetailsDIDProps) => {
         return null;
     };
 
-    const metaQueryKey = ['meta'];
+    const metaQueryKey = [...QUERY_KEYS.DID_META];
     const {
         data: meta,
         error: metaError,
