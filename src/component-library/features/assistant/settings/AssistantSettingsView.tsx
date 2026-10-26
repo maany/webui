@@ -10,6 +10,7 @@ import type { AssistantSettings } from '@/lib/core/entity/assistant/settings';
 import type { ResolvedProvider } from '@/lib/core/entity/assistant/provider-config';
 import type { ConnectionTestResult } from '@/lib/infrastructure/assistant/connection-test';
 import { ProvidersTab } from './ProvidersTab';
+import { TelemetryTab } from './TelemetryTab';
 import { DisplayTab } from './DisplayTab';
 import { StorageTab } from './StorageTab';
 import { AssistantStorageSection } from './AssistantStorageSection';
@@ -33,6 +34,7 @@ export const ASSISTANT_SETTINGS_TABS: { name: string; render(props: AssistantSet
             <ProvidersTab config={p.config} settings={p.settings} onUpdate={p.onUpdate} onTestConnection={p.onTestConnection} newId={p.newId} />
         ),
     },
+    { name: 'Telemetry', render: p => <TelemetryTab config={p.config} settings={p.settings} onUpdate={p.onUpdate} /> },
     { name: 'Display', render: p => <DisplayTab settings={p.settings} onUpdate={p.onUpdate} /> },
     {
         name: 'Storage',

@@ -69,10 +69,16 @@ describe('AssistantSettingsView', () => {
         expect(screen.getByText('Loading operator settings')).toBeInTheDocument();
     });
 
+    it('shows the telemetry tab', () => {
+        render(<AssistantSettingsView {...props()} />);
+        fireEvent.click(screen.getByRole('tab', { name: 'Telemetry' }));
+        expect(screen.getByRole('checkbox', { name: 'Export traces to my own collector' })).toBeInTheDocument();
+    });
+
     it('uses no em dashes in any tab', async () => {
         render(<AssistantSettingsView {...props()} />);
         let text = document.body.textContent ?? '';
-        ['Display', 'Storage'].forEach(name => {
+        ['Telemetry', 'Display', 'Storage'].forEach(name => {
             fireEvent.click(screen.getByRole('tab', { name }));
             text += document.body.textContent ?? '';
         });
