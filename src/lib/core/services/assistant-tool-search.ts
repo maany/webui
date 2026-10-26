@@ -74,6 +74,7 @@ const RELATED: Record<string, string[]> = {
     metadata: ['meta', 'keyvaluepair'],
     bad: ['suspicious', 'replica'],
     corrupt: ['suspicious', 'replica'],
+    transfer: ['request'],
 };
 
 /** Lower-cases and strips a plural ending so "rules" matches "rule" and "identities" matches "identity". */

@@ -14,8 +14,6 @@ const FEATURE_DIR = path.join(process.cwd(), 'src/app/api/feature');
 const NOT_TOOLS = new Set(['template-stream', 'get-assistant-config']);
 /** Read-only routes that use POST. Every other non-GET route is a write. */
 const READ_OVER_POST = new Set(['list-account-rse-quotas']);
-/** Read routes whose tool lands in a later phase. Phase 7 removes 'list-requests' when it registers list_requests. */
-const PENDING_READ_ROUTES = new Set(['list-requests']);
 const EM_DASH = String.fromCharCode(0x2014);
 
 const routeSource = (route: string): string => fs.readFileSync(path.join(FEATURE_DIR, route, 'route.ts'), 'utf8');
@@ -45,11 +43,11 @@ describe('read tool registry', () => {
         expect(READ_ROUTES.length).toBeGreaterThan(0);
         expect(WRITE_ROUTES.length).toBeGreaterThan(0);
         expect(READ_ROUTES).toContain('list-account-rse-quotas');
+        expect(READ_ROUTES).toContain('list-requests');
     });
 
     it.each(READ_ROUTES)('%s has exactly one read tool named after the route', route => {
         const specs = specsFor(route);
-        if (PENDING_READ_ROUTES.has(route) && specs.length === 0) return;
         expect(specs).toHaveLength(1);
         const [spec] = specs;
         expect(spec.name).toBe(route.replace(/-/g, '_'));
@@ -98,7 +96,7 @@ describe('read tool registry', () => {
         }
     });
     it('converts every read spec input schema to a JSON object schema', () => {
-        expect(READ_TOOL_SPECS).toHaveLength(34);
+        expect(READ_TOOL_SPECS).toHaveLength(35);
         for (const spec of READ_TOOL_SPECS) {
             const schema = convertSchemaToJsonSchema(spec.input as never) as { type?: string } | undefined;
             expect(schema?.type).toBe('object');
