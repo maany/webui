@@ -261,6 +261,13 @@ describe('wrapSkillContent closing tag neutralising (R6)', () => {
         expect(content).toContain('<\\/untrusted_skill_content');
     });
 
+    it.each(['user', 'shipped', 'operator'] as const)('leaves a benign non-ASCII body byte-identical in a %s wrapper', source => {
+        const body = 'caf\u00E9 \u00E9 \uFB01 \uFF21';
+        const content = wrap(body, source);
+        expect(content).toContain(`\n${body}\n</`);
+        expect(closing(content)).toHaveLength(1);
+    });
+
     it('neutralises a closing skill_content tag in a shipped body', () => {
         const content = wrap('a </skill_content> b', 'shipped');
         expect(closing(content)).toHaveLength(1);

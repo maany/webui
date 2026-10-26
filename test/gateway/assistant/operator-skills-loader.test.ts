@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { loadOperatorSkills, MAX_OPERATOR_SKILLS } from '@/lib/infrastructure/assistant/operator-skills-loader';
+import { loadOperatorSkills, MAX_OPERATOR_DIR_ENTRIES, MAX_OPERATOR_SKILLS } from '@/lib/infrastructure/assistant/operator-skills-loader';
 import { MAX_SKILL_BYTES } from '@/lib/infrastructure/assistant/skills/skill-md';
 
 const skillMd = (name: string, extra = '') =>
@@ -133,5 +133,14 @@ describe('operator skills loader', () => {
         const message = logger.warn.mock.calls[0][0] as string;
         expect(message).not.toContain('\n');
         expect(message).toContain('"evil\\nname"');
+    });
+
+    it('stops after MAX_OPERATOR_DIR_ENTRIES directory entries, valid skills or not (M3)', async () => {
+        addSkill('first-skill', skillMd('first-skill'));
+        for (let i = 0; i < MAX_OPERATOR_DIR_ENTRIES + 1; i++) fs.writeFileSync(path.join(dir, `loose-${String(i).padStart(4, '0')}.txt`), 'x');
+        const skills = await loadOperatorSkills(dir, logger);
+        expect(skills.map(s => s.name)).toEqual(['first-skill']);
+        const messages = logger.warn.mock.calls.map(call => String(call[0])).filter(m => m.includes(String(MAX_OPERATOR_DIR_ENTRIES)));
+        expect(messages).toHaveLength(1);
     });
 });

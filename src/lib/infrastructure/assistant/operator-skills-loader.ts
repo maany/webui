@@ -6,6 +6,9 @@ import { MAX_SKILL_BYTES, parseSkillMarkdown } from '@/lib/infrastructure/assist
 /** At most this many operator skills are served; extra directories are skipped with a warning. */
 export const MAX_OPERATOR_SKILLS = 50;
 
+/** Hard limit on directory entries examined, valid skills or not, so a huge directory cannot stall the config route. */
+export const MAX_OPERATOR_DIR_ENTRIES = 200;
+
 export interface OperatorSkillsLogger {
     warn(message: string): void;
 }
@@ -25,6 +28,12 @@ export async function loadOperatorSkills(dir: string | undefined, logger: Operat
             return [];
         }
         entries = (await fs.readdir(root)).filter(name => !name.startsWith('.')).sort();
+        if (entries.length > MAX_OPERATOR_DIR_ENTRIES) {
+            logger.warn(
+                `[assistant] ${root} has ${entries.length} entries; only the first ${MAX_OPERATOR_DIR_ENTRIES} are examined for operator skills`,
+            );
+            entries = entries.slice(0, MAX_OPERATOR_DIR_ENTRIES);
+        }
     } catch (error) {
         logger.warn(
             `[assistant] ASSISTANT_SKILLS_DIR ${root} cannot be read (${

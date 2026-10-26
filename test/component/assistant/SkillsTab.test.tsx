@@ -6,18 +6,16 @@ import { resolveSkillCatalog } from '@/lib/infrastructure/assistant/skill-source
 import type { AssistantSettings } from '@/lib/core/entity/assistant/settings';
 import type { AssistantConfig } from '@/lib/core/entity/assistant/assistant-config';
 
-jest.mock('@/lib/infrastructure/assistant/knowledge-index', () => ({
-    knowledgeIndex: {
-        fullMetadata: jest.fn(async () => ({
-            docsVersion: '566bee0ff5471bab2c05e5fc0f9a77f7a5df2ecb',
-            docsCommitDate: '2026-10-19T14:25:25Z',
-            openapiVersion: '41.0.0rc1',
-            openapiSha256: 'abc',
-            builtAt: '2026-10-25T12:00:00.000Z',
-            chunkCount: 794,
-            minisearchVersion: '7.2.0',
-        })),
-    },
+jest.mock('@/lib/infrastructure/assistant/docs-index-meta', () => ({
+    loadDocsIndexMetadata: jest.fn(async () => ({
+        docsVersion: '566bee0ff5471bab2c05e5fc0f9a77f7a5df2ecb',
+        docsCommitDate: '2026-10-19T14:25:25Z',
+        openapiVersion: '41.0.0rc1',
+        openapiSha256: 'abc',
+        builtAt: '2026-10-25T12:00:00.000Z',
+        chunkCount: 794,
+        minisearchVersion: '7.2.0',
+    })),
 }));
 
 const entries = resolveSkillCatalog({

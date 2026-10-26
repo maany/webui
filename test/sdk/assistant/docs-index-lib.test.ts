@@ -6,12 +6,19 @@ import {
     docRoute,
     extractRedocDefinition,
     headingAnchor,
+    excerptOf,
     openapiChunks,
     readJsonObjectAt,
     toPlainText,
     MAX_CHUNK_CHARS,
 } from '../../../tools/assistant/docs-index-lib';
-import { DOCS_INDEX_OPTIONS, DOCS_SEARCH_OPTIONS, REST_API_DOC_URL, type DocsChunk } from '@/lib/infrastructure/assistant/docs-index-format';
+import {
+    DOCS_EXCERPT_MAX,
+    DOCS_INDEX_OPTIONS,
+    DOCS_SEARCH_OPTIONS,
+    REST_API_DOC_URL,
+    type DocsChunk,
+} from '@/lib/infrastructure/assistant/docs-index-format';
 
 describe('docRoute (Docusaurus URL rules)', () => {
     it.each([
@@ -111,7 +118,18 @@ describe('chunkMarkdown', () => {
         expect(parts.length).toBeGreaterThan(1);
         expect(parts[0].title).toBe('Big page > Section (part 1)');
         expect(parts.every(p => p.text.length <= MAX_CHUNK_CHARS * 2)).toBe(true);
-        expect(parts.every(p => p.excerpt.length <= 903)).toBe(true);
+        expect(parts.every(p => p.excerpt.length <= DOCS_EXCERPT_MAX)).toBe(true);
+    });
+});
+
+describe('excerptOf', () => {
+    it('never exceeds DOCS_EXCERPT_MAX, ellipsis included', () => {
+        for (const text of ['word '.repeat(400), 'x'.repeat(2000), `${'a'.repeat(897)} ${'b'.repeat(50)}`, 'ab '.repeat(301)]) {
+            const excerpt = excerptOf(text);
+            expect(excerpt.length).toBeLessThanOrEqual(DOCS_EXCERPT_MAX);
+            expect(excerpt.endsWith('...')).toBe(true);
+        }
+        expect(excerptOf('short text')).toBe('short text');
     });
 });
 

@@ -5,7 +5,7 @@ import type { AssistantConfig } from '@/lib/core/entity/assistant/assistant-conf
 import type { AssistantSettings } from '@/lib/core/entity/assistant/settings';
 import type { DocsIndexMetadata } from '@/lib/infrastructure/assistant/docs-index-format';
 import { SkillsTab } from '@/component-library/features/assistant/settings/SkillsTab';
-import { knowledgeIndex } from '@/lib/infrastructure/assistant/knowledge-index';
+import { loadDocsIndexMetadata } from '@/lib/infrastructure/assistant/docs-index-meta';
 import { resolveSkillCatalog } from '@/lib/infrastructure/assistant/skill-source';
 import { SHIPPED_SKILLS } from '@/lib/infrastructure/assistant/skills/shipped-skills.generated';
 import { importUserSkill, removeUserSkill, upsertUserSkill } from '@/lib/infrastructure/assistant/user-skills';
@@ -21,7 +21,7 @@ function useDocsIndexMetadata(): DocsIndexMetadata | null | undefined {
     const [docs, setDocs] = React.useState<DocsIndexMetadata | null | undefined>(undefined);
     React.useEffect(() => {
         let active = true;
-        knowledgeIndex.fullMetadata().then(metadata => {
+        loadDocsIndexMetadata().then(metadata => {
             if (active) setDocs(metadata ?? null);
         });
         return () => {

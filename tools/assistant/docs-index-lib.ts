@@ -150,9 +150,11 @@ export function toPlainText(markdown: string): string {
 
 export function excerptOf(text: string): string {
     if (text.length <= DOCS_EXCERPT_MAX) return text;
-    const cut = text.slice(0, DOCS_EXCERPT_MAX);
+    // Leave room for the ellipsis so the stored excerpt never exceeds DOCS_EXCERPT_MAX.
+    const limit = DOCS_EXCERPT_MAX - 3;
+    const cut = text.slice(0, limit);
     const lastSpace = cut.lastIndexOf(' ');
-    return `${cut.slice(0, lastSpace > 0 ? lastSpace : DOCS_EXCERPT_MAX)}...`;
+    return `${cut.slice(0, lastSpace > 0 ? lastSpace : limit)}...`;
 }
 
 interface Section {

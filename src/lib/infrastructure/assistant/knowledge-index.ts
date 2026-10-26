@@ -1,5 +1,6 @@
 import MiniSearch from 'minisearch';
 import type { AssistantKnowledgeIndexPort, DocHit } from '@/lib/core/port/secondary/assistant-knowledge-index-port';
+import { fetchJson } from '@/lib/infrastructure/assistant/docs-index-meta';
 import {
     DOCS_INDEX_META_PUBLIC_PATH,
     DOCS_INDEX_OPTIONS,
@@ -19,12 +20,6 @@ export const MAX_DOC_HITS = 8;
 export interface KnowledgeIndexLoaders {
     loadIndex(): Promise<DocsIndexFile>;
     loadMeta(): Promise<DocsIndexMetaFile>;
-}
-
-async function fetchJson<T>(path: string): Promise<T> {
-    const res = await fetch(path, { credentials: 'same-origin' });
-    if (!res.ok) throw new Error(`Could not load ${path} (${res.status})`);
-    return (await res.json()) as T;
 }
 
 export const fetchKnowledgeIndexLoaders: KnowledgeIndexLoaders = {
