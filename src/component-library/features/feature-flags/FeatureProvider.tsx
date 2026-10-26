@@ -15,3 +15,8 @@ export function useFeature(key: FeatureKey): boolean {
     if (ctx === null) return false;
     return ctx[key] ?? false;
 }
+
+/** The whole flag map, or null outside a FeatureProvider. */
+export function useFeatureFlags(): FeatureFlagMap | null {
+    return useContext(FeatureContext);
+}

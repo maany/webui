@@ -16,7 +16,12 @@ import { CommandPaletteSection } from './CommandPaletteSection';
 import { CommandPaletteEmpty } from './CommandPaletteEmpty';
 import { getRecentPages, formatRecentPageTime } from '@/lib/utils/recent-pages-storage';
 import { getCards } from '@/lib/utils/hotbar-storage';
-import { getNavigationCommands, getActionCommands, getHelpCommands } from '@/lib/infrastructure/command-palette/command-registry';
+import {
+    getNavigationCommands,
+    getActionCommands,
+    getHelpCommands,
+    getAssistantCommands,
+} from '@/lib/infrastructure/command-palette/command-registry';
 import { navigateToSearch } from '@/lib/infrastructure/utils/navigation';
 import { ClockIcon, BookmarkIcon } from '@heroicons/react/24/outline';
 import { useQuery } from '@tanstack/react-query';
@@ -24,6 +29,7 @@ import { SiteHeaderViewModel } from '@/lib/infrastructure/data/view-model/site-h
 import { usePermissions } from '@/lib/infrastructure/hooks/usePermissions';
 import { useSession } from 'next-auth/react';
 import { Role } from '@/lib/core/entity/auth-models';
+import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { useFeature } from '@/component-library/features/feature-flags/FeatureProvider';
 
 export interface CommandPaletteProps {
@@ -60,6 +66,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChan
     const isAdmin = session?.user?.role === Role.ADMIN;
     const accountsEnabled = useFeature('accounts');
     const assistantEnabled = useFeature('assistant');
+    const assistantPanel = useAssistantPanel();
 
     // Build all sections with filtering
     const sections = useMemo<CommandSection[]>(() => {
@@ -118,6 +125,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChan
 
         // Actions Section (adapts to search query)
         const actionItems = getActionCommands(searchQuery, { isAdmin, accountsEnabled });
+        if (assistantPanel.enabled) actionItems.unshift(...getAssistantCommands(assistantPanel.open));
         allSections.push({
             id: 'actions',
             title: 'Actions',
@@ -151,7 +159,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChan
         }
 
         return allSections;
-    }, [searchQuery, account, canViewApprovalQueue, isAdmin, accountsEnabled, assistantEnabled]);
+    }, [searchQuery, account, canViewApprovalQueue, isAdmin, accountsEnabled, assistantEnabled, assistantPanel.enabled, assistantPanel.open]);
 
     // Calculate total items count for keyboard navigation
     const totalItems = useMemo(() => {

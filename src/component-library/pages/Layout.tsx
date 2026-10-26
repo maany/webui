@@ -31,7 +31,7 @@ export const Layout = ({ children, siteHeader, siteHeaderError }: LayoutProps) =
     }, [pathname]);
 
     return (
-        <div className="min-h-screen flex flex-col">
+        <div className="min-h-screen flex flex-col" style={{ paddingRight: 'var(--rucio-assistant-offset, 0px)' }}>
             <HeaderClient siteHeader={siteHeader} siteHeaderError={siteHeaderError} isSiteHeaderFetching={false} />
             <main id="main-content" className="flex flex-col grow px-4 py-6 sm:px-8 md:px-12 lg:px-16 xl:px-24 2xl:px-32 min-w-0 overflow-x-hidden">
                 {children}

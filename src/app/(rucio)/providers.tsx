@@ -9,6 +9,8 @@ import { TipsProvider } from '@/lib/infrastructure/hooks/useTips';
 import { TipsPanelWrapper } from '@/component-library/features/tips';
 import { PermissionProvider } from '@/lib/infrastructure/permissions';
 import { SessionMonitorProvider } from '@/lib/infrastructure/auth/session-monitor';
+import { AssistantShellProvider } from '@/lib/infrastructure/hooks/useAssistantShell';
+import { AssistantMount } from '@/component-library/features/assistant/AssistantMount';
 
 /**
  * Client component that provides React Query, Command Palette, and Tips context.
@@ -23,10 +25,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <PermissionProvider>
                     <CommandPaletteProvider>
                         <TipsProvider>
-                            {children}
-                            <CommandPaletteWrapper />
-                            <TipsPanelWrapper />
-                            <ReactQueryDevtools initialIsOpen={false} />
+                            <AssistantShellProvider>
+                                {children}
+                                <CommandPaletteWrapper />
+                                <TipsPanelWrapper />
+                                <AssistantMount />
+                                <ReactQueryDevtools initialIsOpen={false} />
+                            </AssistantShellProvider>
                         </TipsProvider>
                     </CommandPaletteProvider>
                 </PermissionProvider>

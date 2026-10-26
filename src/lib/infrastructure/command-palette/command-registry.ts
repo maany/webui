@@ -16,6 +16,7 @@ import {
     ExclamationTriangleIcon,
     UserCircleIcon,
     UserGroupIcon,
+    SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { CommandItem } from '@/lib/core/entity/command-palette';
 import { ACCOUNT_NAME_REGEX } from '@/lib/core/utils/account-validation';
@@ -280,6 +281,25 @@ export function getHelpCommands(): CommandItem[] {
             onSelect: () => {
                 window.open('https://rucio.cern.ch/documentation/', '_blank', 'noopener,noreferrer');
             },
+        },
+    ];
+}
+
+/**
+ * "Ask Rucio bot" opens the assistant panel. The palette adds it only when the
+ * assistant feature flag is on.
+ */
+export function getAssistantCommands(openAssistant: () => void): CommandItem[] {
+    return [
+        {
+            id: 'action-ask-rucio-bot',
+            type: 'action',
+            title: 'Ask Rucio bot',
+            description: 'Open the Rucio bot chat panel',
+            icon: SparklesIcon,
+            keywords: ['ask', 'assistant', 'bot', 'chat', 'ai', 'help'],
+            shortcut: 'Ctrl+Shift+K',
+            onSelect: openAssistant,
         },
     ];
 }

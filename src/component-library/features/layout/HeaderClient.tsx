@@ -6,6 +6,7 @@ import { HiChevronDown, HiMenu, HiMoon, HiSun, HiX, HiLightBulb, HiSearch } from
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ReadonlyURLSearchParams, usePathname, useSearchParams } from 'next/navigation';
+import { AssistantHeaderButton } from '@/component-library/features/assistant/AssistantHeaderButton';
 import { Searchbar } from '@/component-library/features/layout/Searchbar';
 import Image from 'next/image';
 import { AccountButton } from '@/component-library/features/layout/AccountDropdown';
@@ -397,6 +398,7 @@ export const HeaderClient = ({ siteHeader, siteHeaderError, isSiteHeaderFetching
                     <div className="flex h-full">
                         <CompactSearchTrigger />
                         <TipsButton />
+                        <AssistantHeaderButton />
                         <ThemeSwitchButton />
                         <AccountButton
                             siteHeader={siteHeader}
