@@ -397,7 +397,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
             createRefreshToolsMiddleware(buildTools),
             createPolicyMiddleware(name => d.policyFor(name), recordDuration),
         ];
-        if (d.toolFilter) middleware.push(createToolFilterMiddleware(d.toolFilter, d.tools));
+        if (d.toolFilter) middleware.push(createToolFilterMiddleware(d.toolFilter, () => deps().tools));
         const historyMessages = toModelMessages(input.history);
 
         const drive = async () => {
