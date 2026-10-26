@@ -2,6 +2,7 @@
 import { CreateRule, CreateRulePrefill } from '@/component-library/pages/Rule/create/CreateRule';
 import { CreateRuleParameters } from '@/lib/infrastructure/data/view-model/rule';
 import { useEffect, useRef, useState } from 'react';
+import { toolError } from '@/lib/infrastructure/assistant/page-tool-errors';
 import { usePageAction } from '@/lib/infrastructure/hooks/usePageAction';
 import {
     RULE_CREATE_PREFILL_ACTION,
@@ -21,15 +22,25 @@ export default function Page() {
     // Rucio bot fills the wizard through this state; the user still reviews and submits.
     const [prefill, setPrefill] = useState<CreateRulePrefill | undefined>(undefined);
     const prefillCount = useRef(0);
+    // Index 4 is the submission stage, which submits a rule on mount
+    const SUBMISSION_STAGE = 4;
+    const stageIndex = useRef(0);
 
     usePageAction({
         name: RULE_CREATE_PREFILL_ACTION,
         description: RULE_CREATE_PREFILL_DESCRIPTION,
         schema: RuleCreatePrefillSchema,
         apply: async args => {
+            if (stageIndex.current === SUBMISSION_STAGE) {
+                throw toolError('unavailable', 'The wizard is submitting a rule. Wait for it to finish, then try again.');
+            }
+            const id = ++prefillCount.current;
             const result = await resolveRuleCreatePrefill(args);
-            prefillCount.current += 1;
-            setPrefill({ parameters: result.parameters, activeIndex: result.activeIndex, nonce: prefillCount.current });
+            if (id !== prefillCount.current) throw toolError('aborted', 'A newer prefill replaced this one.');
+            if (stageIndex.current === SUBMISSION_STAGE) {
+                throw toolError('unavailable', 'The wizard is submitting a rule. Wait for it to finish, then try again.');
+            }
+            setPrefill({ parameters: result.parameters, activeIndex: result.activeIndex, nonce: id });
             return result.summary;
         },
     });
@@ -81,6 +92,9 @@ export default function Page() {
             removeSavedParameters={removeSavedParameters}
             removeSavedIndex={removeSavedIndex}
             prefill={prefill}
+            onStageChange={index => {
+                stageIndex.current = index;
+            }}
         />
     );
 }

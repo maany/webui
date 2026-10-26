@@ -172,4 +172,58 @@ describe('resolveRuleCreatePrefill', () => {
         expect(RuleCreatePrefillSchema.safeParse({ dids: [], rseExpression: 'tier=1' }).success).toBe(false);
         expect(RuleCreatePrefillSchema.safeParse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1', copies: 0 }).success).toBe(false);
     });
+
+    it('turns a malformed line into stream_error', async () => {
+        fetchMockFn.mockImplementationOnce(async () => ({ ...ndjsonResponse([]), text: async () => '{not json' } as Response));
+        await expect(
+            resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' })),
+        ).rejects.toMatchObject({ error: 'stream_error' });
+    });
+
+    it('turns a line that is not an object into stream_error', async () => {
+        for (const line of ['null', '42', '"text"']) {
+            fetchMockFn.mockImplementationOnce(async () => ({ ...ndjsonResponse([]), text: async () => line } as Response));
+            await expect(
+                resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' })),
+            ).rejects.toMatchObject({ error: 'stream_error' });
+        }
+    });
+
+    it('turns a 200 text/html reply without the redirect flag into session_expired', async () => {
+        fetchMockFn.mockImplementationOnce(async () => ndjsonResponse([], { contentType: 'text/html', redirected: false }));
+        await expect(
+            resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' })),
+        ).rejects.toMatchObject({ error: 'session_expired' });
+    });
+
+    it('maps 401 to unauthorized and 403 to forbidden', async () => {
+        const args = RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' });
+        fetchMockFn.mockImplementationOnce(async () => ndjsonResponse([], { status: 401 }));
+        await expect(resolveRuleCreatePrefill(args)).rejects.toMatchObject({ error: 'unauthorized' });
+        fetchMockFn.mockImplementationOnce(async () => ndjsonResponse([], { status: 403 }));
+        await expect(resolveRuleCreatePrefill(args)).rejects.toMatchObject({ error: 'forbidden' });
+    });
+
+    it('gives aborted when the signal is already aborted', async () => {
+        fetchMockFn.mockImplementationOnce(async (_url: string, init?: RequestInit) => {
+            if (init?.signal?.aborted) throw new DOMException('aborted', 'AbortError');
+            return ndjsonResponse([]);
+        });
+        const controller = new AbortController();
+        controller.abort();
+        await expect(
+            resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' }), controller.signal),
+        ).rejects.toMatchObject({ error: 'aborted' });
+    });
+
+    it('limits the schema to 20 DIDs, 50 RSEs and a 500 character expression', () => {
+        const dids = (count: number) => Array.from({ length: count }, (_, index) => `user.jdoe:file${index}`);
+        const rses = (count: number) => Array.from({ length: count }, (_, index) => `RSE${index}`);
+        expect(RuleCreatePrefillSchema.safeParse({ dids: dids(20), rseExpression: 'tier=1' }).success).toBe(true);
+        expect(RuleCreatePrefillSchema.safeParse({ dids: dids(21), rseExpression: 'tier=1' }).success).toBe(false);
+        expect(RuleCreatePrefillSchema.safeParse({ dids: dids(1), rseExpression: 'tier=1', rses: rses(50) }).success).toBe(true);
+        expect(RuleCreatePrefillSchema.safeParse({ dids: dids(1), rseExpression: 'tier=1', rses: rses(51) }).success).toBe(false);
+        expect(RuleCreatePrefillSchema.safeParse({ dids: dids(1), rseExpression: 'x'.repeat(500) }).success).toBe(true);
+        expect(RuleCreatePrefillSchema.safeParse({ dids: dids(1), rseExpression: 'x'.repeat(501) }).success).toBe(false);
+    });
 });

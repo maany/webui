@@ -5,6 +5,7 @@ import { CreateRuleParameters, getEmptyCreateRuleParameters } from '@/lib/infras
 import { DIDType } from '@/lib/core/entity/rucio';
 
 const mockStageMounts = jest.fn();
+const mockSubmissionMounts = jest.fn();
 
 jest.mock('@/component-library/pages/Rule/create/stage-dids/CreateRuleStageData', () => {
     const React = require('react');
@@ -34,7 +35,13 @@ jest.mock('@/component-library/pages/Rule/create/stage-summary/CreateRuleStageSu
     ),
 }));
 jest.mock('@/component-library/pages/Rule/create/stage-submission/CreateRuleStageSubmission', () => ({
-    CreateRuleStageSubmission: () => <div data-testid="stage-submission" />,
+    CreateRuleStageSubmission: () => {
+        const React = require('react');
+        React.useEffect(() => {
+            mockSubmissionMounts();
+        }, []);
+        return <div data-testid="stage-submission" />;
+    },
 }));
 
 const prefilled: CreateRuleParameters = {
@@ -68,7 +75,10 @@ const makeProps = () => ({
 });
 
 describe('CreateRule prefill', () => {
-    beforeEach(() => mockStageMounts.mockClear());
+    beforeEach(() => {
+        mockStageMounts.mockClear();
+        mockSubmissionMounts.mockClear();
+    });
 
     it('applies a prefill to the mounted wizard, saves it and jumps to the given step', async () => {
         const props = makeProps();
@@ -114,6 +124,7 @@ describe('CreateRule prefill', () => {
         expect(await screen.findByTestId('stage-summary')).toBeInTheDocument();
         expect(screen.queryByTestId('stage-submission')).not.toBeInTheDocument();
         expect(props.setSavedIndex).toHaveBeenLastCalledWith(3);
+        expect(mockSubmissionMounts).not.toHaveBeenCalled();
     });
 
     it('clamps negative and NaN indices to the first stage', async () => {
@@ -124,5 +135,40 @@ describe('CreateRule prefill', () => {
         rerender(<CreateRule {...props} prefill={{ parameters: prefilled, activeIndex: Number.NaN, nonce: 1 }} />);
         expect(await screen.findByTestId('stage-dids')).toHaveTextContent('user.jdoe:file1');
         expect(screen.queryByTestId('stage-submission')).not.toBeInTheDocument();
+    });
+
+    it('lands on the first stage for a negative activeIndex, even from a saved later stage', async () => {
+        const props = makeProps();
+        props.getSavedIndex.mockReturnValue(2 as never);
+        const { rerender } = render(<CreateRule {...props} />);
+        await screen.findByTestId('stage-options');
+
+        rerender(<CreateRule {...props} prefill={{ parameters: prefilled, activeIndex: -2, nonce: 1 }} />);
+        expect(await screen.findByTestId('stage-dids')).toHaveTextContent('user.jdoe:file1');
+        expect(screen.queryByTestId('stage-options')).not.toBeInTheDocument();
+        expect(props.setSavedIndex).toHaveBeenLastCalledWith(0);
+    });
+
+    it('clamps a tampered saved index so the submission stage cannot open on load', async () => {
+        const props = makeProps();
+        props.getSavedIndex.mockReturnValue(4 as never);
+        render(<CreateRule {...props} />);
+        expect(await screen.findByTestId('stage-summary')).toBeInTheDocument();
+        expect(mockSubmissionMounts).not.toHaveBeenCalled();
+        expect(screen.queryByTestId('stage-submission')).not.toBeInTheDocument();
+    });
+
+    it('reports every stage change, including the submission stage', async () => {
+        const props = makeProps();
+        const onStageChange = jest.fn();
+        props.getSavedIndex.mockReturnValue(3 as never);
+        props.getSavedParameters.mockReturnValue(prefilled as never);
+        render(<CreateRule {...props} onStageChange={onStageChange} />);
+        await screen.findByTestId('stage-summary');
+        expect(onStageChange).toHaveBeenLastCalledWith(3);
+
+        screen.getByRole('button', { name: /submit/i }).click();
+        expect(await screen.findByTestId('stage-submission')).toBeInTheDocument();
+        expect(onStageChange).toHaveBeenLastCalledWith(4);
     });
 });

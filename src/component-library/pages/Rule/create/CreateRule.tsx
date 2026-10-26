@@ -51,6 +51,10 @@ const NextButton = ({
     );
 };
 
+// Index 4 is the submission stage, which submits on mount: neither a prefill nor a saved index may land on it
+const MAX_RESTORED_INDEX = 3;
+const clampRestoredIndex = (index: number): number => Math.min(Math.max(Math.trunc(index) || 0, 0), MAX_RESTORED_INDEX);
+
 /** Wizard state pushed in from outside the wizard (Rucio bot prefill). A new object applies it again. */
 export interface CreateRulePrefill {
     parameters: CreateRuleParameters;
@@ -66,6 +70,8 @@ interface CreateRuleProps {
     removeSavedParameters: () => void;
     removeSavedIndex: () => void;
     prefill?: CreateRulePrefill;
+    /** Called with the active stage index whenever it changes, including the submission stage (4). */
+    onStageChange?: (activeIndex: number) => void;
 }
 
 export const CreateRule = (props: CreateRuleProps) => {
@@ -85,8 +91,7 @@ export const CreateRule = (props: CreateRuleProps) => {
         if (savedParameters) setParameters(savedParameters);
 
         const savedIndex = props.getSavedIndex();
-        // TODO: check for range
-        if (savedIndex) setActiveIndex(savedIndex);
+        if (savedIndex) setActiveIndex(clampRestoredIndex(savedIndex));
 
         setIsLoading(false);
     }, []);
@@ -94,8 +99,7 @@ export const CreateRule = (props: CreateRuleProps) => {
     const prefill = props.prefill;
     useEffect(() => {
         if (isLoading || !prefill) return;
-        // Index 4 is the submission stage, which submits on mount: an external prefill may only reach stages 0 to 3
-        const index = Math.min(Math.max(Math.trunc(prefill.activeIndex) || 0, 0), 3);
+        const index = clampRestoredIndex(prefill.activeIndex);
         setParameters(prefill.parameters);
         setActiveIndex(index);
         setStageKey(previous => previous + 1);
@@ -107,6 +111,10 @@ export const CreateRule = (props: CreateRuleProps) => {
         props.setSavedParameters(parameters);
         checkOptionsErrors();
     }, [parameters]);
+    useEffect(() => {
+        if (isLoading) return;
+        props.onStageChange?.(activeIndex);
+    }, [activeIndex, isLoading]);
     useEffect(() => {
         // Don't save submission
         if (isLoading || activeIndex === 4) return;

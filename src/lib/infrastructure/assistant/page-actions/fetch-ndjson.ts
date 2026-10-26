@@ -26,7 +26,9 @@ export async function fetchNdjsonRows<T>(url: string, init: RequestInit = {}): P
         const trimmed = line.trim();
         if (!trimmed) continue;
         try {
-            rows.push(JSON.parse(trimmed) as T);
+            const row: unknown = JSON.parse(trimmed);
+            if (typeof row !== 'object' || row === null) throw new Error('not an object');
+            rows.push(row as T);
         } catch {
             throw toolError('stream_error', 'The server sent a malformed line.');
         }

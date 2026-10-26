@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import Page from '@/app/(rucio)/rule/create/page';
 import { attachPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-bridge';
 import { createNavigateTool, NavigateResult } from '@/lib/infrastructure/assistant/tools/page/navigate';
@@ -127,6 +127,58 @@ describe('navigate, then prefill the create rule wizard', () => {
         expect(result).toMatchObject({ error: 'invalid_args' });
         expect(fetchRoutes).not.toHaveBeenCalled();
         expect(screen.getByTestId('stage-dids')).toBeInTheDocument();
+    });
+
+    it('refuses a prefill while the wizard is submitting a rule', async () => {
+        window.history.pushState({}, '', '/rule/create');
+        render(<Harness />);
+        await waitFor(() => expect(registry.list().map(action => action.name)).toContain('rule_create.prefill'));
+        const ctx = makeTestToolContext({ pages: registry });
+        const args = { dids: ['user.jdoe:file1'], rseExpression: 'tier=1' };
+
+        await createPageActionTool().execute({ name: 'rule_create.prefill', args }, ctx);
+        await screen.findByTestId('stage-summary');
+        fireEvent.click(screen.getByRole('button', { name: /submit/i }));
+        await screen.findByTestId('stage-submission');
+        fetchRoutes.mockClear();
+
+        const result = await createPageActionTool().execute({ name: 'rule_create.prefill', args }, ctx);
+        expect(result).toMatchObject({ error: 'unavailable', message: expect.stringContaining('submitting') });
+        expect(screen.getByTestId('stage-submission')).toBeInTheDocument();
+    });
+
+    it('lets the newest of two racing prefills win', async () => {
+        window.history.pushState({}, '', '/rule/create');
+        render(<Harness />);
+        await waitFor(() => expect(registry.list().map(action => action.name)).toContain('rule_create.prefill'));
+        const ctx = makeTestToolContext({ pages: registry });
+
+        let releaseFirst: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => {
+            releaseFirst = resolve;
+        });
+        fetchRoutes.mockImplementation(async (url: string, _init?: RequestInit) => {
+            if (url.startsWith('/api/feature/list-dids?')) {
+                const name = new URLSearchParams(url.split('?')[1]).get('query')?.split(':')[1] ?? '';
+                if (name === 'slow') await gate;
+                return ndjsonResponse([{ ...didRow, name }]);
+            }
+            if (url === '/api/feature/list-account-rse-quotas') return ndjsonResponse([quotaRow]);
+            throw new Error(`unexpected fetch ${url}`);
+        });
+
+        const first = createPageActionTool().execute(
+            { name: 'rule_create.prefill', args: { dids: ['user.jdoe:slow'], rseExpression: 'tier=1' } },
+            ctx,
+        );
+        const second = await createPageActionTool().execute(
+            { name: 'rule_create.prefill', args: { dids: ['user.jdoe:fast'], rseExpression: 'tier=1' } },
+            ctx,
+        );
+        expect(second).toMatchObject({ action: 'rule_create.prefill' });
+        releaseFirst();
+        expect(await first).toMatchObject({ error: 'aborted' });
+        expect(await screen.findByTestId('stage-summary')).toHaveTextContent('user.jdoe:fast');
     });
 
     it('unregisters the action when the page unmounts', async () => {

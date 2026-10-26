@@ -33,7 +33,7 @@ const DID_STRING = z.string().regex(/^[^:\s*?]+:[^\s*?]+$/, 'Use scope:name with
 
 export const RuleCreatePrefillSchema = z.object({
     dids: z.array(DID_STRING).min(1).max(MAX_PREFILL_DIDS).describe('DIDs as scope:name, no wildcards'),
-    rseExpression: z.string().min(1).describe('RSE expression, for example tier=1&type=DISK'),
+    rseExpression: z.string().min(1).max(500).describe('RSE expression, for example tier=1&type=DISK'),
     rses: z
         .array(z.string().min(1))
         .min(1)
