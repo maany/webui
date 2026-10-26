@@ -12,4 +12,6 @@ export interface AssistantConversationRepositoryPort {
     estimateSizes(accountKey: string): Promise<{ perConversation: Record<string, number>; totalBytes: number }>;
     // returns deleted conversation ids; protectedIds (the open conversation) are never deleted but still count toward the size limit
     enforceRetention(policy: RetentionSettings, now: Date, protectedIds?: readonly string[]): Promise<string[]>;
+    // optional: the store lost its persistent backing and now keeps data in memory only
+    onPersistenceLost?(listener: () => void): void;
 }

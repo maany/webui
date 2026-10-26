@@ -69,6 +69,15 @@ describe.each(repositories)('%s', (_name, open) => {
         expect(sizes.totalBytes).toBe(sizes.perConversation.c1);
     });
 
+    it('estimates sizes only for the given account', async () => {
+        await repository.saveConversation(makeConversation('c1', 'root@def'));
+        await repository.saveConversation(makeConversation('c2', 'jdoe@def'));
+        await repository.saveMessage(message('m1', 'c2', '2026-10-25T10:00:01.000Z', 'x'.repeat(5000)));
+        const sizes = await repository.estimateSizes('root@def');
+        expect(Object.keys(sizes.perConversation)).toEqual(['c1']);
+        expect(sizes.totalBytes).toBe(sizes.perConversation.c1);
+    });
+
     it('enforces retention by age and returns the deleted ids', async () => {
         await repository.saveConversation(makeConversation('old', 'root@def', '2026-08-01T00:00:00.000Z'));
         await repository.saveConversation(makeConversation('new', 'root@def', '2026-10-24T00:00:00.000Z'));
@@ -93,6 +102,49 @@ describe.each(repositories)('%s', (_name, open) => {
     });
 });
 
+async function withIndexedDb(value: unknown, run: () => Promise<void>): Promise<void> {
+    const original = globalThis.indexedDB;
+    Object.defineProperty(globalThis, 'indexedDB', { value, configurable: true, writable: true });
+    try {
+        await run();
+    } finally {
+        Object.defineProperty(globalThis, 'indexedDB', { value: original, configurable: true, writable: true });
+    }
+}
+
+describe('IndexedDbConversationRepository connection loss', () => {
+    it('reopens lazily after another tab deleted the database', async () => {
+        const repository = await IndexedDbConversationRepository.open();
+        await repository.saveConversation(makeConversation('c1', 'root@def'));
+        await deleteAssistantDatabase(); // fires versionchange, so blocking() closes our connection
+        expect(await repository.listConversations('root@def')).toEqual([]);
+        await repository.saveConversation(makeConversation('c2', 'root@def'));
+        expect((await repository.listConversations('root@def')).map(c => c.id)).toEqual(['c2']);
+        expect(repository.persistent).toBe(true);
+        repository.close();
+    });
+
+    it('falls back to memory and reports persistent false when the reopen fails', async () => {
+        const repository = await IndexedDbConversationRepository.open();
+        const lost = jest.fn();
+        repository.onPersistenceLost(lost);
+        await deleteAssistantDatabase();
+        await withIndexedDb(
+            {
+                open: () => {
+                    throw new Error('InvalidStateError');
+                },
+            },
+            async () => {
+                await repository.saveConversation(makeConversation('c1', 'root@def'));
+            },
+        );
+        expect(repository.persistent).toBe(false);
+        expect(lost).toHaveBeenCalledTimes(1);
+        expect((await repository.listConversations('root@def')).map(c => c.id)).toEqual(['c1']);
+    });
+});
+
 describe('createConversationRepository', () => {
     it('uses IndexedDB when available', async () => {
         const { repository, persistent } = await createConversationRepository();
@@ -102,12 +154,59 @@ describe('createConversationRepository', () => {
     });
 
     it('falls back to memory when IndexedDB is missing', async () => {
-        const original = globalThis.indexedDB;
-        Object.defineProperty(globalThis, 'indexedDB', { value: undefined, configurable: true, writable: true });
-        const { repository, persistent } = await createConversationRepository();
-        Object.defineProperty(globalThis, 'indexedDB', { value: original, configurable: true, writable: true });
+        await withIndexedDb(undefined, async () => {
+            const { repository, persistent } = await createConversationRepository();
+            expect(persistent).toBe(false);
+            expect(repository).toBeInstanceOf(InMemoryConversationRepository);
+        });
+    });
+
+    it('falls back to memory when opening IndexedDB throws', async () => {
+        await withIndexedDb(
+            {
+                open: () => {
+                    throw new Error('SecurityError');
+                },
+            },
+            async () => {
+                const { repository, persistent } = await createConversationRepository();
+                expect(persistent).toBe(false);
+                expect(repository).toBeInstanceOf(InMemoryConversationRepository);
+            },
+        );
+    });
+
+    it('falls back to memory when opening IndexedDB times out, and closes the connection that opens late', async () => {
+        const late = await IndexedDbConversationRepository.open();
+        const closeSpy = jest.spyOn(late, 'close');
+        let release: (repository: IndexedDbConversationRepository) => void = () => undefined;
+        const open = () => new Promise<IndexedDbConversationRepository>(resolve => (release = resolve));
+        const { repository, persistent } = await createConversationRepository({ openTimeoutMs: 10, open });
         expect(persistent).toBe(false);
         expect(repository).toBeInstanceOf(InMemoryConversationRepository);
+        expect(closeSpy).not.toHaveBeenCalled();
+        release(late);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(closeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('deleteAssistantDatabase resolves instead of throwing when deleteDatabase throws', async () => {
+        await withIndexedDb(
+            {
+                deleteDatabase: () => {
+                    throw new Error('SecurityError');
+                },
+            },
+            async () => {
+                await expect(deleteAssistantDatabase()).resolves.toBeUndefined();
+            },
+        );
+    });
+
+    it('deleteAssistantDatabase resolves after its timeout when the delete never completes', async () => {
+        await withIndexedDb({ deleteDatabase: () => new IDBRequest() }, async () => {
+            await expect(deleteAssistantDatabase(10)).resolves.toBeUndefined();
+        });
     });
 
     it('deleteAssistantDatabase wipes stored chats even while a connection is open', async () => {

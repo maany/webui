@@ -278,6 +278,9 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             const { repository, persistent: isPersistent } = await depsRef.current.repository;
             if (cancelled) return;
             setPersistent(isPersistent);
+            repository.onPersistenceLost?.(() => {
+                if (!cancelled) setPersistent(false);
+            });
             await repository
                 .enforceRetention(
                     depsRef.current.retention(),
