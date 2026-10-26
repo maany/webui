@@ -65,6 +65,31 @@ describe('ResultTable', () => {
         expect(screen.getByText('No rows')).toBeInTheDocument();
     });
 
+    it('survives bigint and dates in cells', () => {
+        render(<ResultTable columns={['a', 'b', 'c']} rows={[{ a: { x: 1n }, b: [2n], c: new Date('nope') }]} totalRows={1} />);
+        expect(screen.getByText('{"x":"1"}')).toBeInTheDocument();
+        expect(screen.getByText('["2"]')).toBeInTheDocument();
+    });
+
+    it('renders null rows as empty cells and truncates by code points', () => {
+        const emoji = '\u{1F600}'.repeat(130);
+        const { container } = render(<ResultTable columns={['a']} rows={[null as unknown as Record<string, unknown>, { a: emoji }]} totalRows={2} />);
+        expect(screen.getByRole('table', { name: 'Query result' })).toBeInTheDocument();
+        const cells = container.querySelectorAll('tbody td');
+        expect(cells[0].textContent).toBe('');
+        expect(Array.from(cells[1].textContent ?? '')).toHaveLength(121);
+    });
+
+    it('shows an inline error when the export fails', async () => {
+        const loadAllRows = jest.fn(async () => {
+            throw new Error('boom');
+        });
+        render(<ResultTable columns={columns} rows={rows} totalRows={3} loadAllRows={loadAllRows} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+        expect(await screen.findByText('Could not export the rows.')).toBeInTheDocument();
+        expect(downloadCsv).not.toHaveBeenCalled();
+    });
+
     it('has no em dash in its copy', () => {
         const { container } = render(<ResultTable columns={columns} rows={rows} totalRows={2} expired onRefresh={jest.fn()} />);
         expect(container.textContent).not.toContain(EM_DASH);

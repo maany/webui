@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { Button } from '@/component-library/atoms/form/button';
 import { Badge } from '@/component-library/atoms/misc/Badge';
-import { downloadCsv, toCsv } from '@/lib/infrastructure/assistant/csv';
+import { downloadCsv, stringifyValue, toCsv } from '@/lib/infrastructure/assistant/csv';
 
 export interface ResultTableProps {
     columns: string[];
@@ -21,10 +21,7 @@ export interface ResultTableProps {
 
 const MAX_CELL_CHARS = 120;
 
-export const formatCell = (value: unknown): string => {
-    if (value === null || value === undefined) return '';
-    return typeof value === 'object' ? JSON.stringify(value) : String(value);
-};
+export const formatCell = (value: unknown): string => stringifyValue(value);
 
 export const ResultTable = ({
     columns,
@@ -40,13 +37,17 @@ export const ResultTable = ({
 }: ResultTableProps) => {
     const rows = rowsProp ?? [];
     const [exporting, setExporting] = useState(false);
+    const [exportError, setExportError] = useState(false);
     const visible = rows.slice(0, maxVisibleRows);
 
     const exportCsv = async () => {
         setExporting(true);
+        setExportError(false);
         try {
             const all = !expired && loadAllRows ? await loadAllRows() : rows;
             downloadCsv(fileName, toCsv(columns, all));
+        } catch {
+            setExportError(true);
         } finally {
             setExporting(false);
         }
@@ -70,13 +71,18 @@ export const ResultTable = ({
                     </Button>
                 </div>
             </div>
+            {exportError && (
+                <p role="alert" className="text-base-error-600 dark:text-base-error-400">
+                    Could not export the rows.
+                </p>
+            )}
             {error && (
                 <p role="alert" className="text-base-error-600 dark:text-base-error-400">
                     {error}
                 </p>
             )}
             <div className="max-h-80 overflow-auto rounded border border-neutral-200 dark:border-neutral-800">
-                <table className="w-full border-collapse text-left">
+                <table aria-label="Query result" className="w-full border-collapse text-left">
                     <thead className="sticky top-0 bg-neutral-100 dark:bg-neutral-800">
                         <tr>
                             {columns.map(column => (
@@ -94,15 +100,16 @@ export const ResultTable = ({
                         {visible.map((row, index) => (
                             <tr key={index} className="border-t border-neutral-200 dark:border-neutral-800">
                                 {columns.map(column => {
-                                    const cell = formatCell(row[column]);
-                                    const long = cell.length > MAX_CELL_CHARS;
+                                    const cell = formatCell(row?.[column]);
+                                    const chars = Array.from(cell);
+                                    const long = chars.length > MAX_CELL_CHARS;
                                     return (
                                         <td
                                             key={column}
                                             title={long ? cell : undefined}
                                             className="px-2 py-1 align-top text-neutral-800 dark:text-neutral-200"
                                         >
-                                            {long ? `${cell.slice(0, MAX_CELL_CHARS)}…` : cell}
+                                            {long ? `${chars.slice(0, MAX_CELL_CHARS).join('')}…` : cell}
                                         </td>
                                     );
                                 })}
