@@ -29,7 +29,7 @@ import { SiteHeaderViewModel } from '@/lib/infrastructure/data/view-model/site-h
 import { usePermissions } from '@/lib/infrastructure/hooks/usePermissions';
 import { useSession } from 'next-auth/react';
 import { Role } from '@/lib/core/entity/auth-models';
-import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
+import { useAssistantPanel, useAssistantShortcutLabel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { useFeature } from '@/component-library/features/feature-flags/FeatureProvider';
 
 export interface CommandPaletteProps {
@@ -67,6 +67,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChan
     const accountsEnabled = useFeature('accounts');
     const assistantPanel = useAssistantPanel();
     const assistantEnabled = assistantPanel.enabled;
+    const assistantShortcut = useAssistantShortcutLabel();
 
     // Build all sections with filtering
     const sections = useMemo<CommandSection[]>(() => {
@@ -125,7 +126,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChan
 
         // Actions Section (adapts to search query)
         const actionItems = getActionCommands(searchQuery, { isAdmin, accountsEnabled });
-        if (assistantEnabled) actionItems.unshift(...getAssistantCommands(assistantPanel.open));
+        if (assistantEnabled) actionItems.unshift(...getAssistantCommands(assistantPanel.open, assistantShortcut));
         allSections.push({
             id: 'actions',
             title: 'Actions',
@@ -159,7 +160,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChan
         }
 
         return allSections;
-    }, [searchQuery, account, canViewApprovalQueue, isAdmin, accountsEnabled, assistantEnabled, assistantPanel.open]);
+    }, [searchQuery, account, canViewApprovalQueue, isAdmin, accountsEnabled, assistantEnabled, assistantPanel.open, assistantShortcut]);
 
     // Calculate total items count for keyboard navigation
     const totalItems = useMemo(() => {

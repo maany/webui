@@ -289,7 +289,7 @@ export function getHelpCommands(): CommandItem[] {
  * "Ask Rucio bot" opens the assistant panel. The palette adds it only when the
  * assistant feature flag is on.
  */
-export function getAssistantCommands(openAssistant: () => void): CommandItem[] {
+export function getAssistantCommands(openAssistant: () => void, shortcut: string = 'Ctrl+Shift+Space'): CommandItem[] {
     return [
         {
             id: 'action-ask-rucio-bot',
@@ -298,7 +298,7 @@ export function getAssistantCommands(openAssistant: () => void): CommandItem[] {
             description: 'Open the Rucio bot chat panel',
             icon: SparklesIcon,
             keywords: ['ask', 'assistant', 'bot', 'chat', 'ai', 'help'],
-            shortcut: 'Ctrl+Shift+K',
+            shortcut,
             onSelect: openAssistant,
         },
     ];

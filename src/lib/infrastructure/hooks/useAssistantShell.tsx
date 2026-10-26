@@ -45,12 +45,31 @@ export interface AssistantShellValue {
 
 /** Below the Tailwind `md` breakpoint the panel is a full-screen sheet. */
 export const ASSISTANT_MOBILE_QUERY = '(max-width: 767px)';
-export const ASSISTANT_SHORTCUT_LABEL = 'Ctrl+Shift+K';
 /** Id of the app content wrapper (Layout) that goes inert behind the mobile sheet. */
 export const ASSISTANT_INERT_TARGET_ID = 'rucio-app-content';
 
-export function isAssistantShortcut(event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>): boolean {
-    return (event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k';
+export const ASSISTANT_SHORTCUT_LABEL_DEFAULT = 'Ctrl+Shift+Space';
+export const ASSISTANT_SHORTCUT_LABEL_MAC = '⌘+Shift+Space';
+
+/** Ctrl+Shift+Space, or Cmd+Shift+Space on macOS (either modifier is accepted on every platform). */
+export function isAssistantShortcut(event: Pick<KeyboardEvent, 'code' | 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>): boolean {
+    const isSpace = event.code === 'Space' || event.key === ' ';
+    return (event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && isSpace;
+}
+
+/** Same detection as the search bar's Ctrl/⌘+K hint. */
+export function isMacPlatform(): boolean {
+    if (typeof navigator === 'undefined') return false;
+    return navigator.platform.toUpperCase().indexOf('MAC') >= 0 || navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
+}
+
+/** Shortcut label for the current platform. Starts with the non-Mac label so server and client markup match. */
+export function useAssistantShortcutLabel(): string {
+    const [label, setLabel] = useState(ASSISTANT_SHORTCUT_LABEL_DEFAULT);
+    useEffect(() => {
+        setLabel(isMacPlatform() ? ASSISTANT_SHORTCUT_LABEL_MAC : ASSISTANT_SHORTCUT_LABEL_DEFAULT);
+    }, []);
+    return label;
 }
 
 function isMobileViewport(): boolean {

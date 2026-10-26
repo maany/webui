@@ -60,27 +60,47 @@ describe('Rucio bot shell', () => {
     it('renders nothing, loads nothing and ignores the shortcut when the flag is off', async () => {
         renderShell(false);
         expect(screen.queryByRole('button', { name: /Rucio bot/ })).toBeNull();
-        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', ctrlKey: true, shiftKey: true });
         expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
         expect(screen.queryByTestId('assistant-root')).toBeNull();
         expect(getAttachedPageActionRegistry()).toBeNull();
     });
 
-    it('loads the panel bundle only after the first open, from the header button or Ctrl+Shift+K', async () => {
+    it('loads the panel bundle only after the first open, from the header button or Ctrl+Shift+Space', async () => {
         renderShell(true);
         expect(screen.queryByTestId('assistant-root')).toBeNull();
         expect(getAttachedPageActionRegistry()).not.toBeNull();
-        fireEvent.click(screen.getByRole('button', { name: 'Rucio bot (Ctrl+Shift+K)' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Rucio bot (Ctrl+Shift+Space)' }));
         expect(screen.getByTestId('panel-state')).toHaveTextContent('open');
         expect(await screen.findByTestId('assistant-root')).toBeInTheDocument();
-        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', ctrlKey: true, shiftKey: true });
         expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
         expect(screen.getByTestId('assistant-root')).toBeInTheDocument();
     });
 
+    it('toggles with Cmd+Shift+Space, accepts the key value when code is missing, and ignores the old Ctrl+Shift+K', () => {
+        renderShell(true);
+        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', metaKey: true, shiftKey: true });
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('open');
+        fireEvent.keyDown(window, { key: ' ', ctrlKey: true, shiftKey: true });
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', ctrlKey: true });
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', ctrlKey: true, shiftKey: true, altKey: true });
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
+    });
+
+    it('labels the header button with the platform shortcut', () => {
+        const platform = jest.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
+        renderShell(true);
+        expect(screen.getByRole('button', { name: 'Rucio bot (⌘+Shift+Space)' })).toBeInTheDocument();
+        platform.mockRestore();
+    });
+
     it('minimize() only shrinks the panel on mobile', () => {
         renderShell(true);
-        fireEvent.click(screen.getByRole('button', { name: 'Rucio bot (Ctrl+Shift+K)' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Rucio bot (Ctrl+Shift+Space)' }));
         fireEvent.click(screen.getByRole('button', { name: 'minimize' }));
         expect(screen.getByTestId('panel-state')).toHaveTextContent('open');
         setMobile(true);
@@ -115,7 +135,7 @@ describe('Rucio bot shell', () => {
 
     it('returns focus to the element that opened the panel when it closes', () => {
         renderShell(true);
-        const button = screen.getByRole('button', { name: 'Rucio bot (Ctrl+Shift+K)' });
+        const button = screen.getByRole('button', { name: 'Rucio bot (Ctrl+Shift+Space)' });
         button.focus();
         fireEvent.click(button);
         expect(screen.getByTestId('panel-state')).toHaveTextContent('open');
@@ -128,11 +148,11 @@ describe('Rucio bot shell', () => {
 
     it('does not steal focus back when the panel was opened with nothing focused', () => {
         renderShell(true);
-        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', ctrlKey: true, shiftKey: true });
         const other = document.createElement('input');
         document.body.appendChild(other);
         other.focus();
-        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', ctrlKey: true, shiftKey: true });
         expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
         expect(other).toHaveFocus();
         other.remove();
@@ -140,9 +160,9 @@ describe('Rucio bot shell', () => {
 
     it('ignores auto-repeated shortcut keydowns', () => {
         renderShell(true);
-        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', ctrlKey: true, shiftKey: true });
         expect(screen.getByTestId('panel-state')).toHaveTextContent('open');
-        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true, repeat: true });
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', ctrlKey: true, shiftKey: true, repeat: true });
         expect(screen.getByTestId('panel-state')).toHaveTextContent('open');
     });
 
@@ -171,14 +191,14 @@ describe('Rucio bot shell', () => {
             </FeatureProvider>,
         );
         fireEvent.click(screen.getByRole('button', { name: 'palette open' }));
-        const event = new KeyboardEvent('keydown', { key: 'K', ctrlKey: true, shiftKey: true, cancelable: true, bubbles: true });
+        const event = new KeyboardEvent('keydown', { code: 'Space', key: ' ', ctrlKey: true, shiftKey: true, cancelable: true, bubbles: true });
         act(() => {
             window.dispatchEvent(event);
         });
         expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
         expect(event.defaultPrevented).toBe(false);
         fireEvent.click(screen.getByRole('button', { name: 'palette close' }));
-        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', ctrlKey: true, shiftKey: true });
         expect(screen.getByTestId('panel-state')).toHaveTextContent('open');
     });
 });
