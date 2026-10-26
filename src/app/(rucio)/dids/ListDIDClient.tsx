@@ -8,6 +8,13 @@ import { useCallback, useState } from 'react';
 import { HiChevronDown, HiInformationCircle } from 'react-icons/hi2';
 import { cn } from '@/component-library/utils';
 import { ListDIDTips } from '@/component-library/pages/DID/list/ListDIDTips';
+import { usePageAction } from '@/lib/infrastructure/hooks/usePageAction';
+import {
+    DIDS_SEARCH_ACTION,
+    DIDS_SEARCH_DESCRIPTION,
+    DidsSearchSchema,
+    didsSearchTarget,
+} from '@/lib/infrastructure/assistant/page-actions/list-actions';
 
 export interface ListDIDClientProps {
     firstPattern?: string;
@@ -18,6 +25,24 @@ export interface ListDIDClientProps {
 export const ListDIDClient = (props: ListDIDClientProps) => {
     const router = useRouter();
     const pathname = usePathname();
+
+    // Set by the dids.search page action. ListDID only auto-searches on mount, so a new
+    // searchKey remounts it with the new pattern.
+    const [override, setOverride] = useState<{ firstPattern: string; initialType: DIDType } | null>(null);
+    const [searchKey, setSearchKey] = useState(0);
+
+    usePageAction({
+        name: DIDS_SEARCH_ACTION,
+        description: DIDS_SEARCH_DESCRIPTION,
+        schema: DidsSearchSchema,
+        apply: async args => {
+            const target = didsSearchTarget(args);
+            setOverride({ firstPattern: target.pattern, initialType: target.type });
+            setSearchKey(previous => previous + 1);
+            router.replace(target.url, { scroll: false });
+            return target.summary;
+        },
+    });
 
     const handleSearchStart = useCallback(
         (params: DIDSearchParams) => {
@@ -75,9 +100,10 @@ export const ListDIDClient = (props: ListDIDClientProps) => {
                 {isTipsOpen && <ListDIDTips />}
             </div>
             <ListDID
-                firstPattern={props.firstPattern}
-                autoSearch={props.autoSearch}
-                initialType={props.initialType}
+                key={searchKey}
+                firstPattern={override?.firstPattern ?? props.firstPattern}
+                autoSearch={override ? true : props.autoSearch}
+                initialType={override?.initialType ?? props.initialType}
                 onSearchStart={handleSearchStart}
             />
         </div>

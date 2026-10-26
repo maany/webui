@@ -2,7 +2,15 @@
 
 import { ListRule, SearchFilters } from '@/component-library/pages/Rule/list/ListRule';
 import { useRouter, usePathname } from 'next/navigation';
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
+import { usePageAction } from '@/lib/infrastructure/hooks/usePageAction';
+import {
+    RuleListFilters,
+    RULES_FILTER_ACTION,
+    RULES_FILTER_DESCRIPTION,
+    RulesFilterSchema,
+    rulesFilterTarget,
+} from '@/lib/infrastructure/assistant/page-actions/list-actions';
 
 export interface ListRuleClientProps {
     autoSearch?: boolean;
@@ -12,6 +20,24 @@ export interface ListRuleClientProps {
 export const ListRuleClient = (props: ListRuleClientProps) => {
     const router = useRouter();
     const pathname = usePathname();
+
+    // Set by the rules.filter page action. ListRule only auto-searches on mount, so a new
+    // searchKey remounts it with the new filters.
+    const [override, setOverride] = useState<RuleListFilters | null>(null);
+    const [searchKey, setSearchKey] = useState(0);
+
+    usePageAction({
+        name: RULES_FILTER_ACTION,
+        description: RULES_FILTER_DESCRIPTION,
+        schema: RulesFilterSchema,
+        apply: async args => {
+            const target = rulesFilterTarget(args);
+            setOverride(target.filters);
+            setSearchKey(previous => previous + 1);
+            router.replace(target.url, { scroll: false });
+            return target.summary;
+        },
+    });
 
     const handleSearchStart = useCallback(
         (filters: SearchFilters) => {
@@ -65,5 +91,12 @@ export const ListRuleClient = (props: ListRuleClientProps) => {
         [router, pathname],
     );
 
-    return <ListRule autoSearch={props.autoSearch} initialFilters={props.initialFilters} onSearchStart={handleSearchStart} />;
+    return (
+        <ListRule
+            key={searchKey}
+            autoSearch={override ? true : props.autoSearch}
+            initialFilters={override ?? props.initialFilters}
+            onSearchStart={handleSearchStart}
+        />
+    );
 };
