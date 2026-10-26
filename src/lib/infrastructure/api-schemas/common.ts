@@ -10,6 +10,12 @@ export const didIdentifierShape = {
     name: nonEmptyString,
 };
 
+/** A DID on an RSE: `scope`, `name` and `rse`. Used by the DDM and FTS link queries. */
+export const didOnRseQueryShape = {
+    ...didIdentifierShape,
+    rse: nonEmptyString,
+};
+
 /** Query carrying a rule id as `id`. */
 export const ruleIdQueryShape = {
     id: nonEmptyString,

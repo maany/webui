@@ -4,9 +4,10 @@ import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { GetAMITagInfoControllerParameters } from '@/lib/infrastructure/controller/get-ami-tag-info-controller';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
-import { MAX_AMI_TAGS_PER_REQUEST, parseAmiTagsParam } from '@/lib/core/utils/ami-tag-utils';
+import { GetAmiTagInfoSchema } from '@/lib/infrastructure/api-schemas/get-ami-tag-info';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/get-ami-tag-info
@@ -15,14 +16,9 @@ import { MAX_AMI_TAGS_PER_REQUEST, parseAmiTagsParam } from '@/lib/core/utils/am
  */
 async function getHandler(request: NextRequest) {
     try {
-        const params = parseQueryParams(request);
-        const tags = parseAmiTagsParam(params.tags);
-
-        if (!tags) {
-            return NextResponse.json(
-                { error: `Invalid parameter: tags must be 1 to ${MAX_AMI_TAGS_PER_REQUEST} comma-separated AMI tags` },
-                { status: 400 },
-            );
+        const params = parseQuery(GetAmiTagInfoSchema, new URL(request.url).searchParams);
+        if (!params.success) {
+            return NextResponse.json({ error: params.error.issues[0].message }, { status: 400 });
         }
 
         // The feature is only loaded when the flag was on at startup; if it was
@@ -33,7 +29,7 @@ async function getHandler(request: NextRequest) {
 
         const controller = appContainer.get<BaseController<GetAMITagInfoControllerParameters, void>>(CONTROLLERS.GET_AMI_TAG_INFO);
 
-        return executeAuthenticatedController(controller, { tags });
+        return executeAuthenticatedController(controller, { tags: params.data.tags });
     } catch (error) {
         console.error('Error in get-ami-tag-info:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

@@ -4,9 +4,10 @@ import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { GetPandaTaskLinkControllerParameters } from '@/lib/infrastructure/controller/get-panda-task-link-controller';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
-import { isPandaTaskId } from '@/lib/core/utils/panda-task-utils';
+import { GetPandaTaskLinkSchema } from '@/lib/infrastructure/api-schemas/get-panda-task-link';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/get-panda-task-link
@@ -15,11 +16,10 @@ import { isPandaTaskId } from '@/lib/core/utils/panda-task-utils';
  */
 async function getHandler(request: NextRequest) {
     try {
-        const params = parseQueryParams(request);
-        const taskId = typeof params.taskId === 'string' ? params.taskId : '';
+        const params = parseQuery(GetPandaTaskLinkSchema, new URL(request.url).searchParams);
 
-        if (!isPandaTaskId(taskId)) {
-            return NextResponse.json({ error: 'Invalid parameter: taskId must be 1 to 12 digits' }, { status: 400 });
+        if (!params.success) {
+            return NextResponse.json({ error: params.error.issues[0].message }, { status: 400 });
         }
 
         // The feature is only loaded when the flag was on at startup; if it was
@@ -30,7 +30,7 @@ async function getHandler(request: NextRequest) {
 
         const controller = appContainer.get<BaseController<GetPandaTaskLinkControllerParameters, void>>(CONTROLLERS.GET_PANDA_TASK_LINK);
 
-        return executeAuthenticatedController(controller, { taskId });
+        return executeAuthenticatedController(controller, { taskId: params.data.taskId });
     } catch (error) {
         console.error('Error in get-panda-task-link:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

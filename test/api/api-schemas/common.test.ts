@@ -7,6 +7,7 @@ import {
     accountNameField,
     accountQuerySchema,
     didIdentifierShape,
+    didOnRseQueryShape,
     nonEmptyString,
     rseOrRseNameQuerySchema,
     ruleFilterShape,
@@ -24,6 +25,13 @@ describe('common schema fragments', () => {
         expect(schema.safeParse({ scope: 's', name: 'n' }).success).toBe(true);
         expect(schema.safeParse({ scope: 's', name: '' }).success).toBe(false);
         expect(schema.safeParse({ name: 'n' }).success).toBe(false);
+    });
+
+    it('didOnRseQueryShape requires scope, name and rse', () => {
+        const schema = z.object(didOnRseQueryShape);
+        expect(schema.safeParse({ scope: 's', name: 'n', rse: 'XRD1' }).success).toBe(true);
+        expect(schema.safeParse({ scope: 's', name: 'n' }).success).toBe(false);
+        expect(schema.safeParse({ scope: 's', name: 'n', rse: '' }).success).toBe(false);
     });
 
     it('ruleIdQueryShape requires a non-empty id', () => {
