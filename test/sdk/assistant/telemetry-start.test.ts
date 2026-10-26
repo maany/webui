@@ -88,4 +88,79 @@ describe('startAssistantTelemetry', () => {
         });
         expect(() => telemetry.handle(events[0])).not.toThrow();
     });
+
+    it('does not export a known secret that straddles the content cut', async () => {
+        const secret = 'my-secret-token-value-123';
+        const exporter = new InMemorySpanExporter();
+        const telemetry = startAssistantTelemetry({
+            contentLevel: () => 'full',
+            identity: { userId: () => undefined },
+            secrets: () => [secret],
+            exporters: [exporter],
+        });
+        telemetry.handle({ ...(events[0] as Extract<AssistantEvent, { type: 'turn-started' }>), userText: `${'a'.repeat(7990)}${secret}tail` });
+        telemetry.handle(events[3]);
+        await telemetry.forceFlush();
+        const everything = JSON.stringify(exporter.getFinishedSpans().map(s => [s.name, s.attributes]));
+        expect(everything).not.toContain(secret.slice(0, 12));
+        expect(everything).toContain('[REDACTED]');
+        await telemetry.shutdown();
+    });
+
+    it('exports no content for a turn whose level dropped after the content was captured', async () => {
+        const exporter = new InMemorySpanExporter();
+        let level: 'full' | 'metadata' = 'full';
+        const telemetry = startAssistantTelemetry({
+            contentLevel: () => level,
+            identity: { userId: () => undefined },
+            secrets: () => [],
+            exporters: [exporter],
+        });
+        telemetry.handle(events[0]);
+        telemetry.handle(events[1]);
+        level = 'metadata';
+        telemetry.handle(events[2]);
+        telemetry.handle(events[3]);
+        await telemetry.forceFlush();
+        const spans = exporter.getFinishedSpans();
+        expect(spans.length).toBeGreaterThan(0);
+        const keys = [
+            'langfuse.trace.input',
+            'langfuse.trace.output',
+            'langfuse.observation.input',
+            'langfuse.observation.output',
+            'gen_ai.tool.call.arguments',
+            'gen_ai.tool.call.result',
+            'db.query.text',
+        ];
+        for (const span of spans) {
+            keys.forEach(key => expect(span.attributes[key]).toBeUndefined());
+        }
+        expect(JSON.stringify(spans.map(s => s.attributes))).not.toContain('please');
+        await telemetry.shutdown();
+    });
+
+    it('resolves shutdown even when secrets() throws or an exporter fails to shut down', async () => {
+        let broken = false;
+        const failing: SpanExporter = {
+            export: (_spans, done) => done({ code: 0 }),
+            shutdown: () => Promise.reject(new Error('exporter shutdown failed')),
+            forceFlush: () => Promise.reject(new Error('flush failed')),
+        };
+        const telemetry = startAssistantTelemetry({
+            contentLevel: () => 'full',
+            identity: { userId: () => undefined },
+            secrets: () => {
+                if (broken) {
+                    throw new Error('settings broke');
+                }
+                return [];
+            },
+            exporters: [failing],
+        });
+        telemetry.handle(events[0]);
+        broken = true;
+        await expect(telemetry.forceFlush()).resolves.toBeUndefined();
+        await expect(telemetry.shutdown()).resolves.toBeUndefined();
+    });
 });

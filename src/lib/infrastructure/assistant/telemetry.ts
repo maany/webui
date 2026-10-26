@@ -6,7 +6,7 @@ import { ATTR_DB_QUERY_TEXT, ATTR_DB_SYSTEM_NAME, ATTR_ERROR_TYPE, ATTR_SERVICE_
 import type { AssistantEvent } from '@/lib/core/entity/assistant/events';
 import type { TelemetryContentLevel } from '@/lib/core/entity/assistant/assistant-config';
 import * as A from '@/lib/infrastructure/assistant/telemetry-attributes';
-import { REDACTED, ScrubbingSpanProcessor } from '@/lib/infrastructure/assistant/telemetry-scrubber';
+import { REDACTED, ScrubbingSpanProcessor, scrubText } from '@/lib/infrastructure/assistant/telemetry-scrubber';
 import type { OtlpTarget } from '@/lib/infrastructure/assistant/telemetry-sinks';
 
 export const TELEMETRY_TRACER_NAME = 'rucio-webui-assistant';
@@ -36,6 +36,8 @@ export interface TelemetryMapperOptions {
     /** Top-level argument keys to mask per tool (phase 4 `ToolSpec.sensitiveArgs`). */
     sensitiveArgs?(toolName: string): readonly string[];
     contentMaxChars?: number;
+    /** Applied to every content value before it is truncated, so a secret cut in half is still matched. */
+    scrub?(text: string): string;
 }
 
 export interface TelemetryMapper {
@@ -88,15 +90,53 @@ function stringify(value: unknown): string {
     }
 }
 
+const TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+const ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** Tool names and error codes come from the model or the tool layer: export them only in a plain shape. */
+const safeToolName = (name: string): string => (TOOL_NAME_PATTERN.test(name) ? name : 'unknown');
+const safeErrorCode = (code: string): string => (ERROR_CODE_PATTERN.test(code) ? code : 'tool_error');
+
 export function createTelemetryMapper(options: TelemetryMapperOptions): TelemetryMapper {
     const max = options.contentMaxChars ?? TELEMETRY_CONTENT_MAX_CHARS;
     const turns = new Map<string, TurnState>();
     const turnByConversation = new Map<string, string>();
     const tools = new Map<string, ToolState>();
 
-    const isFull = () => options.contentLevel() === 'full';
-    const content = (value: unknown): string | undefined =>
-        isFull() && value !== undefined && value !== '' ? truncateContent(stringify(value), max) : undefined;
+    // Fail closed: a broken settings getter means metadata.
+    const level = (): TelemetryContentLevel => {
+        try {
+            return options.contentLevel();
+        } catch {
+            return 'metadata';
+        }
+    };
+    const isFull = () => level() === 'full';
+    const content = (value: unknown): string | undefined => {
+        if (!isFull() || value === undefined || value === '') {
+            return undefined;
+        }
+        try {
+            const text = stringify(value);
+            return truncateContent(options.scrub ? options.scrub(text) : text, max);
+        } catch {
+            return undefined;
+        }
+    };
+    const maskedArgs = (toolName: string, args: unknown): unknown => {
+        try {
+            return maskSensitiveToolArgs(args, options.sensitiveArgs?.(toolName) ?? []);
+        } catch {
+            return undefined;
+        }
+    };
+    const attempt = (action: () => void) => {
+        try {
+            action();
+        } catch {
+            // Telemetry must never break a chat turn.
+        }
+    };
     const childOf = (parent: Span, name: string, startTime: number, attributes: Attributes): Span =>
         options.tracer.startSpan(name, { startTime, attributes }, trace.setSpan(ROOT_CONTEXT, parent));
 
@@ -116,12 +156,32 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
     };
 
     const endToolsOfTurn = (turnId: string, at: number, reason: string) => {
-        for (const [toolCallId, tool] of tools) {
+        for (const [toolCallId, tool] of [...tools]) {
             if (tool.turnId === turnId) {
-                markError(tool.span, reason, reason);
-                tool.span.end(at);
+                attempt(() => markError(tool.span, reason, reason));
+                attempt(() => tool.span.end(at));
                 tools.delete(toolCallId);
             }
+        }
+    };
+
+    const forgetTurn = (turnId: string, turn: TurnState) => {
+        turns.delete(turnId);
+        if (turnByConversation.get(turn.conversationId) === turnId) {
+            turnByConversation.delete(turn.conversationId);
+        }
+    };
+
+    /** Ends a turn that will not get a turn-finished event (new turn in the same conversation, shutdown). */
+    const abortTurn = (turnId: string, turn: TurnState, at: number) => {
+        try {
+            endToolsOfTurn(turnId, at, 'aborted');
+            attempt(() => turn.span.setAttribute(A.ATTR_RUCIO_TURN_STATUS, 'aborted'));
+            attempt(() => setUser(turn.span));
+            attempt(() => markError(turn.span, 'aborted', 'aborted'));
+            attempt(() => turn.span.end(at));
+        } finally {
+            forgetTurn(turnId, turn);
         }
     };
 
@@ -130,6 +190,11 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
             case 'turn-started': {
                 if (turns.has(event.turnId)) {
                     return;
+                }
+                const previousId = turnByConversation.get(event.conversationId);
+                const previous = previousId ? turns.get(previousId) : undefined;
+                if (previousId && previous) {
+                    abortTurn(previousId, previous, event.at);
                 }
                 const attributes: Attributes = {
                     [A.ATTR_GEN_AI_OPERATION_NAME]: A.GEN_AI_OPERATION_INVOKE_AGENT,
@@ -143,7 +208,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                     [A.ATTR_LANGFUSE_OBSERVATION_TYPE]: 'agent',
                     [A.ATTR_RUCIO_MODEL]: event.model,
                     [A.ATTR_RUCIO_TURN_ID]: event.turnId,
-                    [A.ATTR_RUCIO_CONTENT_LEVEL]: options.contentLevel(),
+                    [A.ATTR_RUCIO_CONTENT_LEVEL]: level(),
                 };
                 const input = content(event.userText);
                 if (input !== undefined) {
@@ -203,20 +268,21 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                 if (!turn || tools.has(event.toolCallId)) {
                     return;
                 }
+                const toolName = safeToolName(event.toolName);
                 const attributes: Attributes = {
                     [A.ATTR_GEN_AI_OPERATION_NAME]: A.GEN_AI_OPERATION_EXECUTE_TOOL,
-                    [A.ATTR_GEN_AI_TOOL_NAME]: event.toolName,
+                    [A.ATTR_GEN_AI_TOOL_NAME]: toolName,
                     [A.ATTR_GEN_AI_TOOL_CALL_ID]: event.toolCallId,
                     [A.ATTR_GEN_AI_TOOL_TYPE]: 'function',
                     [A.ATTR_LANGFUSE_OBSERVATION_TYPE]: 'tool',
                     [A.ATTR_RUCIO_TOOL_POLICY]: event.policy,
                 };
-                const args = content(maskSensitiveToolArgs(event.args, options.sensitiveArgs?.(event.toolName) ?? []));
+                const args = content(maskedArgs(event.toolName, event.args));
                 if (args !== undefined) {
                     attributes[A.ATTR_GEN_AI_TOOL_CALL_ARGUMENTS] = args;
                     attributes[A.ATTR_LANGFUSE_OBSERVATION_INPUT] = args;
                 }
-                const span = childOf(turn.span, `${A.GEN_AI_OPERATION_EXECUTE_TOOL} ${event.toolName}`, event.at, attributes);
+                const span = childOf(turn.span, `${A.GEN_AI_OPERATION_EXECUTE_TOOL} ${toolName}`, event.at, attributes);
                 tools.set(event.toolCallId, { span, turnId: event.turnId });
                 return;
             }
@@ -246,7 +312,8 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                     tool.span.setAttribute(A.ATTR_LANGFUSE_OBSERVATION_OUTPUT, result);
                 }
                 if (event.error) {
-                    markError(tool.span, event.error.error, isFull() ? `${event.error.error}: ${event.error.message}` : event.error.error);
+                    const code = safeErrorCode(event.error.error);
+                    markError(tool.span, code, isFull() ? `${code}: ${event.error.message}` : code);
                 }
                 tool.span.end(event.at);
                 tools.delete(event.toolCallId);
@@ -323,34 +390,39 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                 if (!turn) {
                     return;
                 }
-                endToolsOfTurn(event.turnId, event.at, 'unfinished');
-                turn.span.setAttributes({
-                    [A.ATTR_RUCIO_TURN_STATUS]: event.status,
-                    [A.ATTR_RUCIO_INPUT_TOKENS]: event.usage.inputTokens,
-                    [A.ATTR_RUCIO_OUTPUT_TOKENS]: event.usage.outputTokens,
-                    [A.ATTR_RUCIO_DURATION_MS]: event.usage.durationMs,
-                });
-                if (event.usage.cachedInputTokens !== undefined) {
-                    turn.span.setAttribute(A.ATTR_RUCIO_CACHED_INPUT_TOKENS, event.usage.cachedInputTokens);
-                }
-                if (event.usage.costUSD !== null) {
-                    turn.span.setAttribute(A.ATTR_RUCIO_COST_USD, event.usage.costUSD);
-                }
-                if (turn.lastOutput !== undefined && isFull()) {
-                    turn.span.setAttribute(A.ATTR_LANGFUSE_TRACE_OUTPUT, turn.lastOutput);
-                    turn.span.setAttribute(A.ATTR_LANGFUSE_OBSERVATION_OUTPUT, turn.lastOutput);
-                }
-                setUser(turn.span);
-                if (event.status === 'error') {
-                    markError(turn.span, 'turn_error', isFull() && event.error ? event.error : 'turn_error');
-                } else if (event.status !== 'completed') {
-                    turn.span.setAttribute(A.ATTR_LANGFUSE_OBSERVATION_LEVEL, 'WARNING');
-                    turn.span.setAttribute(A.ATTR_LANGFUSE_OBSERVATION_STATUS_MESSAGE, event.status);
-                }
-                turn.span.end(event.at);
-                turns.delete(event.turnId);
-                if (turnByConversation.get(turn.conversationId) === event.turnId) {
-                    turnByConversation.delete(turn.conversationId);
+                try {
+                    endToolsOfTurn(event.turnId, event.at, 'unfinished');
+                    attempt(() => {
+                        turn.span.setAttributes({
+                            [A.ATTR_RUCIO_TURN_STATUS]: event.status,
+                            [A.ATTR_RUCIO_INPUT_TOKENS]: event.usage.inputTokens,
+                            [A.ATTR_RUCIO_OUTPUT_TOKENS]: event.usage.outputTokens,
+                            [A.ATTR_RUCIO_DURATION_MS]: event.usage.durationMs,
+                        });
+                        if (event.usage.cachedInputTokens !== undefined) {
+                            turn.span.setAttribute(A.ATTR_RUCIO_CACHED_INPUT_TOKENS, event.usage.cachedInputTokens);
+                        }
+                        if (event.usage.costUSD !== null) {
+                            turn.span.setAttribute(A.ATTR_RUCIO_COST_USD, event.usage.costUSD);
+                        }
+                        if (turn.lastOutput !== undefined && isFull()) {
+                            turn.span.setAttribute(A.ATTR_LANGFUSE_TRACE_OUTPUT, turn.lastOutput);
+                            turn.span.setAttribute(A.ATTR_LANGFUSE_OBSERVATION_OUTPUT, turn.lastOutput);
+                        }
+                    });
+                    attempt(() => setUser(turn.span));
+                    attempt(() => {
+                        if (event.status === 'error') {
+                            const message = event.error ? content(event.error) : undefined;
+                            markError(turn.span, 'turn_error', message ?? 'turn_error');
+                        } else if (event.status !== 'completed') {
+                            turn.span.setAttribute(A.ATTR_LANGFUSE_OBSERVATION_LEVEL, 'WARNING');
+                            turn.span.setAttribute(A.ATTR_LANGFUSE_OBSERVATION_STATUS_MESSAGE, event.status);
+                        }
+                    });
+                    attempt(() => turn.span.end(event.at));
+                } finally {
+                    forgetTurn(event.turnId, turn);
                 }
                 return;
             }
@@ -367,17 +439,13 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
     }
 
     function endAll(at: number): void {
-        for (const [turnId, turn] of turns) {
-            endToolsOfTurn(turnId, at, 'aborted');
-            turn.span.setAttribute(A.ATTR_RUCIO_TURN_STATUS, 'aborted');
-            setUser(turn.span);
-            markError(turn.span, 'aborted', 'aborted');
-            turn.span.end(at);
+        for (const [turnId, turn] of [...turns]) {
+            abortTurn(turnId, turn, at);
         }
         turns.clear();
         turnByConversation.clear();
-        for (const tool of tools.values()) {
-            tool.span.end(at);
+        for (const tool of [...tools.values()]) {
+            attempt(() => tool.span.end(at));
         }
         tools.clear();
     }
@@ -423,13 +491,14 @@ export function startAssistantTelemetry(options: StartAssistantTelemetryOptions)
     const provider = new TracerProvider({
         resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: TELEMETRY_SERVICE_NAME }),
         spanLimits: { attributeValueLengthLimit: TELEMETRY_ATTRIBUTE_VALUE_LIMIT },
-        spanProcessors: inner.map(processor => new ScrubbingSpanProcessor(processor, options.secrets)),
+        spanProcessors: inner.map(processor => new ScrubbingSpanProcessor(processor, options.secrets, () => options.contentLevel() !== 'full')),
     });
     const mapper = createTelemetryMapper({
         tracer: provider.getTracer(TELEMETRY_TRACER_NAME),
         contentLevel: options.contentLevel,
         identity: options.identity,
         sensitiveArgs: options.sensitiveArgs,
+        scrub: text => scrubText(text, options.secrets()),
     });
     let stopped = false;
     return {
@@ -443,14 +512,18 @@ export function startAssistantTelemetry(options: StartAssistantTelemetryOptions)
                 // Telemetry must never break a chat turn.
             }
         },
-        forceFlush: () => provider.forceFlush(),
+        forceFlush: () => provider.forceFlush().catch(() => undefined),
         async shutdown() {
             if (stopped) {
                 return;
             }
             stopped = true;
-            mapper.endAll(Date.now());
-            await provider.shutdown();
+            try {
+                mapper.endAll(Date.now());
+            } catch {
+                // Shutdown must always complete.
+            }
+            await provider.shutdown().catch(() => undefined);
         },
     };
 }

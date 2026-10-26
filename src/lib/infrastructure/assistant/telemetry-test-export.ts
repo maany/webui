@@ -54,17 +54,20 @@ export async function testTelemetryExport(target: OtlpTarget, options: TestTelem
     if (pageProtocol === 'https:' && url.protocol === 'http:' && !LOCAL_HOSTS.has(url.hostname)) {
         return { ok: false, reason: 'mixed-content' };
     }
-    const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TELEMETRY_TEST_TIMEOUT_MS);
     try {
+        const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
         const body = await buildTestSpanPayload();
+        const headers = Object.fromEntries(Object.entries(target.headers).filter(([name]) => name.toLowerCase() !== 'content-type'));
         const response = await fetchImpl(url.href, {
             method: 'POST',
-            headers: { ...target.headers, 'Content-Type': 'application/json' },
+            headers: { ...headers, 'Content-Type': 'application/json' },
             body,
             mode: 'cors',
             credentials: 'omit',
+            // A redirect means a misconfigured endpoint; never forward credentials to another host.
+            redirect: 'error',
             signal: controller.signal,
         });
         if (response.ok) {

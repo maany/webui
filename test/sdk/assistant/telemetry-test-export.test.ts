@@ -85,4 +85,32 @@ describe('testTelemetryExport', () => {
             status: 200,
         });
     });
+
+    it('does not follow redirects', async () => {
+        const fetchImpl = fetchReturning(200);
+        await testTelemetryExport(target, { fetchImpl, pageProtocol: 'https:' });
+        const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+        expect(init.redirect).toBe('error');
+    });
+
+    it('replaces any case variant of content-type', async () => {
+        const fetchImpl = fetchReturning(200);
+        await testTelemetryExport(
+            { ...target, headers: { ...target.headers, 'content-type': 'text/plain', 'CONTENT-TYPE': 'x/y' } },
+            { fetchImpl, pageProtocol: 'https:' },
+        );
+        const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+        expect(init.headers).toEqual({ Authorization: 'Basic abc', 'Content-Type': 'application/json' });
+    });
+
+    it('never rejects when fetch is unavailable', async () => {
+        const original = globalThis.fetch;
+        // @ts-expect-error simulate a runtime without fetch
+        globalThis.fetch = undefined;
+        try {
+            await expect(testTelemetryExport(target, { pageProtocol: 'https:' })).resolves.toEqual({ ok: false, reason: 'network' });
+        } finally {
+            globalThis.fetch = original;
+        }
+    });
 });
