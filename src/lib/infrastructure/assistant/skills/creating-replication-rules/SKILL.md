@@ -14,8 +14,8 @@ Ask only for what is missing. Repeat the final values back before acting.
 
 | Parameter | Notes |
 | --- | --- |
-| DIDs | `scope:name`, one or more. Confirm each exists with `list_dids` (exact name or a wildcard) or `get_did_meta`. |
-| RSE expression | Where copies may go. Translate words like "two Tier 1 disks" into an expression and resolve it with `list_rses` so the user sees the matching RSEs. Activate `rse-expression-basics` if the syntax is unclear. An expression that matches no RSE is rejected. |
+| DIDs | `scope:name`, one or more. Confirm each exists with `list_dids` (a name pattern plus a `type`: All, Container, Dataset, File or Collection) or `get_did_meta`. |
+| RSE expression | Where copies may go. Translate words like "two Tier 1 disks" into an expression and resolve it with `list_rses` so the user sees the matching RSEs. If the syntax is unclear, use `search_docs` for "RSE expressions". An expression that matches no RSE is rejected. |
 | Copies | At least 1, and not more than the number of RSEs the expression matches. |
 | Lifetime | Optional, in days. Without one the rule never expires. Suggest a lifetime for scratch or user data. |
 | Grouping | `ALL`: every file on the same RSE. `DATASET` (Rucio default): files of one dataset stay together, datasets of a container may differ. `NONE`: files are placed independently. |

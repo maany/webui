@@ -23,9 +23,9 @@ List tools do not put rows in the conversation. They load rows into an in-browse
 | --- | --- |
 | `list_rules`, `list_did_rules` | `id`, `scope`, `name`, `account`, `rse_expression`, `created_at`, `remaining_lifetime` (seconds), `state` (`Replicating`, `OK`, `Stuck`, `Suspended`, `Waiting_Approval`, `Inject`), `locks_ok_cnt`, `locks_replicating_cnt`, `locks_stuck_cnt` |
 | `list_rses` | `id`, `name`, `rse_type` (`DISK` or `TAPE`), `volatile`, `deterministic`, `staging_area` |
-| `list_rule_replica_lock_states` | `scope`, `name`, `rse`, `state` (`O` ok, `R` replicating, `S` stuck), `ddm_link`, `fts_link` |
+| `list_rule_replica_lock_states` | `scope`, `name`, `rse`, `state` (`O` ok, `R` replicating, `S` stuck, `U` unknown), `ddm_link`, `fts_link` |
 | `list_account_rse_usage` | `rse`, `rse_id`, `account`, `files`, `used_bytes`, `bytes_limit` (`-1` unlimited) |
-| `list_account_rse_quotas` | `rse`, `bytes_limit`, `used_bytes`, `bytes_remaining`, `has_quota`, `total_expected_usage` |
+| `list_account_rse_quotas` | `rse`, `rse_id`, `bytes_limit`, `used_bytes`, `bytes_remaining`, `has_quota`, `total_expected_usage` |
 | `list_requests` | `id`, `scope`, `name`, `state` (by default the active states `QUEUED`, `SUBMITTING`, `SUBMITTED`, `WAITING`, `PREPARING`; finished requests move to the request history and are not listed), `activity`, `bytes`, `sourceRse`, `destRse`, `account`, `ruleId`, `retryCount`, `errMsg`, and ISO times `createdAt`, `requestedAt`, `submittedAt`, `startedAt`, `transferredAt` |
 
 Rows may also carry a `status` column from the WebUI; ignore it. Always check the returned column list before writing SQL.

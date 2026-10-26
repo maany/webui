@@ -57,11 +57,33 @@ describe('shipped skills', () => {
         }
     });
 
+    it('names only tools that the skill itself allows, because activation narrows the tools to them', () => {
+        const known = new Set([...routeToolNames(), ...CORE_TOOLS, ...PLANNED_TOOLS]);
+        for (const skill of SHIPPED_SKILLS) {
+            const named = Array.from(new Set(Array.from(skill.body.matchAll(/`([a-z][a-z0-9_]*)`/g), m => m[1]))).filter(
+                token => known.has(token) && token !== 'activate_skill',
+            );
+            const missing = named.filter(tool => !(skill.allowedTools ?? []).includes(tool));
+            expect({ skill: skill.name, missing }).toEqual({ skill: skill.name, missing: [] });
+        }
+    });
+
+    it('never tells the model to activate another skill (a second activation would narrow the tools further)', () => {
+        const skillNames = SHIPPED_SKILLS.map(skill => skill.name);
+        for (const skill of SHIPPED_SKILLS) {
+            const sentences = skill.body.split(/(?<=[.!?:])\s|\n/);
+            const activating = sentences.filter(sentence => /\bactivat/i.test(sentence) && /`[a-z0-9-]+`/.test(sentence));
+            expect({ skill: skill.name, activating }).toEqual({ skill: skill.name, activating: [] });
+            const mentioned = skillNames.filter(name => skill.body.includes(`\`${name}\``));
+            expect({ skill: skill.name, mentioned }).toEqual({ skill: skill.name, mentioned: [] });
+        }
+    });
+
     it('stays within the Agent Skills size guidance and avoids em dashes', () => {
         for (const skill of SHIPPED_SKILLS) {
             expect(skill.body.split('\n').length).toBeLessThan(200);
             expect(skill.description.length).toBeLessThanOrEqual(1024);
-            expect(`${skill.description}\n${skill.body}`).not.toContain('—');
+            expect(`${skill.description}\n${skill.body}`).not.toContain('\u2014');
         }
     });
 });

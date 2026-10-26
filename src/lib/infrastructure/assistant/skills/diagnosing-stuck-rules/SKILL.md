@@ -1,7 +1,7 @@
 ---
 name: diagnosing-stuck-rules
 description: Find out why a Rucio replication rule is stuck, suspended or slow, and what the user can do about it. Use when the user asks why a rule is stuck, not progressing, still replicating, suspended, or wants stuck rules summarised by RSE.
-allowed-tools: find_tools get_rule list_rules list_did_rules list_rule_replica_lock_states list_file_replicas get_rse get_rse_attributes get_rse_usage get_fts_link list_requests navigate read_current_page run_sql refresh_handle search_docs
+allowed-tools: find_tools get_rule list_rules list_did_rules list_rule_replica_lock_states list_file_replicas get_rse get_rse_attributes list_rses get_rse_usage get_fts_link list_requests navigate read_current_page run_sql refresh_handle search_docs
 ---
 
 # Diagnosing stuck rules
@@ -19,7 +19,7 @@ A rule holds one lock per file and per RSE copy. The rule state follows its lock
 | `Waiting_Approval` | Created with "ask approval"; nothing moves until an approver accepts it. |
 | `Inject` | Created asynchronously; the judge-injector has not processed it yet. |
 
-Lock rows from `list_rule_replica_lock_states` have `state` codes: `O` = OK, `R` = replicating, `S` = stuck.
+Lock rows from `list_rule_replica_lock_states` have `state` codes: `O` = OK, `R` = replicating, `S` = stuck, `U` = unknown.
 
 ## Why rules get stuck
 
@@ -49,13 +49,13 @@ The WebUI API does not return Rucio's rule error text, so reason from lock state
 1. `list_rules` with the state filter `Stuck` (add an account filter if the user asked about one account).
 2. `run_sql` on the handle, for example
    `SELECT rse_expression, count(*) AS rules, sum(locks_stuck_cnt) AS stuck_locks FROM <handle> GROUP BY rse_expression ORDER BY stuck_locks DESC`
-3. A rule's RSE expression is not an RSE name. To break down by RSE, list lock states for the few worst rules, or resolve expressions with `list_rses` (see the `sql-recipes-over-handles` skill).
+3. A rule's RSE expression is not an RSE name. To break down by RSE, list lock states for the few worst rules, or resolve each distinct expression with `list_rses` and `run_sql`: save each result with `save_as`, add the expression as a literal column (`SELECT 'tier=1' AS rse_expression, name AS rse FROM rses_2`), combine them with `UNION ALL` and join the rules on `rse_expression`. Ask before resolving more than about 10 expressions.
 
 ## What the user can do
 
 - Wait: the repairer retries for up to 14 days before suspending.
 - Storage or transfer problems on a site: report the rule id, the RSE and an FTS link to the site or Rucio operators.
 - Wrong destination: create a new rule with a better RSE expression; the stuck rule can be removed once the new one is OK. Never delete or change a rule without the user's explicit request.
-- Quota problems: see the `quota-and-usage-analysis` skill.
+- Quota problems: the user can ask about their quota in a new message. Stuck locks on an RSE where the account has no quota left are a typical sign.
 
 Use `search_docs` for "stuck rule" or "judge repairer" to cite the documentation.
