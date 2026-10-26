@@ -1,5 +1,5 @@
-import type { HttpMethod, ToolError, ToolErrorCode } from '@/lib/core/entity/assistant/tool';
-import { scrubSecrets } from './feature-executor';
+import type { HttpMethod } from '@/lib/core/entity/assistant/tool';
+import { SESSION_EXPIRED_MESSAGE, errorCodeForStatus, scrubSecrets, trimForModel } from './feature-executor';
 import { toolError } from './tool-error';
 
 /** Writes give up after 60s. The change may still land on the server, so the error says so. */
@@ -30,22 +30,16 @@ export interface WriteRequestOptions {
     timeoutMs?: number;
 }
 
-export const SESSION_EXPIRED_ERROR: ToolError = {
-    error: 'session_expired',
-    message: 'The WebUI session has expired. Ask the user to log in again, then retry.',
-};
+const MAY_HAVE_LANDED = 'The change may still have been applied, so check its state before retrying.';
+const sessionExpired = () => toolError('session_expired', SESSION_EXPIRED_MESSAGE);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function codeForStatus(status: number): ToolErrorCode {
-    if (status === 400 || status === 422) return 'invalid_args';
-    if (status === 401) return 'unauthorized';
-    if (status === 403) return 'forbidden';
-    if (status === 404) return 'not_found';
-    if (status === 408 || status === 504) return 'timeout';
-    return 'rucio_error';
+/** A server error says nothing about whether the write landed. */
+function withLandedWarning(status: number, message: string): string {
+    return status >= 500 ? `${message} ${MAY_HAVE_LANDED}` : message;
 }
 
 function pickMessage(body: Record<string, unknown>): string | undefined {
@@ -54,32 +48,52 @@ function pickMessage(body: Record<string, unknown>): string | undefined {
     return undefined;
 }
 
-/** Turns a write route answer into the view model or a typed ToolError. Never throws on HTML or bad JSON. */
+/**
+ * Turns a write route answer into the view model or a typed ToolError. Never throws on HTML or bad JSON.
+ * A rejection while reading the body (abort, timeout) propagates so executeWriteRequest can report it.
+ */
 export async function interpretWriteResponse(res: FetchResponseLike): Promise<unknown> {
     // src/proxy.ts answers unauthenticated /api/feature/* requests with a 302 to the login page
-    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) return SESSION_EXPIRED_ERROR;
-    if (res.redirected && res.url.includes('/auth/login')) return SESSION_EXPIRED_ERROR;
+    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) return sessionExpired();
+    if (res.redirected && res.url.includes('/auth/login')) return sessionExpired();
 
     const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
-    if (!contentType.includes('application/json')) {
-        if (contentType.includes('text/html')) return SESSION_EXPIRED_ERROR;
-        return toolError(res.ok ? 'rucio_error' : codeForStatus(res.status), `The server answered ${res.status} without JSON.`);
+    const isJson = contentType.includes('application/json');
+    // The login page is an HTML 2xx; HTML on an error status is a gateway page and maps by status
+    if (!isJson && res.ok && contentType.includes('text/html')) return sessionExpired();
+    if (!isJson) {
+        if (res.ok)
+            return toolError(
+                'rucio_error',
+                `The server answered ${res.status} without JSON. The change was probably applied, so check its state before retrying.`,
+            );
+        return toolError(errorCodeForStatus(res.status), withLandedWarning(res.status, `The server answered ${res.status} without JSON.`));
     }
 
+    const text = await res.text();
     let body: unknown;
     try {
-        const text = await res.text();
         body = text.length > 0 ? JSON.parse(text) : {};
     } catch {
-        return toolError('rucio_error', `The server answered ${res.status} with invalid JSON.`);
+        const base = `The server answered ${res.status} with invalid JSON.`;
+        return toolError(
+            res.ok ? 'rucio_error' : errorCodeForStatus(res.status),
+            res.ok ? `${base} The change was probably applied, so check its state before retrying.` : withLandedWarning(res.status, base),
+        );
     }
 
     const record = isRecord(body) ? body : {};
     const errorType = typeof record.errorType === 'string' ? record.errorType.slice(0, MAX_ERROR_TYPE_CHARS) : undefined;
-    if (!res.ok) return toolError(codeForStatus(res.status), pickMessage(record) ?? `The server answered ${res.status}.`, errorType);
+    if (!res.ok) {
+        return toolError(
+            errorCodeForStatus(res.status),
+            withLandedWarning(res.status, pickMessage(record) ?? `The server answered ${res.status}.`),
+            errorType,
+        );
+    }
     if (record.status === 'error') return toolError('rucio_error', pickMessage(record) ?? 'Rucio reported an error.', errorType);
     // No credential-named field may reach the model, events or storage
-    return scrubSecrets(body);
+    return trimForModel(scrubSecrets(body));
 }
 
 /** One same-origin JSON request to a write route. Resolves to the view model or a ToolError, never rejects. */
@@ -114,15 +128,12 @@ export async function executeWriteRequest(
         return await interpretWriteResponse(res);
     } catch {
         if (timedOut) {
-            return toolError(
-                'timeout',
-                `No answer after ${Math.round(timeoutMs / 1000)}s. The change may still have been applied, so check its state before retrying.`,
-            );
+            return toolError('timeout', `No answer after ${Math.round(timeoutMs / 1000)}s. ${MAY_HAVE_LANDED}`);
         }
         if (signal.aborted) {
-            return toolError('aborted', 'Stopped by the user. The change may still have been applied, so check its state before retrying.');
+            return toolError('aborted', `Stopped by the user. ${MAY_HAVE_LANDED}`);
         }
-        return toolError('unavailable', 'The WebUI server could not be reached.');
+        return toolError('unavailable', `The WebUI server could not be reached. ${MAY_HAVE_LANDED}`);
     } finally {
         clearTimeout(timer);
         signal.removeEventListener('abort', onAbort);

@@ -100,6 +100,28 @@ describe('defineWriteTool', () => {
         expect(toast).toHaveBeenCalledTimes(1);
     });
 
+    it('still returns the view model when the toast or describeCall throws', async () => {
+        const fetchImpl: FetchLike = async () => jsonResponse(200, { status: 'success' });
+        const tool = defineWriteTool(
+            {
+                ...spec,
+                describeCall: () => {
+                    throw new Error('boom');
+                },
+            },
+            { fetchImpl },
+        );
+        const ctx = makeToolContext();
+        jest.spyOn(ctx.queryClient, 'invalidateQueries').mockResolvedValue(undefined);
+        await expect(tool.execute({ account: 'jdoe', key: 'country' }, ctx)).resolves.toEqual({ status: 'success' });
+
+        jest.mocked(toast).mockImplementationOnce(() => {
+            throw new Error('toast failed');
+        });
+        const tool2 = defineWriteTool(spec, { fetchImpl });
+        await expect(tool2.execute({ account: 'jdoe', key: 'country' }, ctx)).resolves.toEqual({ status: 'success' });
+    });
+
     it('uses an explicit mutation name when given', async () => {
         const fetchImpl: FetchLike = async () => jsonResponse(200, { status: 'success' });
         const tool = defineWriteTool(spec, { fetchImpl, mutation: 'update-rule' });

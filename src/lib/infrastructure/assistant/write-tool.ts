@@ -42,7 +42,12 @@ export function defineWriteTool<I>(spec: ToolSpec<I>, options: WriteToolOptions 
 
             // Best effort: a failed refetch must not turn a successful write into an error
             void invalidateForMutation(ctx.queryClient, mutation, parsed.data).catch(() => undefined);
-            toast({ variant: 'success', title: 'Rucio bot made a change', description: spec.describeCall(parsed.data) });
+            // The write already landed: a failing toast or summary must not turn it into an error
+            try {
+                toast({ variant: 'success', title: 'Rucio bot made a change', description: spec.describeCall(parsed.data) });
+            } catch {
+                // ignore
+            }
             return result;
         },
     };

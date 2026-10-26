@@ -198,4 +198,14 @@ describe('account summaries', () => {
         expect(summary).not.toContain('\n');
         expect(summary.length).toBeLessThan(200);
     });
+
+    it('bounds a long rule id and a long RSE name to one line', () => {
+        const longId = `abc\n${'x'.repeat(300)}`;
+        const rule = summarizeUpdateRule(UpdateRuleSchema.parse({ ruleId: longId, options: { approve: true } }));
+        expect(rule).not.toContain('\n');
+        expect(rule.length).toBeLessThan(200);
+        const bad = summarizeDeclareBadReplicas(DeclareBadReplicasSchema.parse({ dids: [did('f1')], rse: longId, reason: 'r' }));
+        expect(bad).not.toContain('\n');
+        expect(bad.length).toBeLessThan(250);
+    });
 });

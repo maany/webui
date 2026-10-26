@@ -1,10 +1,5 @@
-import {
-    SESSION_EXPIRED_ERROR,
-    executeWriteRequest,
-    interpretWriteResponse,
-    type FetchLike,
-    type FetchResponseLike,
-} from '@/lib/infrastructure/assistant/write-executor';
+import { SESSION_EXPIRED_MESSAGE } from '@/lib/infrastructure/assistant/feature-executor';
+import { executeWriteRequest, interpretWriteResponse, type FetchLike, type FetchResponseLike } from '@/lib/infrastructure/assistant/write-executor';
 
 type ResponseInit = Partial<Omit<FetchResponseLike, 'headers' | 'text'>> & { body?: string; contentType?: string | null };
 
@@ -22,13 +17,12 @@ function response({ body = '', contentType = 'application/json', status = 200, .
 }
 
 const json = (status: number, value: unknown) => response({ status, body: JSON.stringify(value) });
+const SESSION_EXPIRED = { error: 'session_expired', message: SESSION_EXPIRED_MESSAGE };
 const route = { path: '/api/feature/create-rule', method: 'POST' as const };
 
 describe('interpretWriteResponse', () => {
     it('treats an opaque redirect (proxy 302 with redirect: manual) as session_expired', async () => {
-        await expect(interpretWriteResponse(response({ type: 'opaqueredirect', status: 0, contentType: null }))).resolves.toEqual(
-            SESSION_EXPIRED_ERROR,
-        );
+        await expect(interpretWriteResponse(response({ type: 'opaqueredirect', status: 0, contentType: null }))).resolves.toEqual(SESSION_EXPIRED);
     });
 
     it('treats a followed redirect to the login page as session_expired', async () => {
@@ -38,12 +32,12 @@ describe('interpretWriteResponse', () => {
             contentType: 'text/html',
             body: '<html></html>',
         });
-        await expect(interpretWriteResponse(res)).resolves.toEqual(SESSION_EXPIRED_ERROR);
+        await expect(interpretWriteResponse(res)).resolves.toEqual(SESSION_EXPIRED);
     });
 
     it('treats an HTML page without a redirect flag as session_expired and does not throw', async () => {
         await expect(interpretWriteResponse(response({ contentType: 'text/html; charset=utf-8', body: '<!doctype html>' }))).resolves.toEqual(
-            SESSION_EXPIRED_ERROR,
+            SESSION_EXPIRED,
         );
     });
 
@@ -97,6 +91,50 @@ describe('interpretWriteResponse', () => {
         const legacy = (await interpretWriteResponse(json(400, { error: 'y'.repeat(2000) }))) as { message: string };
         expect(legacy.message).toHaveLength(500);
     });
+    it.each([502, 503, 504])('maps %i with an HTML body to unavailable and warns the change may have landed', async status => {
+        const result = (await interpretWriteResponse(response({ status, contentType: 'text/html', body: '<html>Bad gateway</html>' }))) as {
+            error: string;
+            message: string;
+        };
+        expect(result.error).toBe('unavailable');
+        expect(result.message).toContain('may still have been applied');
+    });
+
+    it.each([502, 503, 504])('maps %i with a JSON body to unavailable and warns the change may have landed', async status => {
+        const result = (await interpretWriteResponse(json(status, { error: 'upstream down' }))) as { error: string; message: string };
+        expect(result.error).toBe('unavailable');
+        expect(result.message).toContain('upstream down');
+        expect(result.message).toContain('may still have been applied');
+    });
+
+    it('does not warn about a landed change on a 400', async () => {
+        const result = (await interpretWriteResponse(json(400, { error: 'bad' }))) as { message: string };
+        expect(result.message).not.toContain('may still have been applied');
+    });
+
+    it('says a 2xx with invalid JSON or non-JSON was probably applied', async () => {
+        const bad = (await interpretWriteResponse(response({ body: '{not json' }))) as { error: string; message: string };
+        expect(bad.error).toBe('rucio_error');
+        expect(bad.message).toContain('probably applied');
+        const plain = (await interpretWriteResponse(response({ contentType: 'text/plain', body: 'ok' }))) as { error: string; message: string };
+        expect(plain.error).toBe('rucio_error');
+        expect(plain.message).toContain('probably applied');
+    });
+
+    it('trims a large success body', async () => {
+        const result = (await interpretWriteResponse(
+            json(200, { status: 'success', items: Array.from({ length: 500 }, (_, i) => `item-${i}-${'x'.repeat(40)}`) }),
+        )) as {
+            items: unknown[];
+        };
+        expect(JSON.stringify(result).length).toBeLessThan(9000);
+    });
+
+    it('returns a fresh session expired object each time', async () => {
+        const a = await interpretWriteResponse(response({ type: 'opaqueredirect', status: 0, contentType: null }));
+        const b = await interpretWriteResponse(response({ type: 'opaqueredirect', status: 0, contentType: null }));
+        expect(a).not.toBe(b);
+    });
 });
 
 describe('executeWriteRequest', () => {
@@ -147,5 +185,40 @@ describe('executeWriteRequest', () => {
         await expect(executeWriteRequest(route, {}, new AbortController().signal, { fetchImpl: failing })).resolves.toMatchObject({
             error: 'unavailable',
         });
+    });
+    it('returns timeout with the warning when the body read rejects after the timeout', async () => {
+        const slowBody: FetchLike = async (_input, init) => ({
+            ...response({ body: '{}' }),
+            text: () =>
+                new Promise<string>((_resolve, reject) => {
+                    init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+                }),
+        });
+        const result = await executeWriteRequest(route, {}, new AbortController().signal, { fetchImpl: slowBody, timeoutMs: 20 });
+        expect(result).toMatchObject({ error: 'timeout' });
+        expect((result as { message: string }).message).toContain('may still have been applied');
+    });
+
+    it('returns aborted with the warning when the body read rejects after the user stops', async () => {
+        const controller = new AbortController();
+        const slowBody: FetchLike = async (_input, init) => ({
+            ...response({ body: '{}' }),
+            text: () =>
+                new Promise<string>((_resolve, reject) => {
+                    init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+                    controller.abort();
+                }),
+        });
+        const result = await executeWriteRequest(route, {}, controller.signal, { fetchImpl: slowBody });
+        expect(result).toMatchObject({ error: 'aborted' });
+        expect((result as { message: string }).message).toContain('may still have been applied');
+    });
+
+    it('says a network failure may have landed too', async () => {
+        const failing: FetchLike = async () => {
+            throw new TypeError('Failed to fetch');
+        };
+        const result = (await executeWriteRequest(route, {}, new AbortController().signal, { fetchImpl: failing })) as { message: string };
+        expect(result.message).toContain('may still have been applied');
     });
 });

@@ -71,7 +71,7 @@ export function summarizeUpdateRule(args: UpdateRuleInput): string {
         parts.push(options.lifetime === null ? 'remove the lifetime' : `lifetime ${formatLifetimeSeconds(options.lifetime)}`);
     if (options.priority !== undefined) parts.push(`priority ${options.priority}`);
     if (options.comment !== undefined) parts.push(`comment "${truncate(options.comment, 60)}"`);
-    return `Update rule ${args.ruleId}: ${parts.join(', ')}`;
+    return `Update rule ${truncate(args.ruleId, 40)}: ${parts.join(', ')}`;
 }
 
 export function summarizeAddDid(args: AddDidInput): string {
@@ -88,7 +88,7 @@ export function summarizeSetDidStatus(args: SetDidStatusInput): string {
 
 export function summarizeDeclareBadReplicas(args: DeclareBadReplicasInput): string {
     const expiry = args.expiresAt ? `. Expires ${truncate(args.expiresAt, 30)}` : '';
-    return `Declare ${plural(args.dids.length, 'replica')} bad on ${args.rse}: ${formatDidList(args.dids)}. Reason: ${truncate(
+    return `Declare ${plural(args.dids.length, 'replica')} bad on ${truncate(args.rse, 40)}: ${formatDidList(args.dids)}. Reason: ${truncate(
         args.reason,
     )}${expiry}`;
 }
