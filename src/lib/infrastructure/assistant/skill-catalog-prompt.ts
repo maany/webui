@@ -10,7 +10,8 @@ function escapeXml(text: string): string {
 /** Text for the prompt: if NFKC plus format-character stripping reveals angle brackets, use that copy. */
 function normaliseDescription(text: string): string {
     const normalised = text.normalize('NFKC').replace(/\p{Cf}/gu, '');
-    return /[<>]/.test(normalised) ? normalised : text;
+    const safe = /[<>]/.test(normalised) ? normalised : text;
+    return safe.replace(/[\r\n\u2028\u2029]+/g, ' ');
 }
 
 /**

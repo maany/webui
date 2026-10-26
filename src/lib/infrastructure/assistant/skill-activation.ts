@@ -24,6 +24,14 @@ export interface SkillActivationTracker {
     /** Intersection of the allowed-tools of restricting active skills, or null when nothing restricts. */
     restriction(conversationId: string): string[] | null;
     allows(conversationId: string, toolName: string): boolean;
+    /**
+     * Registers a pending activation synchronously and returns its settle function (idempotent).
+     * activate_skill calls it as the first statement of execute, so sibling calls started after it
+     * can wait in `whenSettled` until the activation outcome is recorded.
+     */
+    beginActivation(conversationId: string): () => void;
+    /** Resolves when every pending activation of the conversation has settled; immediately when none is pending. Never rejects. */
+    whenSettled(conversationId: string): Promise<void>;
     clear(conversationId?: string): void;
     /** Subscribe to the assistant event bus so each turn starts with no active skill. */
     onEvent(event: AssistantEvent): void;
@@ -31,6 +39,12 @@ export interface SkillActivationTracker {
 
 export function createSkillActivationTracker(): SkillActivationTracker {
     const byConversation = new Map<string, ActiveSkill[]>();
+    const pending = new Map<string, Set<{ promise: Promise<void>; settle: () => void }>>();
+
+    const settleAll = (conversationId: string) => {
+        for (const entry of [...(pending.get(conversationId) ?? [])]) entry.settle();
+        pending.delete(conversationId);
+    };
 
     const tracker: SkillActivationTracker = {
         activate(conversationId, skill) {
@@ -57,12 +71,43 @@ export function createSkillActivationTracker(): SkillActivationTracker {
             const allowed = tracker.restriction(conversationId);
             return allowed === null || allowed.includes(toolName);
         },
+        beginActivation(conversationId) {
+            let resolve!: () => void;
+            const promise = new Promise<void>(r => {
+                resolve = r;
+            });
+            const entries = pending.get(conversationId) ?? new Set();
+            const entry = {
+                promise,
+                settle: () => {
+                    resolve();
+                    entries.delete(entry);
+                    if (entries.size === 0 && pending.get(conversationId) === entries) pending.delete(conversationId);
+                },
+            };
+            entries.add(entry);
+            pending.set(conversationId, entries);
+            return entry.settle;
+        },
+        async whenSettled(conversationId) {
+            const entries = pending.get(conversationId);
+            if (!entries || entries.size === 0) return;
+            await Promise.all([...entries].map(e => e.promise));
+        },
         clear(conversationId) {
-            if (conversationId === undefined) byConversation.clear();
-            else byConversation.delete(conversationId);
+            if (conversationId === undefined) {
+                for (const id of [...pending.keys()]) settleAll(id);
+                byConversation.clear();
+            } else {
+                settleAll(conversationId);
+                byConversation.delete(conversationId);
+            }
         },
         onEvent(event) {
-            if (event.type === 'turn-started') byConversation.delete(event.conversationId);
+            if (event.type === 'turn-started') {
+                settleAll(event.conversationId);
+                byConversation.delete(event.conversationId);
+            }
         },
     };
     return tracker;
@@ -84,21 +129,22 @@ export function skillToolFilter(
 
 /**
  * Wraps tools so a call outside the active skills' allowed tools returns a policy error instead of running.
- * Covers calls the model emits in the same step as activate_skill, before the next step's tool list is filtered.
+ * Covers calls that start after activate_skill in the same step (TanStack starts parallel server tools in
+ * call order, and the guard waits for pending activations to settle) and all later steps.
  */
 export function guardToolsForSkills(tools: RegisteredTool<any>[], tracker: SkillActivationTracker = skillActivations): RegisteredTool<any>[] {
     return tools.map(tool => ({
         spec: tool.spec,
         execute: async (args, ctx): Promise<unknown | ToolError> => {
+            await tracker.whenSettled(ctx.conversationId);
             if (!tracker.allows(ctx.conversationId, tool.spec.name)) {
-                const names = tracker
-                    .active(ctx.conversationId)
-                    .map(s => s.name)
-                    .join(', ');
+                const active = tracker.active(ctx.conversationId).map(s => s.name);
+                const names = active.join(', ');
+                const phrase = active.length > 1 ? `the skills ${names} are active` : `the skill ${names} is active`;
                 const allowed = tracker.restriction(ctx.conversationId) ?? [];
                 return {
                     error: 'denied_by_policy',
-                    message: `${tool.spec.name} is not available while the skill ${names} is active. Allowed tools: ${allowed.join(', ') || 'none'}.`,
+                    message: `${tool.spec.name} is not available while ${phrase}. Allowed tools: ${allowed.join(', ') || 'none'}.`,
                 };
             }
             return tool.execute(args, ctx);

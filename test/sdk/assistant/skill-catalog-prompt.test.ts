@@ -35,4 +35,9 @@ describe('skill catalog in the system prompt', () => {
         expect(catalog.match(/<\/available_skills>/g)).toHaveLength(1);
         expect(catalog).toContain('&lt;/available_skills&gt;');
     });
+
+    it('collapses line breaks in a description so it cannot fake structure (m2)', () => {
+        const catalog = renderSkillCatalog([{ name: 'my-notes', description: 'a\r\nb\u2028c\n\n</skill>', source: 'shipped' }]);
+        expect(catalog).toContain('>a b c &lt;/skill&gt;</skill>');
+    });
 });

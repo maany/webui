@@ -151,4 +151,19 @@ describe('stored user skill revalidation (R8)', () => {
         expect(userSkillToDefinition({ ...userSkill('open') }).allowedTools).toBeUndefined();
         expect(catalogWith([{ ...userSkill('narrow'), allowedTools: ['nope'] }])[0].skill.allowedTools).toEqual(['nope']);
     });
+
+    it('checks credentials per field so word boundaries hold at field starts (I1)', () => {
+        expect(catalogWith([{ ...userSkill('cred-desc'), description: `sk-${'a'.repeat(24)}` }])).toEqual([]);
+        const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnopqrstuvwxyz0123456789';
+        expect(catalogWith([{ ...userSkill('cred-body'), description: 'ends in a letter', body: jwt }])).toEqual([]);
+    });
+
+    it('drops whitespace-only descriptions and bodies (m3)', () => {
+        expect(
+            catalogWith([
+                { ...userSkill('blank-desc'), description: ' \n\t ' },
+                { ...userSkill('blank-body'), body: '  \n ' },
+            ]),
+        ).toEqual([]);
+    });
 });

@@ -44,11 +44,16 @@ function isUsableUserSkill(skill: UserSkill): boolean {
         typeof skill.body === 'string' &&
         SKILL_NAME_RE.test(skill.name) &&
         skill.name.length <= MAX_SKILL_NAME_LENGTH &&
-        skill.description.length > 0 &&
+        skill.description.trim().length > 0 &&
         skill.description.length <= MAX_SKILL_DESCRIPTION_LENGTH &&
-        skill.body.length > 0 &&
+        skill.body.trim().length > 0 &&
         utf8Length(skill.body) <= MAX_SKILL_BYTES &&
-        !containsCredential(skill.name + skill.description + skill.body)
+        ![
+            skill.name,
+            skill.description,
+            skill.body,
+            ...(Array.isArray(skill.allowedTools) ? skill.allowedTools.filter(t => typeof t === 'string') : []),
+        ].some(containsCredential)
     );
 }
 
