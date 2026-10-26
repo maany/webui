@@ -7,6 +7,7 @@ import {
     MAX_SKILL_DESCRIPTION_LENGTH,
     MAX_SKILL_NAME_LENGTH,
     SKILL_NAME_RE,
+    TOOL_NAME_RE,
     utf8Length,
 } from '@/lib/infrastructure/assistant/skills/skill-md';
 import { MAX_USER_SKILLS } from '@/lib/infrastructure/assistant/user-skills';
@@ -32,7 +33,9 @@ export interface SkillCatalogEntry {
 export function userSkillToDefinition(skill: UserSkill): SkillDefinition {
     const definition: SkillDefinition = { name: skill.name, description: skill.description, body: skill.body, source: 'user' };
     // A present array is a restriction, even an empty one: never widen it to "no restriction".
-    if (Array.isArray(skill.allowedTools)) definition.allowedTools = [...skill.allowedTools];
+    // Entries that are not plain tool names are dropped (stored text is untrusted and reaches the model).
+    if (Array.isArray(skill.allowedTools))
+        definition.allowedTools = skill.allowedTools.filter(tool => typeof tool === 'string' && TOOL_NAME_RE.test(tool));
     return definition;
 }
 

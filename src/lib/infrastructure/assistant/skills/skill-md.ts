@@ -140,6 +140,9 @@ export function utf8Length(text: string): number {
     return bytes;
 }
 
+/** A tool name as the assistant registry spells it: snake case, at most 64 characters. */
+export const TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
+
 /** `allowed-tools` is a space separated string in the spec. Lists and commas are accepted too. */
 export function parseAllowedTools(value: FrontmatterValue | undefined): string[] | undefined {
     if (value === undefined || value === '') return undefined;
@@ -151,17 +154,19 @@ export function parseAllowedTools(value: FrontmatterValue | undefined): string[]
               .split(/[\s,]+/)
               .map(t => t.replace(/^['"]|['"]$/g, ''))
         : [];
-    const tools = tokens.map(t => t.trim()).filter(t => t !== '');
+    // Only plain tool names survive: the list is shown to the model outside the untrusted fence.
+    const tools = tokens.map(t => t.trim()).filter(t => TOOL_NAME_RE.test(t));
     return tools.length > 0 ? Array.from(new Set(tools)) : undefined;
 }
 
 /** Credential-shaped values (not mere words) that must never be stored in a skill. */
 const CREDENTIAL_PATTERNS: RegExp[] = [
     /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-    /\beyJ[A-Za-z0-9_-]{9,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
-    /\bsk-(?:[A-Za-z]+-)*[A-Za-z0-9_-]{20,}/,
+    // A lookbehind instead of \b: '-' is both in the token class and a \b boundary, which made repeated '-eyJ' quadratic.
+    /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{9,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
+    /(?<![A-Za-z0-9_-])sk-(?:[A-Za-z]+-)*[A-Za-z0-9_-]{20,}/,
     /\bAKIA[0-9A-Z]{16}\b/,
-    /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/,
+    /(?<![A-Za-z0-9_-])Bearer\s+[A-Za-z0-9._~+/=-]{20,}/,
     /X-Rucio-Auth-Token:[ \t]*[A-Za-z0-9._~+/=-]{8,}/i,
 ];
 
