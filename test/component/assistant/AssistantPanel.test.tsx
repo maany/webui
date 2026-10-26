@@ -14,6 +14,7 @@ import { AssistantPanel } from '@/component-library/features/assistant/Assistant
 import { AssistantContext, type UseAssistantResult } from '@/lib/infrastructure/hooks/useAssistant';
 import { ASSISTANT_INERT_TARGET_ID, AssistantShellProvider, useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { savePanelWidth } from '@/lib/infrastructure/assistant/panel-storage';
+import { makeConversation } from 'test/fixtures/assistant-fixtures';
 import { flagMap } from 'test/fixtures/assistant-flags';
 
 function assistantResult(overrides: Partial<UseAssistantResult> = {}): UseAssistantResult {
@@ -140,6 +141,36 @@ describe('AssistantPanel', () => {
             unmount();
             expect(remove).toHaveBeenCalledWith('resize', expect.any(Function));
             remove.mockRestore();
+        });
+    });
+
+    describe('controller wiring', () => {
+        const openPanel = () => fireEvent.click(screen.getByRole('button', { name: 'opener' }));
+
+        it('shows the login link when the controller reports an expired session', () => {
+            renderPanel(assistantResult({ status: 'error', error: 'Your Rucio session expired.', sessionExpired: true }));
+            openPanel();
+            expect(screen.getByRole('link', { name: 'Log in again' })).toHaveAttribute('href', '/auth/login');
+        });
+
+        it('has no login link for other errors', () => {
+            renderPanel(assistantResult({ status: 'error', error: 'Provider failed.' }));
+            openPanel();
+            expect(screen.getByText('Provider failed.')).toBeInTheDocument();
+            expect(screen.queryByRole('link', { name: 'Log in again' })).toBeNull();
+        });
+
+        it('hands the controller delete promise to the history menu so a failure is reported', async () => {
+            const conversation = makeConversation('c1', 'root@def');
+            const deleteConversation = jest.fn().mockRejectedValue(new Error('storage failed'));
+            renderPanel(assistantResult({ conversation, conversations: [conversation], deleteConversation }));
+            openPanel();
+            fireEvent.click(screen.getByRole('button', { name: 'Chat history' }));
+            await act(async () => {
+                fireEvent.click(screen.getByRole('button', { name: `Delete chat ${conversation.title}` }));
+            });
+            expect(deleteConversation).toHaveBeenCalledWith('c1');
+            expect(screen.getByText('Could not delete this chat.')).toBeInTheDocument();
         });
     });
 });

@@ -88,6 +88,17 @@ describe('Rucio bot shell', () => {
         expect(screen.getByTestId('panel-state')).toHaveTextContent('minimized');
     });
 
+    it('registers no sign-out hook when the flag is off, even with clear on logout set', async () => {
+        const defaults = getDefaultAssistantSettings();
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...defaults, retention: { ...defaults.retention, clearOnLogout: true } }));
+        const { unmount } = renderShell(false);
+        await act(async () => {
+            await runSignOutHooks();
+        });
+        expect(deleteAssistantDatabase).not.toHaveBeenCalled();
+        unmount();
+    });
+
     it('deletes stored chats on sign-out only when clear on logout is on', async () => {
         renderShell(true);
         await act(async () => {
