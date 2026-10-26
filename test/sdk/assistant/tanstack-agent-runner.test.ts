@@ -168,12 +168,17 @@ describe('createAgentRunner', () => {
     });
 
     it('auto-approves a pending call when the live policy became allow during the turn', async () => {
-        const { run, executed, policies } = setup([{ toolCalls: [{ name: 'do_write', input: { id: 'r1' } }] }, { text: 'done' }]);
-        const updates = run();
-        policies.do_write = 'ask';
-        const seen = await collectUpdates(updates, update => {
-            if (update.type === 'tool-call') policies.do_write = 'allow';
-        });
+        const { run, executed, policies, fake } = setup([]);
+        // The flip happens where it is ordered against the runner: the update consumer may lag the whole turn.
+        fake.setResponses([
+            () => {
+                // The tools for this call were already built as ask; the interrupt is handled after this.
+                policies.do_write = 'allow';
+                return { toolCalls: [{ name: 'do_write', input: { id: 'r1' } }] };
+            },
+            { text: 'done' },
+        ]);
+        const seen = await collectUpdates(run());
         expect(executed).toEqual(['do_write:r1']);
         expect(seen.some(update => update.type === 'approval-required')).toBe(false);
     });
@@ -234,19 +239,19 @@ describe('createAgentRunner', () => {
     });
 
     it('keeps the step limit across approval resumes when the policy flips to allow', async () => {
-        const { run, executed, policies, fake } = setup(
-            [
-                { toolCalls: [{ name: 'do_write', input: { id: '1' } }] },
-                { toolCalls: [{ name: 'do_write', input: { id: '2' } }] },
-                { toolCalls: [{ name: 'do_write', input: { id: '3' } }] },
-                { toolCalls: [{ name: 'do_write', input: { id: '4' } }] },
-                { text: 'never reached' },
-            ],
-            { maxSteps: 2 },
-        );
-        const updates = await collectUpdates(run(), update => {
-            if (update.type === 'tool-call') policies.do_write = 'allow';
-        });
+        const { run, executed, policies, fake } = setup([], { maxSteps: 2 });
+        fake.setResponses([
+            () => {
+                // Built as ask, relaxed before the first interrupt is handled.
+                policies.do_write = 'allow';
+                return { toolCalls: [{ name: 'do_write', input: { id: '1' } }] };
+            },
+            { toolCalls: [{ name: 'do_write', input: { id: '2' } }] },
+            { toolCalls: [{ name: 'do_write', input: { id: '3' } }] },
+            { toolCalls: [{ name: 'do_write', input: { id: '4' } }] },
+            { text: 'never reached' },
+        ]);
+        const updates = await collectUpdates(run());
         expect(finished(updates)).toEqual({ type: 'finished', status: 'step-limit' });
         expect(fake.state.callCount).toBe(2);
         expect(executed).toEqual(['do_write:1']);
