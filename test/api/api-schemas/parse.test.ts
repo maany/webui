@@ -78,3 +78,28 @@ describe('firstInvalidField', () => {
         expect(firstInvalidField(result.error!)).toBeUndefined();
     });
 });
+
+describe('inherited object keys regression tests', () => {
+    const Schema = z.object({ name: z.string().min(1) }).passthrough();
+
+    it('does not throw or pollute when constructor key is present', () => {
+        const result = parseQuery(Schema, query('name=a&constructor=x'));
+        expect(result.success).toBe(true);
+        const record = searchParamsToRecord(query('constructor=x'));
+        expect(Object.getOwnPropertyNames(record)).toEqual(['constructor']);
+    });
+
+    it('does not throw or pollute when toString key is present', () => {
+        const result = parseQuery(Schema, query('name=a&toString=x'));
+        expect(result.success).toBe(true);
+        const record = searchParamsToRecord(query('toString=x'));
+        expect(Object.getOwnPropertyNames(record)).toEqual(['toString']);
+    });
+
+    it('does not throw or pollute when __proto__ key is present', () => {
+        const result = parseQuery(Schema, query('name=a&__proto__=x'));
+        expect(result.success).toBe(true);
+        const record = searchParamsToRecord(query('__proto__=x'));
+        expect(Object.getOwnPropertyNames(record)).toEqual(['__proto__']);
+    });
+});
