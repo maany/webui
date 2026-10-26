@@ -5,11 +5,13 @@ import type { RSEDetailsViewModel } from '@/lib/infrastructure/data/view-model/r
 import type { AccountInfoViewModel } from '@/lib/infrastructure/data/view-model/account';
 import type { SubscriptionViewModel } from '@/lib/infrastructure/data/view-model/subscriptions';
 import type { AccountQuotas, AccountTab } from '@/component-library/pages/Account/details/details-account-types';
+import { isSecretFieldName } from '@/lib/core/services/assistant-secret-keys';
 import { clampSummary } from '@/lib/infrastructure/assistant/page-summary-text';
 
 const NEAR_LIMIT = 0.9;
 const RSE_ATTRIBUTES_SHOWN = 10;
 
+const isScalar = (value: unknown): boolean => ['string', 'number', 'boolean'].includes(typeof value);
 const yesNo = (value: boolean | null | undefined): string => (value ? 'yes' : 'no');
 const loading = (what: string): string => clampSummary(`${what}, details are loading or failed to load.`);
 
@@ -42,8 +44,9 @@ export function describeRSEPage(input: { name: string; meta?: RSEDetailsViewMode
         `RSE ${input.name}, ${meta.rse_type}, deterministic ${yesNo(meta.deterministic)}, volatile ${yesNo(meta.volatile)}, ` +
         `read ${yesNo(meta.availability_read)}, write ${yesNo(meta.availability_write)}, delete ${yesNo(meta.availability_delete)}, ` +
         `${meta.protocols.length} protocols.`;
-    if (input.attributes && input.attributes.length > 0) {
-        const shown = input.attributes.slice(0, RSE_ATTRIBUTES_SHOWN).map(attribute => `${attribute.key}=${String(attribute.value)}`);
+    const visible = (input.attributes ?? []).filter(attribute => !isSecretFieldName(attribute.key) && isScalar(attribute.value));
+    if (visible.length > 0) {
+        const shown = visible.slice(0, RSE_ATTRIBUTES_SHOWN).map(attribute => `${attribute.key}=${String(attribute.value)}`);
         summary += ` Attributes: ${shown.join(', ')}.`;
     }
     return clampSummary(summary);
