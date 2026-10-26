@@ -10,3 +10,9 @@ export function cn(...inputs: ClassValue[]) {
 export function sleep(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+/** True on macOS. Browser only: false during server rendering. */
+export function isMacPlatform(): boolean {
+    if (typeof navigator === 'undefined') return false;
+    return navigator.platform.toUpperCase().indexOf('MAC') >= 0 || navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
+}

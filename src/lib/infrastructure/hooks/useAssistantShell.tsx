@@ -2,6 +2,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
+import { isMacPlatform } from '@/component-library/utils';
 import { useFeature } from '@/component-library/features/feature-flags/FeatureProvider';
 import type { AssistantPageActionRegistryPort } from '@/lib/core/port/secondary/assistant-page-action-registry-port';
 import { attachPageActionRegistry, useAttachedPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-bridge';
@@ -54,15 +55,13 @@ export const ASSISTANT_SHORTCUT_LABEL_DEFAULT = 'Ctrl+Shift+Space';
 export const ASSISTANT_SHORTCUT_LABEL_MAC = '⌘+Shift+Space';
 
 /** Ctrl+Shift+Space, or Cmd+Shift+Space on macOS (either modifier is accepted on every platform). */
-export function isAssistantShortcut(event: Pick<KeyboardEvent, 'code' | 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>): boolean {
+export function isAssistantShortcut(
+    event: Pick<KeyboardEvent, 'code' | 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'> & { isComposing?: boolean; keyCode?: number },
+): boolean {
+    // Space confirms a candidate in an IME composition: never a shortcut.
+    if (event.isComposing || event.keyCode === 229) return false;
     const isSpace = event.code === 'Space' || event.key === ' ';
     return (event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && isSpace;
-}
-
-/** Same detection as the search bar's Ctrl/⌘+K hint. */
-export function isMacPlatform(): boolean {
-    if (typeof navigator === 'undefined') return false;
-    return navigator.platform.toUpperCase().indexOf('MAC') >= 0 || navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
 }
 
 /** Shortcut label for the current platform. Starts with the non-Mac label so server and client markup match. */
@@ -109,6 +108,15 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
     const enabled = useFeature('assistant');
     const { data: session } = useSession();
     const accountKey = toAccountKey(session?.user?.rucioAccount, session?.user?.rucioVO);
+    // Every account of the session, as account@VO keys (a sign-out ends all of them).
+    const sessionAccountKeys = useMemo(() => {
+        const keys = new Set<string>();
+        for (const user of [session?.user, ...(session?.allUsers ?? [])]) {
+            const key = toAccountKey(user?.rucioAccount, user?.rucioVO);
+            if (key) keys.add(key);
+        }
+        return Array.from(keys);
+    }, [session]);
     const paletteOpenRef = useRef(false);
     const paletteOpen = useCommandPaletteOpen();
     const [panelState, setPanelState] = useState<AssistantPanelState>('closed');
@@ -179,9 +187,14 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [enabled, toggle]);
 
-    // Read by the sign-out hook at the moment of sign-out, so it always targets the account that is leaving.
-    const accountKeyRef = useRef<string | undefined>(undefined);
-    accountKeyRef.current = accountKey;
+    // The sign-out hook can run after the session is already gone (natural expiry), so these keep the last
+    // known signed-in accounts: they are only replaced while a session exists.
+    const activeAccountKeyRef = useRef<string | undefined>(undefined);
+    const signedInKeysRef = useRef<string[]>([]);
+    if (accountKey) {
+        activeAccountKeyRef.current = accountKey;
+        signedInKeysRef.current = sessionAccountKeys;
+    }
     const conversationControlsRef = useRef<AssistantConversationControls | null>(null);
     conversationControlsRef.current = conversationControls;
 
@@ -189,23 +202,27 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
         if (!enabled) return;
         return registerSignOutHook(async () => {
             if (!loadAssistantSettings().retention.clearOnLogout) return;
-            const accountKey = accountKeyRef.current;
-            if (!accountKey) return;
+            const keys = signedInKeysRef.current;
+            if (keys.length === 0) return;
+            const active = activeAccountKeyRef.current;
+            let remaining = keys;
             // The mounted controller aborts a running turn and tombstones the ids, so the turn cannot save them again.
+            // It only knows the active account; the others go through the repository.
             const controls = conversationControlsRef.current;
-            if (controls) {
+            if (controls && active) {
                 try {
                     await controls.deleteAll();
-                    return;
+                    remaining = keys.filter(key => key !== active);
                 } catch {
                     // Fall through: the chats must still go.
                 }
             }
+            if (remaining.length === 0) return;
             try {
                 const { createConversationRepository } = await import('@/lib/infrastructure/assistant/indexeddb-conversation-repository');
                 const { repository } = await createConversationRepository();
                 try {
-                    await repository.deleteAll(accountKey);
+                    for (const key of remaining) await repository.deleteAll(key);
                 } finally {
                     (repository as { close?: () => void }).close?.();
                 }

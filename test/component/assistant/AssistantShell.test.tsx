@@ -1,4 +1,5 @@
-const mockSession: { current: { user: { rucioAccount: string; rucioVO: string } } | null } = {
+type MockUser = { rucioAccount: string; rucioVO: string };
+const mockSession: { current: { user: MockUser; allUsers?: MockUser[] } | null } = {
     current: { user: { rucioAccount: 'alice', rucioVO: 'def' } },
 };
 jest.mock('next-auth/react', () => ({
@@ -213,7 +214,7 @@ describe('Rucio bot shell', () => {
         expect((await repository.listConversations('bob@def')).length).toBe(1);
     });
 
-    it('does nothing when there is no signed-in account, or the repository cannot open', async () => {
+    it('does nothing when the repository cannot open, and when nobody was ever signed in', async () => {
         const repository = await seedTwoAccounts();
         enableClearOnLogout();
         mockSession.current = null;
@@ -229,6 +230,52 @@ describe('Rucio bot shell', () => {
             await runSignOutHooks();
         });
         expect((await repository.listConversations('alice@def')).length).toBe(2);
+    });
+
+    it('still clears the last signed-in account after the session already expired', async () => {
+        const repository = await seedTwoAccounts();
+        enableClearOnLogout();
+        const { rerender } = renderShell(true);
+        mockSession.current = null;
+        rerender(
+            <FeatureProvider features={flagMap({ assistant: true })}>
+                <AssistantShellProvider>
+                    <PanelState />
+                </AssistantShellProvider>
+            </FeatureProvider>,
+        );
+        await act(async () => {
+            await runSignOutHooks();
+        });
+        expect(await repository.listConversations('alice@def')).toEqual([]);
+        expect((await repository.listConversations('bob@def')).length).toBe(1);
+    });
+
+    it('clears every account the sign-out ends, and no stored-only account', async () => {
+        const repository = await seedTwoAccounts();
+        await repository.saveConversation(makeConversation('c1', 'carol@def', '2026-10-24T08:00:00.000Z'));
+        enableClearOnLogout();
+        mockSession.current = {
+            user: { rucioAccount: 'alice', rucioVO: 'def' },
+            allUsers: [
+                { rucioAccount: 'alice', rucioVO: 'def' },
+                { rucioAccount: 'bob', rucioVO: 'def' },
+            ],
+        };
+        renderShell(true);
+        await act(async () => {
+            await runSignOutHooks();
+        });
+        expect(await repository.listConversations('alice@def')).toEqual([]);
+        expect(await repository.listConversations('bob@def')).toEqual([]);
+        expect((await repository.listConversations('carol@def')).length).toBe(1);
+    });
+
+    it('ignores the shortcut while an IME composition is active', () => {
+        renderShell(true);
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', ctrlKey: true, shiftKey: true, isComposing: true });
+        fireEvent.keyDown(window, { code: 'Space', key: ' ', ctrlKey: true, shiftKey: true, keyCode: 229 });
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
     });
 
     it('returns focus to the element that opened the panel when it closes', () => {

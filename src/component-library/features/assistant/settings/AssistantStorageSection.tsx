@@ -7,7 +7,7 @@ import type { Conversation } from '@/lib/core/entity/assistant/conversation';
 import type { AssistantSettings, RetentionSettings } from '@/lib/core/entity/assistant/settings';
 import type { AssistantConversationRepositoryPort } from '@/lib/core/port/secondary/assistant-conversation-repository-port';
 import { conversationToJson, conversationToMarkdown, downloadText, exportFileName } from '@/lib/infrastructure/assistant/conversation-export';
-import { createConversationRepository, deleteAssistantDatabase } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
+import { createConversationRepository } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
 import { toAccountKey } from '@/lib/infrastructure/assistant/page-context';
 import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { formatBytes } from '../format';
@@ -310,7 +310,6 @@ export function AssistantStorageSection({
     const [browserUsage, setBrowserUsage] = useState<{ usage: number; quota: number } | undefined>(undefined);
     const [memoryBytes, setMemoryBytes] = useState<number | null>(null);
     const [otherAccounts, setOtherAccounts] = useState<Array<{ accountKey: string; conversations: number; bytes: number }>>([]);
-    const [storeEpoch, setStoreEpoch] = useState(0);
     const [error, setError] = useState<string | undefined>(undefined);
 
     useEffect(() => {
@@ -331,7 +330,7 @@ export function AssistantStorageSection({
             cancelled = true;
             unsubscribe?.();
         };
-    }, [storeEpoch]);
+    }, []);
 
     const reload = useCallback(async () => {
         if (!store) {
@@ -352,7 +351,8 @@ export function AssistantStorageSection({
                 setSizes({ perConversation: {}, totalBytes: 0 });
                 setError(undefined);
             }
-            setOtherAccounts((await store.repository.listAccounts()).filter(account => account.accountKey !== accountKey));
+            // Without a session there is no "current" account to tell apart, so nothing is listed as other.
+            setOtherAccounts(accountKey ? (await store.repository.listAccounts()).filter(account => account.accountKey !== accountKey) : []);
             if (typeof navigator !== 'undefined' && navigator.storage?.estimate) {
                 const estimate = await navigator.storage.estimate().catch(() => undefined);
                 if (estimate?.usage !== undefined && estimate.quota !== undefined) setBrowserUsage({ usage: estimate.usage, quota: estimate.quota });
@@ -369,6 +369,11 @@ export function AssistantStorageSection({
 
     // Deletes go through the mounted assistant controller when there is one, so a chat that is
     // streaming in the panel is not saved again by its own turn.
+    const requireStore = () => {
+        if (!store) throw new Error('store not open');
+        return store;
+    };
+
     const runDelete = async (action: () => Promise<void>, message: string) => {
         setError(undefined);
         try {
@@ -381,20 +386,20 @@ export function AssistantStorageSection({
         await reload();
     };
 
-    // Stops a running turn first (it would otherwise save into the deleted database), then drops the whole
-    // database and reopens the store: the old connection must not be used after a clear.
+    // Stops a running turn first (it would otherwise save into the emptied store), then empties every
+    // account through the open repository: no database delete, so the panel keeps persisting.
     const deleteEverything = async () => {
         setError(undefined);
         try {
             if (shell.conversationControls) await shell.conversationControls.deleteAll();
-            await deleteAssistantDatabase();
+            if (!store) throw new Error('store not open');
+            await store.repository.deleteAll();
         } catch {
             setError('Could not delete Rucio bot data.');
             return;
         }
         shell.notifyStorageChanged();
-        setStore(null);
-        setStoreEpoch(epoch => epoch + 1);
+        await reload();
     };
 
     const freeMemory = async () => {
@@ -439,19 +444,19 @@ export function AssistantStorageSection({
             onDelete={id =>
                 void runDelete(async () => {
                     if (shell.conversationControls) await shell.conversationControls.deleteConversation(id);
-                    else await store?.repository.deleteConversation(id);
+                    else await requireStore().repository.deleteConversation(id);
                 }, 'Could not delete this chat.')
             }
             onDeleteAll={() =>
                 void runDelete(async () => {
                     if (shell.conversationControls) await shell.conversationControls.deleteAll();
-                    else if (accountKey) await store?.repository.deleteAll(accountKey);
+                    else if (accountKey) await requireStore().repository.deleteAll(accountKey);
                 }, 'Could not delete chats.')
             }
             onFreeMemory={() => void freeMemory()}
             otherAccounts={otherAccounts}
             // The open conversation belongs to the current account, so another account is deleted straight from the repository.
-            onDeleteAccount={key => void runDelete(async () => store?.repository.deleteAll(key), `Could not delete the chats of ${key}.`)}
+            onDeleteAccount={key => void runDelete(async () => requireStore().repository.deleteAll(key), `Could not delete the chats of ${key}.`)}
             onDeleteAllAccounts={() => void deleteEverything()}
         />
     );

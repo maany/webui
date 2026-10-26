@@ -219,37 +219,40 @@ describe('AssistantStorageSection', () => {
             expect(notifyStorageChanged).not.toHaveBeenCalled();
         });
 
-        it('deletes the whole Rucio bot database for all accounts and reopens the store', async () => {
+        it('deletes every account through the repository and keeps the store persisting', async () => {
             const { repository, notifyStorageChanged } = setup();
             await seedOthers(repository);
-            (deleteAssistantDatabase as jest.Mock).mockReset().mockImplementation(() => repository.deleteAll());
+            (deleteAssistantDatabase as jest.Mock).mockClear();
             (createConversationRepository as jest.Mock).mockClear();
             renderSection();
             fireEvent.click(await screen.findByRole('button', { name: 'Delete Rucio bot data for all accounts' }));
             fireEvent.click(screen.getByRole('button', { name: 'Delete everything' }));
-            await waitFor(() => expect(deleteAssistantDatabase).toHaveBeenCalledTimes(1));
             await waitFor(() => expect(notifyStorageChanged).toHaveBeenCalled());
             await waitFor(() => expect(screen.queryByText('Other accounts in this browser')).not.toBeInTheDocument());
             expect(screen.queryByRole('button', { name: 'Delete Conversation c1' })).not.toBeInTheDocument();
-            expect(createConversationRepository).toHaveBeenCalledTimes(2);
+            expect(deleteAssistantDatabase).not.toHaveBeenCalled();
+            expect(createConversationRepository).toHaveBeenCalledTimes(1);
+            await repository.saveConversation(makeConversation('n1', 'root@def', '2026-10-25T08:00:00.000Z'));
+            expect((await repository.listConversations('root@def')).map(c => c.id)).toEqual(['n1']);
         });
 
         it('stops a running turn through the controller before deleting all accounts', async () => {
             const conversationControls = { deleteConversation: jest.fn(), deleteAll: jest.fn().mockResolvedValue(undefined) };
             const { repository } = setup({ conversationControls });
             await seedOthers(repository);
-            (deleteAssistantDatabase as jest.Mock).mockReset().mockResolvedValue(undefined);
+            const deleteAllSpy = jest.spyOn(repository, 'deleteAll');
             renderSection();
             fireEvent.click(await screen.findByRole('button', { name: 'Delete Rucio bot data for all accounts' }));
             fireEvent.click(screen.getByRole('button', { name: 'Delete everything' }));
-            await waitFor(() => expect(deleteAssistantDatabase).toHaveBeenCalledTimes(1));
+            await waitFor(() => expect(deleteAllSpy).toHaveBeenCalledWith());
             expect(conversationControls.deleteAll).toHaveBeenCalledTimes(1);
+            expect(deleteAllSpy.mock.invocationCallOrder[0]).toBeGreaterThan(conversationControls.deleteAll.mock.invocationCallOrder[0]);
         });
 
         it('shows an inline message when deleting all accounts fails', async () => {
             const { repository, notifyStorageChanged } = setup();
             await seedOthers(repository);
-            (deleteAssistantDatabase as jest.Mock).mockReset().mockRejectedValue(new Error('blocked'));
+            jest.spyOn(repository, 'deleteAll').mockRejectedValueOnce(new Error('blocked'));
             renderSection();
             fireEvent.click(await screen.findByRole('button', { name: 'Delete Rucio bot data for all accounts' }));
             fireEvent.click(screen.getByRole('button', { name: 'Delete everything' }));
@@ -262,6 +265,16 @@ describe('AssistantStorageSection', () => {
             jest.spyOn(repository, 'listAccounts').mockRejectedValue(new Error('db closed'));
             renderSection();
             expect(await screen.findByText('Could not load saved chats.')).toBeInTheDocument();
+        });
+
+        it('shows no other accounts without a session', async () => {
+            const { repository } = setup();
+            await seedOthers(repository);
+            mockSession.current = null;
+            renderSection();
+            await waitFor(() => expect(createConversationRepository).toHaveBeenCalled());
+            await new Promise(resolve => setTimeout(resolve, 20));
+            expect(screen.queryByText('Other accounts in this browser')).not.toBeInTheDocument();
         });
     });
 });

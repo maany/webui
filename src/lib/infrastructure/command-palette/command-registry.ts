@@ -20,6 +20,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { CommandItem } from '@/lib/core/entity/command-palette';
 import { ACCOUNT_NAME_REGEX } from '@/lib/core/utils/account-validation';
+import { ASSISTANT_SHORTCUT_LABEL_DEFAULT } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { DIDType } from '@/lib/core/entity/rucio';
 import {
     buildDIDSearchUrl,
@@ -289,7 +290,7 @@ export function getHelpCommands(): CommandItem[] {
  * "Ask Rucio bot" opens the assistant panel. The palette adds it only when the
  * assistant feature flag is on.
  */
-export function getAssistantCommands(openAssistant: () => void, shortcut: string = 'Ctrl+Shift+Space'): CommandItem[] {
+export function getAssistantCommands(openAssistant: () => void, shortcut: string = ASSISTANT_SHORTCUT_LABEL_DEFAULT): CommandItem[] {
     return [
         {
             id: 'action-ask-rucio-bot',
