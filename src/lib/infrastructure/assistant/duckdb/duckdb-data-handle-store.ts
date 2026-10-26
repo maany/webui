@@ -3,10 +3,12 @@ import type { DataHandle, DataHandleColumn, DataHandleProvenance, SqlResult } fr
 import type { AssistantDataHandleStorePort, IngestRowsOptions } from '@/lib/core/port/secondary/assistant-data-handle-store-port';
 import { checkReadOnlySql } from '@/lib/core/services/assistant-sql-guard';
 import { abortError, errorMessage } from '@/lib/infrastructure/assistant/abort';
-import { ENGINE_INIT_SQL, type DuckDbEngine, type DuckDbEngineFactory } from './duckdb-engine';
+import { ENGINE_INIT_SQL, type DuckDbEngine, type DuckDbEngineFactory, type DuckDbQueryResult } from './duckdb-engine';
 import { normalizeRows } from './row-normalizer';
 
 export const DEFAULT_IDLE_MS = 10 * 60 * 1000;
+export const DEFAULT_MAX_ROWS = 100;
+export const DEFAULT_ROW_CAP = 10_000;
 export const HANDLE_NAME_PATTERN = /^[a-z][a-z0-9_]{0,62}$/;
 
 export type DataHandleStoreErrorCode = 'invalid_sql' | 'invalid_name' | 'unavailable';
@@ -29,6 +31,11 @@ export function tableBaseName(baseName: string): string {
     return /^[a-z]/.test(cleaned) ? cleaned : `t_${cleaned}`;
 }
 
+/** Non-finite or negative values fall back to the default; fractions are floored. */
+function positiveInt(value: number, fallback: number): number {
+    return Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
+}
+
 const quote = (name: string): string => `"${name}"`;
 
 export interface DuckDbDataHandleStoreOptions {
@@ -43,6 +50,8 @@ export class DuckDbDataHandleStore implements AssistantDataHandleStorePort {
     private snapshot: DataHandle[] = [];
     private readonly counters = new Map<string, number>();
     private readonly listeners = new Set<() => void>();
+    /** Bumped by dropAll and terminate; work started before a bump must not register handles afterwards. */
+    private generation = 0;
     private chain: Promise<unknown> = Promise.resolve();
     private idleTimer: ReturnType<typeof setTimeout> | undefined;
     private readonly idleMs: number;
@@ -59,7 +68,9 @@ export class DuckDbDataHandleStore implements AssistantDataHandleStorePort {
         rows: AsyncIterable<Record<string, unknown>>,
         options: IngestRowsOptions,
     ): Promise<DataHandle> {
-        const { rowCap, signal } = options;
+        const { signal } = options;
+        const rowCap = positiveInt(options.rowCap, DEFAULT_ROW_CAP);
+        const generation = this.generation;
         if (signal?.aborted) throw abortError();
         if (options.name !== undefined && !HANDLE_NAME_PATTERN.test(options.name)) {
             throw new DataHandleStoreError('invalid_name', `"${options.name}" is not a valid handle name`);
@@ -79,77 +90,84 @@ export class DuckDbDataHandleStore implements AssistantDataHandleStorePort {
 
         const sourceError = options.sourceError?.();
         const name = options.name ?? this.nextName(baseName);
-        const columns = await this.serialized(async engine => {
-            await engine.exec(`DROP TABLE IF EXISTS ${quote(name)}`);
-            if (buffer.length === 0) {
-                await engine.exec(`CREATE TABLE ${quote(name)} AS SELECT NULL::VARCHAR AS _empty WHERE false`);
-                return [];
+        return this.serialized(async engine => {
+            this.throwIfStale(generation, signal);
+            let columns: DataHandleColumn[];
+            try {
+                await engine.exec(`DROP TABLE IF EXISTS ${quote(name)}`);
+                if (buffer.length === 0) {
+                    await engine.exec(`CREATE TABLE ${quote(name)} AS SELECT NULL::VARCHAR AS _empty WHERE false`);
+                    columns = [];
+                } else {
+                    await engine.insertJSON(name, JSON.stringify(normalizeRows(buffer)));
+                    columns = await this.describe(engine, name);
+                }
+            } catch (error) {
+                await engine.exec(`DROP TABLE IF EXISTS ${quote(name)}`).catch(() => undefined);
+                // A refresh replaced the table, so the old handle no longer describes anything.
+                if (generation === this.generation && this.handles.delete(name)) this.publish();
+                throw error;
             }
-            await engine.insertJSON(name, JSON.stringify(normalizeRows(buffer)));
-            return this.describe(engine, name);
-        });
+            await this.throwIfStaleAndDrop(engine, name, generation, signal);
 
-        const handle: DataHandle = {
-            name,
-            provenance,
-            rowCount: buffer.length,
-            truncated: truncated || sourceError !== undefined,
-            columns,
-            status: 'live',
-            ...(sourceError !== undefined ? { error: sourceError } : {}),
-        };
-        this.handles.set(name, handle);
-        this.publish();
-        return handle;
+            const handle: DataHandle = {
+                name,
+                provenance,
+                rowCount: buffer.length,
+                truncated: truncated || sourceError !== undefined,
+                columns,
+                status: 'live',
+                ...(sourceError !== undefined ? { error: sourceError } : {}),
+            };
+            this.handles.set(name, handle);
+            this.publish();
+            return handle;
+        });
     }
 
     async query(sql: string, options: { maxRows: number; saveAs?: string; signal?: AbortSignal }): Promise<SqlResult> {
-        const { maxRows, saveAs, signal } = options;
+        const { saveAs, signal } = options;
+        const generation = this.generation;
         if (signal?.aborted) throw abortError();
         const guard = checkReadOnlySql(sql);
         if (!guard.ok) throw new DataHandleStoreError('invalid_sql', guard.reason);
-        if (saveAs !== undefined) {
-            if (!HANDLE_NAME_PATTERN.test(saveAs)) {
-                throw new DataHandleStoreError('invalid_name', `save_as must be lower case letters, digits and underscores, starting with a letter`);
-            }
-            const existing = this.handles.get(saveAs);
-            if (existing && existing.provenance.toolName !== RUN_SQL_TOOL_NAME) {
-                throw new DataHandleStoreError('invalid_name', `"${saveAs}" holds fetched data. Pick another name for save_as.`);
-            }
-        }
-        const limit = Math.max(0, Math.floor(maxRows));
+        if (saveAs !== undefined) this.checkSaveAs(saveAs);
+        const limit = positiveInt(options.maxRows, DEFAULT_MAX_ROWS);
         const statement = guard.statement;
 
-        const outcome = await this.serialized(async engine => {
+        return this.serialized(async engine => {
+            this.throwIfStale(generation, signal);
             if (saveAs !== undefined) {
+                // The handle map may have changed while this call waited in the queue.
+                this.checkSaveAs(saveAs);
                 await engine.exec(`CREATE OR REPLACE TABLE ${quote(saveAs)} AS SELECT * FROM (${statement}) AS _q`);
-                const savedColumns = await this.describe(engine, saveAs);
-                const totalRows = await this.count(engine, `SELECT count(*) AS n FROM ${quote(saveAs)}`, signal);
-                const page = await engine.query(`SELECT * FROM ${quote(saveAs)} LIMIT ${limit}`, signal);
-                return { page, totalRows, savedColumns };
+                let savedColumns: DataHandleColumn[];
+                let totalRows: number;
+                let page: DuckDbQueryResult;
+                try {
+                    savedColumns = await this.describe(engine, saveAs);
+                    totalRows = await this.count(engine, `SELECT count(*) AS n FROM ${quote(saveAs)}`, signal);
+                    page = await engine.query(`SELECT * FROM ${quote(saveAs)} LIMIT ${limit}`, signal);
+                } catch (error) {
+                    await engine.exec(`DROP TABLE IF EXISTS ${quote(saveAs)}`).catch(() => undefined);
+                    throw error;
+                }
+                await this.throwIfStaleAndDrop(engine, saveAs, generation, signal);
+                this.handles.set(saveAs, {
+                    name: saveAs,
+                    provenance: { toolName: RUN_SQL_TOOL_NAME, args: { sql, save_as: saveAs }, fetchedAt: this.now().toISOString() },
+                    rowCount: totalRows,
+                    truncated: false,
+                    columns: savedColumns,
+                    status: 'live',
+                });
+                this.publish();
+                return { columns: page.columns, rows: page.rows, totalRows, savedAs: saveAs };
             }
             const totalRows = await this.count(engine, `SELECT count(*) AS n FROM (${statement}) AS _q`, signal);
             const page = await engine.query(`SELECT * FROM (${statement}) AS _q LIMIT ${limit}`, signal);
-            return { page, totalRows, savedColumns: undefined };
+            return { columns: page.columns, rows: page.rows, totalRows };
         });
-
-        if (saveAs !== undefined && outcome.savedColumns) {
-            this.handles.set(saveAs, {
-                name: saveAs,
-                provenance: { toolName: RUN_SQL_TOOL_NAME, args: { sql, save_as: saveAs }, fetchedAt: this.now().toISOString() },
-                rowCount: outcome.totalRows,
-                truncated: false,
-                columns: outcome.savedColumns,
-                status: 'live',
-            });
-            this.publish();
-        }
-        return {
-            columns: outcome.page.columns,
-            rows: outcome.page.rows,
-            totalRows: outcome.totalRows,
-            ...(saveAs !== undefined ? { savedAs: saveAs } : {}),
-        };
     }
 
     listHandles(): DataHandle[] {
@@ -157,12 +175,14 @@ export class DuckDbDataHandleStore implements AssistantDataHandleStorePort {
     }
 
     async drop(name: string): Promise<void> {
+        if (!HANDLE_NAME_PATTERN.test(name)) throw new DataHandleStoreError('invalid_name', `"${name}" is not a valid handle name`);
         const known = this.handles.delete(name);
         if (known) this.publish();
         if (this.engine) await this.serialized(engine => engine.exec(`DROP TABLE IF EXISTS ${quote(name)}`));
     }
 
     async dropAll(): Promise<void> {
+        this.generation += 1;
         const names = Array.from(this.handles.keys());
         this.handles.clear();
         this.counters.clear();
@@ -182,6 +202,7 @@ export class DuckDbDataHandleStore implements AssistantDataHandleStorePort {
     }
 
     async terminate(): Promise<void> {
+        this.generation += 1;
         this.clearIdle();
         const pending = this.engine;
         this.engine = undefined;
@@ -202,6 +223,27 @@ export class DuckDbDataHandleStore implements AssistantDataHandleStorePort {
         return () => {
             this.listeners.delete(listener);
         };
+    }
+
+    private checkSaveAs(saveAs: string): void {
+        if (!HANDLE_NAME_PATTERN.test(saveAs)) {
+            throw new DataHandleStoreError('invalid_name', 'save_as must be lower case letters, digits and underscores, starting with a letter');
+        }
+        const existing = this.handles.get(saveAs);
+        if (existing && existing.provenance.toolName !== RUN_SQL_TOOL_NAME) {
+            throw new DataHandleStoreError('invalid_name', `"${saveAs}" holds fetched data. Pick another name for save_as.`);
+        }
+    }
+
+    private throwIfStale(generation: number, signal?: AbortSignal): void {
+        if (signal?.aborted || generation !== this.generation) throw abortError();
+    }
+
+    /** After the table exists: if the call was aborted or the store was cleared meanwhile, drop the table and reject. */
+    private async throwIfStaleAndDrop(engine: DuckDbEngine, name: string, generation: number, signal?: AbortSignal): Promise<void> {
+        if (!signal?.aborted && generation === this.generation) return;
+        await engine.exec(`DROP TABLE IF EXISTS ${quote(name)}`).catch(() => undefined);
+        throw abortError();
     }
 
     private nextName(baseName: string): string {

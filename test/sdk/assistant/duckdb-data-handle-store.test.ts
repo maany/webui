@@ -2,6 +2,7 @@ import { ENGINE_INIT_SQL, type DuckDbEngine } from '@/lib/infrastructure/assista
 import {
     DataHandleStoreError,
     DEFAULT_IDLE_MS,
+    DEFAULT_MAX_ROWS,
     DuckDbDataHandleStore,
     tableBaseName,
 } from '@/lib/infrastructure/assistant/duckdb/duckdb-data-handle-store';
@@ -287,5 +288,173 @@ describe('DuckDbDataHandleStore lifecycle', () => {
         const handle = await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
         expect(handle.name).toBe('rules_1');
         expect(factory).toHaveBeenCalledTimes(2);
+    });
+});
+
+function gate() {
+    let release!: () => void;
+    const promise = new Promise<void>(resolve => {
+        release = resolve;
+    });
+    return { promise, release };
+}
+
+describe('DuckDbDataHandleStore concurrency and lifecycle', () => {
+    it('does not run a queued ingest that was aborted while waiting', async () => {
+        const { engine, store } = setup();
+        const held = gate();
+        engine.insertGate = held.promise;
+        const first = store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const controller = new AbortController();
+        const second = store.ingestRows('rses', provenance, rowsOf([{ i: 1 }]), { rowCap: 10, signal: controller.signal });
+        const secondResult = expect(second).rejects.toMatchObject({ name: 'AbortError' });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        controller.abort();
+        engine.insertGate = undefined;
+        held.release();
+        await first;
+        await secondResult;
+        expect(engine.executed).not.toContain('DROP TABLE IF EXISTS "rses_1"');
+        expect(engine.executed).not.toContain('INSERT JSON rses_1');
+        expect(store.listHandles().map(handle => handle.name)).toEqual(['rules_1']);
+    });
+
+    it('does not run a queued save_as that was aborted while waiting', async () => {
+        const { engine, store } = setup();
+        await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        const held = gate();
+        engine.insertGate = held.promise;
+        const blocker = store.ingestRows('rses', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const controller = new AbortController();
+        const saved = store.query('SELECT * FROM rules_1', { maxRows: 1, saveAs: 'subset', signal: controller.signal });
+        const savedResult = expect(saved).rejects.toMatchObject({ name: 'AbortError' });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        controller.abort();
+        engine.insertGate = undefined;
+        held.release();
+        await blocker;
+        await savedResult;
+        expect(engine.executed.some(sql => sql.startsWith('CREATE OR REPLACE TABLE "subset"'))).toBe(false);
+        expect(store.listHandles().some(handle => handle.name === 'subset')).toBe(false);
+    });
+
+    it.each(['dropAll', 'terminate'] as const)('does not register a handle whose ingest was in flight during %s', async method => {
+        const { engine, store } = setup();
+        const listener = jest.fn();
+        store.subscribe(listener);
+        const held = gate();
+        engine.insertGate = held.promise;
+        const ingest = store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        const ingestResult = expect(ingest).rejects.toMatchObject({ name: 'AbortError' });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const dropping = store[method]();
+        listener.mockClear();
+        engine.insertGate = undefined;
+        held.release();
+        await dropping;
+        await ingestResult;
+        expect(store.listHandles()).toEqual([]);
+        expect(listener).not.toHaveBeenCalled();
+        if (method === 'dropAll') expect(engine.tables.has('rules_1')).toBe(false);
+    });
+
+    it('re-checks the save_as name against fetched data when the queued work runs', async () => {
+        const { engine, store } = setup();
+        const held = gate();
+        engine.insertGate = held.promise;
+        const ingest = store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        engine.statementResults.set('SELECT 1', [{ x: 1 }]);
+        const saved = store.query('SELECT 1', { maxRows: 1, saveAs: 'rules_1' });
+        const savedResult = expect(saved).rejects.toMatchObject({ code: 'invalid_name' });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        engine.insertGate = undefined;
+        held.release();
+        await ingest;
+        await savedResult;
+        expect(engine.tables.get('rules_1')).toEqual([{ i: 0 }]);
+        expect(store.listHandles()[0].provenance).toEqual(provenance);
+    });
+
+    it('removes the old handle when a refresh fails to insert, and notifies', async () => {
+        const { engine, store } = setup();
+        await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        const listener = jest.fn();
+        store.subscribe(listener);
+        engine.failInsert = new Error('insert failed');
+        await expect(store.ingestRows('rules', provenance, rowsOf([{ i: 1 }]), { rowCap: 10, name: 'rules_1' })).rejects.toThrow('insert failed');
+        expect(store.listHandles()).toEqual([]);
+        expect(engine.tables.has('rules_1')).toBe(false);
+        expect(listener).toHaveBeenCalled();
+    });
+
+    it('drops a partly created table and registers nothing when a new ingest fails', async () => {
+        const { engine, store } = setup();
+        engine.failInsert = new Error('insert failed');
+        await expect(store.ingestRows('rules', provenance, rowsOf([{ i: 1 }]), { rowCap: 10 })).rejects.toThrow('insert failed');
+        expect(store.listHandles()).toEqual([]);
+        expect(engine.executed.filter(sql => sql === 'DROP TABLE IF EXISTS "rules_1"').length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('rejects drop with an invalid name before sending SQL', async () => {
+        const { engine, store } = setup();
+        await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        const before = engine.executed.length;
+        await expect(store.drop('x"; DROP TABLE rules_1; --')).rejects.toMatchObject({ code: 'invalid_name' });
+        expect(engine.executed).toHaveLength(before);
+    });
+
+    it('falls back to defaults for bad numeric options and floors fractions', async () => {
+        const { engine, store } = setup();
+        const handle = await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }, { i: 1 }]), { rowCap: Number.NaN });
+        expect(handle.rowCount).toBe(2);
+        const negative = await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: -5 });
+        expect(negative.rowCount).toBe(1);
+        await store.query('SELECT * FROM rules_1', { maxRows: Number.POSITIVE_INFINITY });
+        await store.query('SELECT * FROM rules_1', { maxRows: 1.9 });
+        const limits = engine.executed.filter(sql => sql.includes(' LIMIT ')).map(sql => sql.split(' LIMIT ')[1]);
+        expect(limits).toEqual([String(DEFAULT_MAX_ROWS), '1']);
+    });
+
+    it('runs memoryBytes through the queue without re-arming the idle timer', async () => {
+        jest.useFakeTimers();
+        try {
+            const { engine, store } = setup();
+            await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+            const held = gate();
+            engine.insertGate = held.promise;
+            const ingest = store.ingestRows('rses', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+            await jest.advanceTimersByTimeAsync(0);
+            let memory: number | undefined;
+            const pending = store.memoryBytes().then(value => {
+                memory = value;
+            });
+            await jest.advanceTimersByTimeAsync(0);
+            expect(memory).toBeUndefined();
+            engine.insertGate = undefined;
+            held.release();
+            await ingest;
+            await pending;
+            expect(memory).toBe(4096);
+            await jest.advanceTimersByTimeAsync(DEFAULT_IDLE_MS - 1);
+            await store.memoryBytes();
+            await jest.advanceTimersByTimeAsync(1);
+            expect(engine.terminated).toBe(true);
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    it('notifies subscribers until they unsubscribe', async () => {
+        const { store } = setup();
+        const listener = jest.fn();
+        const unsubscribe = store.subscribe(listener);
+        await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        expect(listener).toHaveBeenCalledTimes(1);
+        unsubscribe();
+        await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        expect(listener).toHaveBeenCalledTimes(1);
     });
 });

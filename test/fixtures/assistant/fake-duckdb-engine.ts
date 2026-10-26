@@ -19,6 +19,9 @@ export class FakeDuckDbEngine implements DuckDbEngine {
     memory = 4096;
     terminated = false;
     failNext: Error | undefined;
+    /** When set, insertJSON waits for it before inserting (lets tests hold an ingest in flight). */
+    insertGate: Promise<void> | undefined;
+    failInsert: Error | undefined;
 
     async exec(sql: string): Promise<void> {
         this.executed.push(sql);
@@ -67,6 +70,12 @@ export class FakeDuckDbEngine implements DuckDbEngine {
     async insertJSON(table: string, jsonText: string): Promise<void> {
         this.executed.push(`INSERT JSON ${table}`);
         this.throwIfFailing();
+        if (this.insertGate) await this.insertGate;
+        if (this.failInsert) {
+            const error = this.failInsert;
+            this.failInsert = undefined;
+            throw error;
+        }
         this.tables.set(table, JSON.parse(jsonText));
     }
 
