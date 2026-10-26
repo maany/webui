@@ -2,6 +2,9 @@ import type { z } from 'zod';
 import type { FeatureKey } from '@/lib/core/entity/feature-config';
 import type { Role } from '@/lib/core/entity/auth-models';
 
+/** Name of the SQL tool; its calls are counted as queries, not tools, in the activity label. */
+export const RUN_SQL_TOOL_NAME = 'run_sql';
+
 export type ToolRisk = 'read' | 'write' | 'high';
 export const TOOL_POLICIES = ['deny', 'ask', 'allow'] as const;
 export type ToolPolicy = (typeof TOOL_POLICIES)[number];
