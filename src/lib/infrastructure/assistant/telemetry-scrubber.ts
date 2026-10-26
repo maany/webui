@@ -26,6 +26,10 @@ const SECRET_KEY_NAMES = [
     'client[-_]?secret',
     'password',
     'passwd',
+    'passphrase',
+    'pwd',
+    'pass',
+    'secret',
     'access[-_]?token',
     'refresh[-_]?token',
     'id[-_]?token',
@@ -61,7 +65,26 @@ const KEY_VALUE_SCHEME = `(?:(?:Bearer|Basic|Token)(?:\\s+|%20))?`;
 // The guard sits in front of the optional scheme, so an already redacted `Bearer [REDACTED]` is not redacted twice.
 const KEY_VALUE = `(?!${KEY_VALUE_SCHEME}\\[REDACTED\\])${KEY_VALUE_SCHEME}[^"'\\s,;&}\\\\]+`;
 
-const SECRET_HEADER_NAMES = 'x-api-key|authorization|proxy-authorization|x-rucio-auth-token';
+const SECRET_HEADER_NAMES = 'x-api-key|authorization|proxy-authorization|x-rucio-auth-token|set-cookie|cookie';
+
+/**
+ * Cookie header value: `name=value` pairs, where a value may be quoted (`sid="abc"`, or `sid=\"abc\"` inside a JSON
+ * string). Stops at a line end, at a raw quote (end of a JSON string) or at a backslash that does not open an escaped
+ * quoted value (end of a JSON-in-JSON string). Each alternative scans only to the next quote or backslash, so it is linear.
+ */
+const COOKIE_VALUE = String.raw`(?:=\\"[^"\\\r\n]*\\"|="[^"\r\n]*"|[^\r\n"\\])+`;
+
+/**
+ * Value after an escaped opening quote (JSON-in-JSON, `\"password\":\"...\"`). Consumes the outer encoding of inner
+ * escapes (`\\\"` is an inner escaped quote, `\\\\` an inner backslash) and stops at `\"`, the end of the inner string.
+ */
+const ESCAPED_QUOTED_VALUE = String.raw`(?:\\\\(?:\\[\s\S]|[^\\])|\\[^"'\\]|(?!\2)[^\\])+`;
+
+/**
+ * End of a standalone Rucio token: not followed by more name characters or by `.ext`, so a DID such as
+ * `user.jdoe:run-v2-<32 hex>.root` is not mistaken for a token.
+ */
+const TOKEN_END = String.raw`(?![0-9A-Za-z_-]|\.[A-Za-z0-9_])`;
 
 /**
  * Pattern rules, applied in order. Each replacement keeps enough context to read the trace.
@@ -74,6 +97,10 @@ const SCRUB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
         new RegExp(`(\\\\?"name\\\\?"\\s*:\\s*\\\\?"(?:${SECRET_HEADER_NAMES})\\\\?"\\s*,\\s*\\\\?"value\\\\?"\\s*:\\s*\\\\?")[^"\\\\]*`, 'gi'),
         `$1${REDACTED}`,
     ],
+    // Header tuples: [["authorization", "Bearer ..."]], [["x-rucio-auth-token", "..."]] (letters-only values too)
+    [new RegExp(`(\\[\\s*\\\\?"(?:${SECRET_HEADER_NAMES})\\\\?"\\s*,\\s*\\\\?")[^"\\\\]*`, 'gi'), `$1${REDACTED}`],
+    // Array values of secret keys: {"set-cookie":["sid=abc","x=y"]}. Stops at the next bracket, so scans never overlap.
+    [new RegExp(`((?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES})\\\\?["']?\\s*[:=]\\s*\\[)[^\\][]*`, 'gi'), `$1${REDACTED}`],
     // Authorization header values: `Bearer x`, `Basic x`, `Token x` (also `Bearer%20x`). The value must look like
     // a credential (a digit or one of + / = . _ ~ -) so prose such as "Basic authentication" is left alone.
     [/\b(Bearer|Basic|Token)(?:\s+|%20)(?=[A-Za-z0-9._~+/=-]*[0-9+/=._~-])[A-Za-z0-9._~+/=-]{8,}/gi, `$1 ${REDACTED}`],
@@ -86,15 +113,17 @@ const SCRUB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
         `$1${REDACTED}`,
     ],
     // Private key blocks. Consumes to the END marker or, when missing, to the end of the text (one match, so linear).
-    [/-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----END )[\s\S])*(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----)?/g, REDACTED],
-    // Cookie header lines carry several name=value pairs: redact to the end of the line, or to a quote or backslash
-    // inside a JSON string. Only when the value looks like `name=value`; anything else falls through to the key rule.
-    // The lookahead is bounded (cookie names are short) so it stays linear on long inputs.
-    [/((?<![A-Za-z0-9])(?:set-cookie|cookie)[ \t]*:[ \t]*)(?=[^\s=;,"\\:]{1,256}=)[^\r\n"\\]+/gi, `$1${REDACTED}`],
+    [
+        /-----BEGIN [A-Z ]*(?:PRIVATE|SECRET) KEY(?: BLOCK)?-----(?:(?!-----END )[\s\S])*(?:-----END [A-Z ]*(?:PRIVATE|SECRET) KEY(?: BLOCK)?-----)?/g,
+        REDACTED,
+    ],
+    // Cookie header lines carry several name=value pairs (see COOKIE_VALUE). Only when a `name=` follows within 256
+    // characters (bounded lookahead, so linear); anything else falls through to the key rule.
+    [new RegExp(String.raw`((?<![A-Za-z0-9])(?:set-cookie|cookie)[ \t]*:[ \t]*)(?=[^\r\n"\\=]{0,256}=)${COOKIE_VALUE}`, 'gi'), `$1${REDACTED}`],
     // Quoted values with a raw (unescaped) opening quote: consume escapes, so "a\"b c" is redacted to its closing quote.
     [new RegExp(`((?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES})["']?\\s*[:=]\\s*(["']))(?:\\\\[\\s\\S]|(?!\\2)[^\\\\])+`, 'gi'), `$1${REDACTED}`],
     // Quoted values may hold spaces and commas: "password": "correct horse", secret_key = "a phrase"
-    [new RegExp(`((?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES})\\\\?["']?\\s*[:=]\\s*\\\\?(["']))(?:(?!\\2)[^\\\\])+`, 'gi'), `$1${REDACTED}`],
+    [new RegExp(`((?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES})\\\\?["']?\\s*[:=]\\s*\\\\?(["']))${ESCAPED_QUOTED_VALUE}`, 'gi'), `$1${REDACTED}`],
     // key: value, key=value, "key": "value" for secret-looking key names (JSON, escaped JSON, headers, query strings)
     [new RegExp(`((?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES})${KEY_VALUE_SEPARATOR})${KEY_VALUE}`, 'gi'), `$1${REDACTED}`],
     [new RegExp(`((?<=[a-z0-9])(?:${CAMEL_KEY_NAMES})${KEY_VALUE_SEPARATOR})${KEY_VALUE}`, 'g'), `$1${REDACTED}`],
@@ -106,9 +135,12 @@ const SCRUB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
     [/(?<![A-Za-z0-9])(?:gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{35})/g, REDACTED],
     // JWTs (OIDC access and id tokens)
     [/(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g, REDACTED],
-    // Rucio tokens: <account>-<identity>-<appid>-<32 hex uuid> (rucio/core/authentication.py).
-    // Anchored at the start of a delimiter-free run, so only one start per run is tried.
-    [/(?<![^\s"'<>])[^\s"'<>]*-[A-Za-z0-9_.:]+-[0-9a-f]{32}(?![0-9a-f])/g, REDACTED],
+    // Rucio tokens: <account>-<identity>-<appid>-<32 hex uuid> (rucio/core/authentication.py), standalone only: the run
+    // starts at whitespace, a quote or the text start, has at least three parts before the hex, and ends at TOKEN_END.
+    // DIDs (scope:name, extensions) and two-part names such as SITE-token-<hex> are kept. Only run starts are tried.
+    [new RegExp(String.raw`(?<![^\s"'<>])[A-Za-z0-9_]+-[^\s"'<>]*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`, 'g'), REDACTED],
+    // Tokens whose identity is an x509 DN or OIDC subject with spaces: the run holds a `/` or `=` before the tail.
+    [new RegExp(String.raw`(?<![^\s"'<>])[^\s"'<>:/=]*[/=][^\s"'<>]*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`, 'g'), REDACTED],
 ];
 
 /** Content attributes removed when content must not leave the browser (level lowered after capture). */

@@ -2,6 +2,66 @@ import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from '@open
 import { REDACTED, ScrubbingSpanProcessor, scrubAttributes, scrubText } from '@/lib/infrastructure/assistant/telemetry-scrubber';
 
 describe('scrubText', () => {
+    describe('fix round 4', () => {
+        const HEX = '0123456789abcdef0123456789abcdef';
+
+        it('redacts quoted cookie values and every later pair (I1)', () => {
+            expect(scrubText('Cookie: sid="abcdef"; b=2')).toBe('Cookie: [REDACTED]');
+            expect(scrubText(String.raw`{"h":"Cookie: sid=\"abc\"; other=secret2","next":"keep"}`)).toBe(
+                String.raw`{"h":"Cookie: [REDACTED]","next":"keep"}`,
+            );
+            expect(scrubText(String.raw`{\"h\":\"Cookie: a=secret3\",\"o\":\"keep\"}`)).toBe(
+                String.raw`{\"h\":\"Cookie: [REDACTED]\",\"o\":\"keep\"}`,
+            );
+        });
+
+        it('consumes escapes in JSON-in-JSON quoted values (I2)', () => {
+            expect(scrubText(String.raw`{"args":"{\"password\":\"a\\\"b c d\"}"}`)).toBe(String.raw`{"args":"{\"password\":\"[REDACTED]\"}"}`);
+            expect(scrubText(String.raw`{"args":"{\"password\":\"a\\\\b c\",\"n\":1}"}`)).toBe(
+                String.raw`{"args":"{\"password\":\"[REDACTED]\",\"n\":1}"}`,
+            );
+        });
+
+        it('redacts header tuples, cookie header objects and cookie arrays (m1)', () => {
+            expect(scrubText('[["x-rucio-auth-token", "abcdefgh"]]')).toBe('[["x-rucio-auth-token", "[REDACTED]"]]');
+            expect(scrubText('[["authorization","Bearer abcdefghijkl"]]')).toBe('[["authorization","[REDACTED]"]]');
+            expect(scrubText('{"name":"cookie","value":"sid=abc def"}')).toBe('{"name":"cookie","value":"[REDACTED]"}');
+            expect(scrubText('{"set-cookie":["sid=abc","x=y"],"ok":1}')).toBe('{"set-cookie":[REDACTED],"ok":1}');
+        });
+
+        it('redacts PGP private and secret key blocks (m2)', () => {
+            expect(scrubText('a -----BEGIN PGP PRIVATE KEY BLOCK-----\nxyz\n-----END PGP PRIVATE KEY BLOCK----- b')).toBe('a [REDACTED] b');
+            expect(scrubText('a -----BEGIN PGP SECRET KEY BLOCK-----\nxyz\n-----END PGP SECRET KEY BLOCK----- b')).toBe('a [REDACTED] b');
+        });
+
+        it('treats passphrase, pwd, pass and secret as key names but not words that contain them (m3)', () => {
+            expect(scrubText('passphrase=hunter22')).toBe('passphrase=[REDACTED]');
+            expect(scrubText('{"pwd":"hunter22"}')).toBe('{"pwd":"[REDACTED]"}');
+            expect(scrubText('pass: hunter22')).toBe('pass: [REDACTED]');
+            expect(scrubText('secret=hunter22')).toBe('secret=[REDACTED]');
+            expect(scrubText('the passage of the secretary was bypassed')).toBe('the passage of the secretary was bypassed');
+        });
+
+        it('redacts cookie values with a leading separator or words before the pair (m4)', () => {
+            expect(scrubText('Cookie: ;sid=secret')).not.toContain('secret');
+            expect(scrubText('Cookie: my sid=secret')).not.toContain('secret');
+        });
+
+        it('keeps DID and RSE names that contain a 32 hex run (O1)', () => {
+            for (const did of [`user.jdoe:run-v2-${HEX}.root`, `SITE-token-${HEX}`, `user.jdoe:SITE-token-${HEX}`, `user.jdoe:log-task-${HEX}.tgz`]) {
+                expect(scrubText(`list ${did} now`)).toBe(`list ${did} now`);
+            }
+        });
+
+        it('still redacts standalone Rucio tokens (O1)', () => {
+            expect(scrubText(`use root-root-webui-${HEX}.`)).toBe('use [REDACTED].');
+            expect(scrubText(`{"t":"root-ddmadmin-webui-${HEX}"}`)).toBe('{"t":"[REDACTED]"}');
+            expect(scrubText(String.raw`{\"t\":\"root-root-webui-${HEX}\"}`)).toBe(String.raw`{\"t\":\"[REDACTED]\"}`);
+            expect(scrubText(`Bearer root-root-webui-${HEX}`)).toBe('Bearer [REDACTED]');
+            expect(scrubText(`jdoe-/DC=ch/OU=Organic Units/CN=jdoe-webui-${HEX}`)).not.toContain(HEX);
+        });
+    });
+
     it('redacts a quoted value with escaped quotes completely', () => {
         expect(scrubText('{"password":"a\\"b c d","next":"ok"}')).toBe('{"password":"[REDACTED]","next":"ok"}');
         expect(scrubText('{"password":"a\\\\"}, "next":"ok"')).toBe('{"password":"[REDACTED]"}, "next":"ok"');
@@ -84,6 +144,19 @@ describe('scrubText', () => {
         ['AIza prefixes', 'AIza'.repeat(20000)],
         ['xai prefixes', 'xai-'.repeat(20000)],
         ['escaped quotes', '\\"token\\": '.repeat(6000)],
+        ['cookie quoted openers', 'Cookie: a="'.repeat(7000)],
+        ['cookie escaped quoted openers', 'Cookie: a=\\"'.repeat(6000)],
+        ['cookie escaped opener without close', `Cookie: a=\\"${'b'.repeat(80000)}`],
+        ['escaped quoted value with backslashes', `\\"password\\":\\"${'\\\\'.repeat(80000)}`],
+        ['escaped quoted openers', '\\"password\\":\\"'.repeat(5000)],
+        ['secret array openers', '"token":['.repeat(8000)],
+        ['header tuple openers', '[["cookie","'.repeat(6500)],
+        ['token parts', 'root-'.repeat(16000)],
+        ['token parts with hex', `root-root-${'0123456789abcdef-'.repeat(4500)}`],
+        ['dn slashes', 'a/'.repeat(40000)],
+        ['dn equals and hyphens', 'a=b-'.repeat(20000)],
+        ['pgp secret key starts', '-----BEGIN PGP SECRET KEY BLOCK-----'.repeat(2100)],
+        ['new key names', 'pass pwd secret passphrase '.repeat(3000)],
         ['raw quoted value with escapes', `"password":"${'a\\"'.repeat(26000)}`],
         ['repeated raw quoted openers', '"password":"'.repeat(6500)],
         ['backslash run in a quoted value', `"password":"${'\\'.repeat(80000)}`],
