@@ -6,7 +6,6 @@ import { BaseController, TAuthenticatedControllerParameters } from '@/lib/sdk/co
 import { CreateRuleRequest } from '@/lib/core/usecase-models/create-rule-usecase-models';
 import { CreateRuleInputPort } from '@/lib/core/port/primary/create-rule-ports';
 import USECASE_FACTORY from '@/lib/infrastructure/ioc/ioc-symbols-usecase-factory';
-import { z } from 'zod';
 
 export type CreateRuleControllerParameters = TAuthenticatedControllerParameters & {
     dids: {
