@@ -57,7 +57,7 @@ export function telemetryTestMessage(result: TelemetryTestResult, origin: string
 export function operatorShareDescription(config: AssistantConfig['telemetry']): string {
     const content =
         config.contentCap === 'full'
-            ? 'The operators of this deployment receive timings, token counts and tool names, plus prompts and results if you choose full content.'
+            ? 'The operators of this deployment receive timings, token counts and tool names, plus prompts and results if you choose full content. Full content can still name you, for example in prompts, SQL or data identifiers.'
             : 'The operators of this deployment receive timings, token counts and tool names only, never prompts or results.';
     return config.hashUser ? `${content} Your account is replaced by a salted hash.` : content;
 }
@@ -167,6 +167,8 @@ export function TelemetrySettingsForm({ config, value, onChange, onTestExport, o
                                             id={`${id}-public`}
                                             value={sink.publicKey ?? ''}
                                             autoComplete="off"
+                                            spellCheck={false}
+                                            autoCapitalize="off"
                                             onChange={event => updateSink({ publicKey: event.target.value })}
                                         />
                                     </div>
@@ -179,6 +181,8 @@ export function TelemetrySettingsForm({ config, value, onChange, onTestExport, o
                                             type="password"
                                             value={sink.secretKey ?? ''}
                                             autoComplete="off"
+                                            spellCheck={false}
+                                            autoCapitalize="off"
                                             onChange={event => updateSink({ secretKey: event.target.value })}
                                         />
                                     </div>
@@ -193,6 +197,8 @@ export function TelemetrySettingsForm({ config, value, onChange, onTestExport, o
                                         value={headersText}
                                         placeholder="Authorization=Bearer xyz,x-scope=team"
                                         autoComplete="off"
+                                        spellCheck={false}
+                                        autoCapitalize="off"
                                         onChange={event => {
                                             setHeadersText(event.target.value);
                                             updateSink({ headers: parseOtlpHeaders(event.target.value) });

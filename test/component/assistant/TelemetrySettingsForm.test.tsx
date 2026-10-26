@@ -206,7 +206,10 @@ describe('operatorShareDescription', () => {
     it('states what the operator cap lets through and whether the account is hashed', () => {
         expect(operatorShareDescription(config({ operatorSink: true, contentCap: 'metadata' }))).toBe(METADATA_SHARE_TEXT);
         expect(operatorShareDescription(config({ operatorSink: true, contentCap: 'full', hashUser: true }))).toBe(
-            'The operators of this deployment receive timings, token counts and tool names, plus prompts and results if you choose full content. Your account is replaced by a salted hash.',
+            'The operators of this deployment receive timings, token counts and tool names, plus prompts and results if you choose full content. Full content can still name you, for example in prompts, SQL or data identifiers. Your account is replaced by a salted hash.',
+        );
+        expect(operatorShareDescription(config({ operatorSink: true, contentCap: 'full', hashUser: false }))).toBe(
+            'The operators of this deployment receive timings, token counts and tool names, plus prompts and results if you choose full content. Full content can still name you, for example in prompts, SQL or data identifiers.',
         );
     });
 });

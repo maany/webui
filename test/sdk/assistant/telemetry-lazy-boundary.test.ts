@@ -23,7 +23,8 @@ const LAZY_TARGETS = ['@/lib/infrastructure/assistant/telemetry', '@/lib/infrast
 /** Specifiers of static imports that bring runtime values (not `import type`). */
 function valueImportSpecifiers(source: string): string[] {
     const specifiers: string[] = [];
-    for (const match of source.matchAll(/^import\s+(type\s+)?[\s\S]*?from\s+'([^']+)';/gm)) {
+    // Static imports, side-effect imports and re-exports; a match cannot cross a statement boundary.
+    for (const match of source.matchAll(/^(?:import|export)\s+(type\s+)?(?:[^;'"]*?\sfrom\s+)?['"]([^'"]+)['"]/gm)) {
         if (!match[1]) {
             specifiers.push(match[2]);
         }
@@ -44,5 +45,13 @@ describe('telemetry lazy loading boundary', () => {
         expect(
             valueImportSpecifiers("import {\n    trace,\n} from '@opentelemetry/api';\nimport type { Span } from '@opentelemetry/api';\n"),
         ).toEqual(['@opentelemetry/api']);
+    });
+
+    it('detects side-effect imports and re-exports', () => {
+        expect(
+            valueImportSpecifiers(
+                "import '@opentelemetry/api';\nimport { a } from './a';\nexport { trace } from '@opentelemetry/sdk-trace';\nexport type { Span } from '@opentelemetry/api';\nexport * from '@/lib/infrastructure/assistant/telemetry';\n",
+            ),
+        ).toEqual(['@opentelemetry/api', './a', '@opentelemetry/sdk-trace', '@/lib/infrastructure/assistant/telemetry']);
     });
 });
