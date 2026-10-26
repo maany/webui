@@ -211,24 +211,19 @@ describe('assistant settings storage', () => {
         const staleRetention = { maxAgeDays: 99999, maxTotalMB: 50, clearOnLogout: false };
         const store = (value: unknown) => localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify(value));
 
-        it('falls back to the operator when the active provider was dropped', () => {
-            store({ ...withProviders(), providers: [broken, ollama], activeProviderId: 'p-bad', retention: staleRetention });
+        it('falls back to the operator when the active provider was dropped and none remain', () => {
+            store({ ...withProviders(), providers: [broken], activeProviderId: 'p-bad', retention: staleRetention });
             expect(loadAssistantSettings().activeProviderId).toBe('operator');
         });
 
-        it('falls back to the first remaining provider when there is no operator model', () => {
+        it('falls back to the first remaining valid provider when the active one was dropped', () => {
             store({ ...withProviders(), providers: [broken, ollama, claude], activeProviderId: 'p-bad', retention: staleRetention });
-            expect(loadAssistantSettings({ operatorAvailable: false }).activeProviderId).toBe('p-ollama');
-        });
-
-        it('falls back to the default when no operator model and no provider remain', () => {
-            store({ ...withProviders(), providers: [broken], activeProviderId: 'p-bad', retention: staleRetention });
-            expect(loadAssistantSettings({ operatorAvailable: false }).activeProviderId).toBe('operator');
+            expect(loadAssistantSettings().activeProviderId).toBe('p-ollama');
         });
 
         it('keeps an active provider that survived the salvage', () => {
             store({ ...withProviders(), providers: [broken, ollama, claude], activeProviderId: 'p-claude', retention: staleRetention });
-            expect(loadAssistantSettings({ operatorAvailable: false }).activeProviderId).toBe('p-claude');
+            expect(loadAssistantSettings().activeProviderId).toBe('p-claude');
         });
 
         it('drops only the invalid user skills', () => {

@@ -238,15 +238,21 @@ export function AssistantStorageSection({
 
     useEffect(() => {
         let cancelled = false;
+        let unsubscribe: (() => void) | undefined;
         createConversationRepository()
             .then(result => {
-                if (!cancelled) setStore(result);
+                if (cancelled) return;
+                setStore(result);
+                unsubscribe = result.repository.onPersistenceLost?.(() =>
+                    setStore(current => (current ? { ...current, persistent: false } : current)),
+                );
             })
             .catch(() => {
                 if (!cancelled) setError(LOAD_ERROR);
             });
         return () => {
             cancelled = true;
+            unsubscribe?.();
         };
     }, []);
 

@@ -744,6 +744,96 @@ describe('useAssistantController races', () => {
         expect(stored.map(message => message.id)).toEqual([messages[0].id, messages[1].id]);
     });
 
+    it('streams nothing into a new chat when New chat happens while a retry deletes the failed message', async () => {
+        const failing: Script = async function* () {
+            yield { type: 'finished', status: 'error', error: 'boom' };
+        };
+        const { hook, repository, created } = setup([failing, textScript('late')]);
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        jest.spyOn(repository, 'deleteMessage').mockImplementationOnce(async () => {
+            await gate;
+        });
+        let retrying!: Promise<void>;
+        act(() => {
+            retrying = hook.result.current.retry?.() ?? Promise.resolve();
+        });
+        act(() => {
+            hook.result.current.newConversation();
+        });
+        await act(async () => {
+            release();
+            await retrying;
+        });
+        expect(created).toHaveLength(1);
+        expect(hook.result.current.messages).toEqual([]);
+        expect(hook.result.current.status).toBe('idle');
+    });
+
+    it('refuses to retry while deleteAllConversations is in progress', async () => {
+        const failing: Script = async function* () {
+            yield { type: 'finished', status: 'error', error: 'boom' };
+        };
+        const { hook, repository, created } = setup([failing, textScript('late')]);
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        jest.spyOn(repository, 'deleteAll').mockImplementationOnce(async () => {
+            await gate;
+        });
+        let deleting!: Promise<void>;
+        act(() => {
+            deleting = hook.result.current.deleteAllConversations?.() ?? Promise.resolve();
+        });
+        await act(async () => {
+            await hook.result.current.retry?.();
+        });
+        expect(created).toHaveLength(1);
+        await act(async () => {
+            release();
+            await deleting;
+        });
+    });
+
+    it('does not resurrect a message that retry deleted when the superseded turn saves late', async () => {
+        const failing: Script = async function* () {
+            yield { type: 'text-delta', text: 'partial' };
+            yield { type: 'finished', status: 'error', error: 'boom' };
+        };
+        const { hook, repository } = setup([failing, textScript('fixed')]);
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        const original = repository.saveMessage.bind(repository);
+        let failedId = '';
+        jest.spyOn(repository, 'saveMessage').mockImplementation(async message => {
+            if (message.role === 'assistant' && !failedId) {
+                failedId = message.id;
+                await gate; // the superseded turn's final write is still in flight
+            }
+            return original(message);
+        });
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('hello');
+        });
+        await waitFor(() => expect(failedId).not.toBe(''));
+        await act(async () => {
+            await hook.result.current.retry?.();
+        });
+        await act(async () => {
+            release();
+            await sending;
+        });
+        const stored = await repository.listMessages(hook.result.current.conversation!.id);
+        expect(stored.map(message => message.id)).not.toContain(failedId);
+        expect(hook.result.current.messages.map(message => message.id)).not.toContain(failedId);
+    });
+
     it('does not drop a pending open when a send fails before any turn starts', async () => {
         let provider: ReturnType<AssistantControllerDeps['resolveProvider']> = PROVIDER;
         const { hook, repository } = setup([textScript('unused')], { resolveProvider: () => provider });

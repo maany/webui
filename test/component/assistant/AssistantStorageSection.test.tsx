@@ -10,7 +10,7 @@ jest.mock('@/lib/infrastructure/assistant/indexeddb-conversation-repository', ()
 jest.mock('@/lib/infrastructure/hooks/useAssistantShell', () => ({ useAssistantPanel: jest.fn() }));
 
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AssistantStorageSection } from '@/component-library/features/assistant/settings/AssistantStorageSection';
 import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/in-memory-conversation-repository';
 import { createConversationRepository } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
@@ -35,6 +35,23 @@ async function seed(repository: InMemoryConversationRepository) {
 const renderSection = () => render(<AssistantStorageSection settings={getDefaultAssistantSettings()} onUpdate={jest.fn()} />);
 
 describe('AssistantStorageSection', () => {
+    it('shows the memory-only notice once the repository reports lost persistence, and unsubscribes on unmount', async () => {
+        const { repository } = setup();
+        let lost: () => void = () => undefined;
+        const unsubscribe = jest.fn();
+        (repository as unknown as { onPersistenceLost: (listener: () => void) => () => void }).onPersistenceLost = listener => {
+            lost = listener;
+            return unsubscribe;
+        };
+        const { unmount } = renderSection();
+        await screen.findByText(/chats? for this account/);
+        expect(screen.queryByText(/History is kept in memory only/)).not.toBeInTheDocument();
+        act(() => lost());
+        expect(await screen.findByText(/History is kept in memory only/)).toBeInTheDocument();
+        unmount();
+        expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
+
     it('deletes through the repository when the assistant is not mounted', async () => {
         const { repository, notifyStorageChanged } = setup();
         await seed(repository);

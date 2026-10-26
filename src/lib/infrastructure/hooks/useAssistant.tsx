@@ -179,6 +179,8 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     const busyRef = useRef<object | null>(null);
     const deletingAllRef = useRef(false);
     const deletedRef = useRef<Set<string>>(new Set());
+    /** Message ids a retry removed: a superseded turn must not write them back. */
+    const deletedMessagesRef = useRef<Set<string>>(new Set());
     const openSeqRef = useRef(0);
     const generationRef = useRef(0);
     const lastContextRouteRef = useRef<string | undefined>(undefined);
@@ -204,6 +206,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     }, []);
     const replaceMessage = useCallback(
         (message: ChatMessage) => {
+            if (deletedMessagesRef.current.has(message.id)) return;
             const current = messagesRef.current;
             const index = current.findIndex(item => item.id === message.id);
             setMessages(index < 0 ? [...current, message] : [...current.slice(0, index), message, ...current.slice(index + 1)]);
@@ -274,13 +277,12 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     // First mount: open storage, load history, enforce retention.
     useEffect(() => {
         let cancelled = false;
+        let unsubscribe: (() => void) | undefined;
         void (async () => {
             const { repository, persistent: isPersistent } = await depsRef.current.repository;
             if (cancelled) return;
             setPersistent(isPersistent);
-            repository.onPersistenceLost?.(() => {
-                if (!cancelled) setPersistent(false);
-            });
+            unsubscribe = repository.onPersistenceLost?.(() => setPersistent(false));
             await repository
                 .enforceRetention(
                     depsRef.current.retention(),
@@ -292,6 +294,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         })();
         return () => {
             cancelled = true;
+            unsubscribe?.();
             abortRef.current?.abort();
         };
     }, [refreshConversations]);
@@ -354,6 +357,12 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             const d = depsRef.current;
             const startConversation = conversation;
             const alive = () => !deletedRef.current.has(startConversation.id);
+            const saveMessage = async (message: ChatMessage) => {
+                if (!alive() || deletedMessagesRef.current.has(message.id)) return;
+                await repository.saveMessage(message);
+                // A retry may have removed this message while the write was in flight.
+                if (deletedMessagesRef.current.has(message.id)) await repository.deleteMessage(message.id).catch(() => undefined);
+            };
             const latestConversation = () => (conversationRef.current?.id === startConversation.id ? conversationRef.current : startConversation);
             const { repository } = await d.repository;
             if (!isCurrent()) {
@@ -525,7 +534,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                         setPending(pendingRef.current.filter(item => item.toolCallId !== update.toolCallId));
                     }
                     if (isCurrent()) replaceMessage(message);
-                    if ((update.type === 'tool-result' || update.type === 'approval-required') && alive()) await repository.saveMessage(message);
+                    if (update.type === 'tool-result' || update.type === 'approval-required') await saveMessage(message);
                 }
             } catch (runError) {
                 finalStatus = controller.signal.aborted ? 'stopped' : 'error';
@@ -579,7 +588,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             }
 
             // A conversation deleted while the turn ran must not be written back.
-            if (alive()) await repository.saveMessage(finalMessage);
+            await saveMessage(finalMessage);
             let updatedConversation: Conversation | undefined;
             if (alive()) {
                 const latest = await repository.getConversation(startConversation.id);
@@ -692,7 +701,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     );
 
     const retry = useCallback(async () => {
-        if (busyRef.current) return;
+        if (busyRef.current || deletingAllRef.current) return;
         const current = conversationRef.current;
         const all = messagesRef.current;
         let userIndex = -1;
@@ -705,6 +714,10 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         if (!current || userIndex < 0) return;
         const token = {};
         busyRef.current = token;
+        // Captured before the first await, like send: New chat or an account switch during the delete supersedes this retry.
+        const generation = generationRef.current;
+        const accountKey = depsRef.current.accountKey;
+        const superseded = () => generation !== generationRef.current || depsRef.current.accountKey !== accountKey;
         try {
             setSessionExpired(false);
             const provider = depsRef.current.resolveProvider();
@@ -717,15 +730,18 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             // under the old id can never write into the retry.
             const failed = all[userIndex + 1];
             if (failed) {
+                deletedMessagesRef.current.add(failed.id);
                 setMessages(all.filter(message => message.id !== failed.id));
                 const { repository } = await depsRef.current.repository;
+                if (superseded()) return;
                 await repository.deleteMessage(failed.id).catch(() => undefined);
+                if (superseded()) return;
             }
-            await runTurn(current, all[userIndex], provider, { allowOverflowRetry: true, forceCompaction: false }, token);
+            await runTurn(current, all[userIndex], provider, { allowOverflowRetry: true, forceCompaction: false, generation }, token);
         } finally {
             release(token);
         }
-    }, [release, runTurn]);
+    }, [release, runTurn, setMessages]);
 
     const continueTurn = useCallback(() => send('Continue.', { attachPageContext: false }), [send]);
 

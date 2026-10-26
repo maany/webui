@@ -35,20 +35,32 @@ async function openAssistantDb(onBlocking: (db: IDBPDatabase<AssistantDB>) => vo
     return holder.db;
 }
 
+/** Bumped by every clear: repositories created before it must not reopen (and so recreate) the database. */
+let clearEpoch = 0;
+
+function isInvalidState(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'InvalidStateError';
+}
+
+export interface IndexedDbRepositoryOptions {
+    openTimeoutMs?: number;
+}
+
 export class IndexedDbConversationRepository implements AssistantConversationRepositoryPort {
     private db?: IDBPDatabase<AssistantDB>;
     private reopening?: Promise<IDBPDatabase<AssistantDB> | undefined>;
     private fallback?: InMemoryConversationRepository;
-    private readonly lostListeners: Array<() => void> = [];
+    private readonly lostListeners = new Set<() => void>();
+    private readonly epoch = clearEpoch;
 
-    private constructor(db: IDBPDatabase<AssistantDB>) {
+    private constructor(db: IDBPDatabase<AssistantDB>, private readonly openTimeoutMs: number) {
         this.db = db;
     }
 
-    static async open(): Promise<IndexedDbConversationRepository> {
+    static async open(options: IndexedDbRepositoryOptions = {}): Promise<IndexedDbConversationRepository> {
         const repository: { current?: IndexedDbConversationRepository } = {};
         const db = await openAssistantDb(closed => repository.current?.forget(closed));
-        repository.current = new IndexedDbConversationRepository(db);
+        repository.current = new IndexedDbConversationRepository(db, options.openTimeoutMs ?? OPEN_TIMEOUT_MS);
         return repository.current;
     }
 
@@ -57,25 +69,49 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
         return this.fallback === undefined;
     }
 
-    onPersistenceLost(listener: () => void): void {
-        this.lostListeners.push(listener);
+    /** Returns a function that removes the listener again. */
+    onPersistenceLost(listener: () => void): () => void {
+        this.lostListeners.add(listener);
+        return () => {
+            this.lostListeners.delete(listener);
+        };
     }
 
     private forget(closed: IDBPDatabase<AssistantDB>): void {
         if (this.db === closed) this.db = undefined;
     }
 
+    private degrade(): void {
+        if (this.fallback) return;
+        this.fallback = new InMemoryConversationRepository();
+        Array.from(this.lostListeners).forEach(listener => listener());
+    }
+
     /** The live connection, reopened lazily after the browser closed it; undefined once we fell back to memory. */
     private async connection(): Promise<IDBPDatabase<AssistantDB> | undefined> {
         if (this.fallback) return undefined;
+        // After a clear (logout) nothing from this instance may reach IndexedDB again.
+        if (this.epoch !== clearEpoch) {
+            this.degrade();
+            return undefined;
+        }
         if (this.db) return this.db;
         this.reopening ??= (async () => {
             try {
-                this.db = await openAssistantDb(closed => this.forget(closed));
-                return this.db;
+                const db = await withTimeout(
+                    openAssistantDb(closed => this.forget(closed)),
+                    this.openTimeoutMs,
+                    late => late.close(),
+                );
+                if (this.epoch !== clearEpoch) {
+                    db.close();
+                    this.degrade();
+                    return undefined;
+                }
+                this.db = db;
+                return db;
             } catch {
-                this.fallback = new InMemoryConversationRepository();
-                this.lostListeners.forEach(listener => listener());
+                this.degrade();
                 return undefined;
             } finally {
                 this.reopening = undefined;
@@ -88,8 +124,19 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
         idb: (db: IDBPDatabase<AssistantDB>) => Promise<T>,
         memory: (repository: InMemoryConversationRepository) => Promise<T>,
     ): Promise<T> {
-        const db = await this.connection();
-        return db ? idb(db) : memory(this.fallback as InMemoryConversationRepository);
+        let db = await this.connection();
+        if (db) {
+            try {
+                return await idb(db);
+            } catch (error) {
+                if (!isInvalidState(error)) throw error;
+                // blocking() closed this handle under the operation: reopen and try once more.
+                this.forget(db);
+                db = await this.connection();
+                if (db) return idb(db);
+            }
+        }
+        return memory(this.fallback as InMemoryConversationRepository);
     }
 
     async listConversations(accountKey: string): Promise<Conversation[]> {
@@ -184,9 +231,11 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
     }
 
     async enforceRetention(policy: RetentionSettings, now: Date, protectedIds: readonly string[] = []): Promise<string[]> {
-        const db = await this.connection();
-        if (!db) return (this.fallback as InMemoryConversationRepository).enforceRetention(policy, now, protectedIds);
-        const conversations = await db.getAll('conversations');
+        const conversations = await this.run<Conversation[] | null>(
+            db => db.getAll('conversations'),
+            async () => null,
+        );
+        if (conversations === null) return (this.fallback as InMemoryConversationRepository).enforceRetention(policy, now, protectedIds);
         const candidates = await Promise.all(
             conversations.map(async conversation => ({
                 id: conversation.id,
@@ -248,6 +297,8 @@ export async function createConversationRepository(
 
 /** Deletes every stored conversation of every account (clear on logout). Never throws and never hangs. */
 export async function deleteAssistantDatabase(timeoutMs: number = DELETE_TIMEOUT_MS): Promise<void> {
+    // Set before anything else: a turn still running must not reopen the database behind this clear.
+    clearEpoch += 1;
     if (typeof indexedDB === 'undefined') return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {

@@ -1,8 +1,10 @@
 import 'test/fixtures/assistant-indexeddb';
+import { deleteDB } from 'idb';
 import type { ChatMessage } from '@/lib/core/entity/assistant/conversation';
 import type { AssistantConversationRepositoryPort } from '@/lib/core/port/secondary/assistant-conversation-repository-port';
 import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/in-memory-conversation-repository';
 import {
+    ASSISTANT_DB_NAME,
     createConversationRepository,
     deleteAssistantDatabase,
     IndexedDbConversationRepository,
@@ -121,11 +123,18 @@ async function withIndexedDb(value: unknown, run: () => Promise<void>): Promise<
     }
 }
 
+/** Another tab deleting the database: fires versionchange on our connection without going through our clear. */
+const deleteFromAnotherTab = () => deleteDB(ASSISTANT_DB_NAME);
+
 describe('IndexedDbConversationRepository connection loss', () => {
+    beforeEach(async () => {
+        await deleteAssistantDatabase();
+    });
+
     it('reopens lazily after another tab deleted the database', async () => {
         const repository = await IndexedDbConversationRepository.open();
         await repository.saveConversation(makeConversation('c1', 'root@def'));
-        await deleteAssistantDatabase(); // fires versionchange, so blocking() closes our connection
+        await deleteFromAnotherTab();
         expect(await repository.listConversations('root@def')).toEqual([]);
         await repository.saveConversation(makeConversation('c2', 'root@def'));
         expect((await repository.listConversations('root@def')).map(c => c.id)).toEqual(['c2']);
@@ -133,11 +142,47 @@ describe('IndexedDbConversationRepository connection loss', () => {
         repository.close();
     });
 
+    it('opens once when two operations race the reopen', async () => {
+        const repository = await IndexedDbConversationRepository.open();
+        await deleteFromAnotherTab();
+        const openSpy = jest.spyOn(indexedDB, 'open');
+        const [saved, listed] = await Promise.all([
+            repository.saveConversation(makeConversation('c1', 'root@def')),
+            repository.listConversations('root@def'),
+        ]);
+        expect(saved).toBeUndefined();
+        expect(Array.isArray(listed)).toBe(true);
+        expect(openSpy).toHaveBeenCalledTimes(1);
+        expect((await repository.listConversations('root@def')).map(c => c.id)).toEqual(['c1']);
+        openSpy.mockRestore();
+        repository.close();
+    });
+
+    it('retries once through the reopen path when the handle was closed under an operation', async () => {
+        const repository = await IndexedDbConversationRepository.open();
+        // Closed without going through blocking(), so the repository still holds the dead handle.
+        (repository as unknown as { db: { close(): void } }).db.close();
+        await repository.saveConversation(makeConversation('c1', 'root@def'));
+        expect((await repository.listConversations('root@def')).map(c => c.id)).toEqual(['c1']);
+        expect(repository.persistent).toBe(true);
+        repository.close();
+    });
+
+    it('falls back to memory when the lazy reopen times out', async () => {
+        const repository = await IndexedDbConversationRepository.open({ openTimeoutMs: 10 });
+        await deleteFromAnotherTab();
+        await withIndexedDb({ open: () => new IDBOpenDBRequest() }, async () => {
+            await repository.saveConversation(makeConversation('c1', 'root@def'));
+        });
+        expect(repository.persistent).toBe(false);
+        expect((await repository.listConversations('root@def')).map(c => c.id)).toEqual(['c1']);
+    });
+
     it('falls back to memory and reports persistent false when the reopen fails', async () => {
         const repository = await IndexedDbConversationRepository.open();
         const lost = jest.fn();
         repository.onPersistenceLost(lost);
-        await deleteAssistantDatabase();
+        await deleteFromAnotherTab();
         await withIndexedDb(
             {
                 open: () => {
@@ -151,6 +196,39 @@ describe('IndexedDbConversationRepository connection loss', () => {
         expect(repository.persistent).toBe(false);
         expect(lost).toHaveBeenCalledTimes(1);
         expect((await repository.listConversations('root@def')).map(c => c.id)).toEqual(['c1']);
+    });
+
+    it('stops notifying a listener once it unsubscribed', async () => {
+        const repository = await IndexedDbConversationRepository.open();
+        const lost = jest.fn();
+        const unsubscribe = repository.onPersistenceLost(lost);
+        unsubscribe();
+        await deleteFromAnotherTab();
+        await withIndexedDb(
+            {
+                open: () => {
+                    throw new Error('x');
+                },
+            },
+            async () => {
+                await repository.saveConversation(makeConversation('c1', 'root@def'));
+            },
+        );
+        expect(lost).not.toHaveBeenCalled();
+    });
+
+    it('does not recreate the database when an old repository writes after the clear', async () => {
+        const old = await IndexedDbConversationRepository.open();
+        await old.saveConversation(makeConversation('c1', 'root@def'));
+        await deleteAssistantDatabase();
+        await old.saveMessage(message('m1', 'c1', '2026-10-25T10:00:01.000Z'));
+        await old.saveConversation(makeConversation('c1', 'root@def'));
+        expect(old.persistent).toBe(false);
+        const databases = await indexedDB.databases();
+        expect(databases.map(database => database.name)).not.toContain(ASSISTANT_DB_NAME);
+        const fresh = await IndexedDbConversationRepository.open();
+        expect(await fresh.listConversations('root@def')).toEqual([]);
+        fresh.close();
     });
 });
 

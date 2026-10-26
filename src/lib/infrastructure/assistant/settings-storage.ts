@@ -99,19 +99,14 @@ function readSessionKeys(): Record<string, string> {
     }
 }
 
-export interface LoadAssistantSettingsOptions {
-    /** Whether the operator offers a default model. Decides the fallback when the active provider was dropped. */
-    operatorAvailable?: boolean;
-}
-
 /**
  * Parses each top-level section on its own and keeps the valid ones, so one bad field
  * (for example a hand-edited retention value) does not reset providers and keys.
  * Providers and user skills that fail individually are dropped. An active provider that
- * is no longer there falls back like ProvidersTab does on removal: the operator model if
- * it is available, else the first remaining provider, else the default.
+ * is no longer there falls back to the first remaining provider, else to 'operator' (which
+ * resolves to the operator model, or to the "no provider" message when there is none).
  */
-function salvageSettings(value: unknown, options: LoadAssistantSettingsOptions): AssistantSettings | undefined {
+function salvageSettings(value: unknown): AssistantSettings | undefined {
     if (typeof value !== 'object' || value === null || (value as { version?: unknown }).version !== STORAGE_VERSION) return undefined;
     const stored = value as Record<string, unknown>;
     const result: Record<string, unknown> = { ...getDefaultAssistantSettings() };
@@ -136,7 +131,7 @@ function salvageSettings(value: unknown, options: LoadAssistantSettingsOptions):
     const providers = result.providers as ProviderConfig[];
     const active = result.activeProviderId;
     if (active !== 'operator' && !providers.some(provider => provider.id === active)) {
-        result.activeProviderId = options.operatorAvailable === false ? providers[0]?.id ?? 'operator' : 'operator';
+        result.activeProviderId = providers[0]?.id ?? 'operator';
     }
     return result as unknown as AssistantSettings;
 }
@@ -158,14 +153,14 @@ function salvageSkills(value: unknown): AssistantSettings['skills'] {
 }
 
 /** zod-validated; salvages valid sections of a partly invalid entry, resets to the defaults on a missing entry, version mismatch or invalid JSON. */
-export function loadAssistantSettings(options: LoadAssistantSettingsOptions = {}): AssistantSettings {
+export function loadAssistantSettings(): AssistantSettings {
     if (!isBrowser()) return getDefaultAssistantSettings();
     try {
         const raw = localStorage.getItem(ASSISTANT_SETTINGS_KEY);
         if (!raw) return getDefaultAssistantSettings();
         const json: unknown = JSON.parse(raw);
         const parsed = AssistantSettingsSchema.safeParse(json);
-        const settings = parsed.success ? parsed.data : salvageSettings(json, options);
+        const settings = parsed.success ? parsed.data : salvageSettings(json);
         if (!settings) return getDefaultAssistantSettings();
         if (settings.keyStorage !== 'session') return settings;
         const keys = readSessionKeys();
