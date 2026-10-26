@@ -32,10 +32,12 @@ export function buildTestRequest(resolved: ResolvedProvider): { url: string; ini
     if (!base) return undefined;
     const root = trimSlashes(base);
     const headers: Record<string, string> = { 'content-type': 'application/json' };
+    const direct = resolved.via === 'direct';
 
     if (resolved.kind === 'anthropic') {
         headers['anthropic-version'] = ANTHROPIC_API_VERSION;
-        if (resolved.via === 'direct') {
+        // The relay injects the key server side; never send credentials on that path.
+        if (direct) {
             headers['anthropic-dangerous-direct-browser-access'] = 'true';
             if (resolved.apiKey) headers['x-api-key'] = resolved.apiKey;
         }
@@ -48,7 +50,7 @@ export function buildTestRequest(resolved: ResolvedProvider): { url: string; ini
         return { url: `${root}/v1/messages`, init: { method: 'POST', headers, body: JSON.stringify(body) } };
     }
 
-    if (resolved.apiKey) headers.authorization = `Bearer ${resolved.apiKey}`;
+    if (direct && resolved.apiKey) headers.authorization = `Bearer ${resolved.apiKey}`;
     const url = resolved.kind === 'ollama' && !root.endsWith('/v1') ? `${root}/v1/chat/completions` : `${root}/chat/completions`;
     const limit = resolved.kind === 'openai' ? { max_completion_tokens: MAX_TOKENS } : { max_tokens: MAX_TOKENS };
     const body = {
@@ -108,6 +110,8 @@ function httpFailure(resolved: ResolvedProvider, status: number, message: string
         if (status === 404) return fail('unknown', 'Rucio bot is not available on this server.');
         if (status === 429) return fail('unknown', 'Too many requests to the operator model. Wait a minute and try again.');
         if (status === 502) return fail('network', 'The server could not reach the operator model.');
+        if (status === 403) return fail('auth', 'The server refused the request. You may not be allowed to use Rucio bot.');
+        if (status >= 500) return fail('network', `The server returned HTTP ${status}. Try again later.`);
     }
     if (status === 401 || status === 403) return fail('auth', 'The provider rejected the API key. Check that it is correct and active.');
     if ((status === 400 || status === 404 || status === 422) && /\btools?\b/i.test(message)) {
@@ -133,28 +137,37 @@ function networkFailure(resolved: ResolvedProvider, target: URL, page: URL): Con
     if (page.protocol === 'https:' && target.protocol === 'http:' && !isLoopbackHost(target.hostname)) {
         return fail(
             'mixed-content',
-            `This page uses HTTPS, so the browser blocks plain HTTP requests to ${target.host}. Serve the model over HTTPS, for example behind a Caddy or nginx reverse proxy.`,
+            `This page uses HTTPS, so the browser likely blocked a plain HTTP request to ${target.host}. Serve the model over HTTPS, for example behind a Caddy or nginx reverse proxy.`,
         );
     }
     if (isLocalHost(target.hostname) && !isLocalHost(page.hostname)) {
         const serverHint = resolved.kind === 'ollama' ? `start Ollama with OLLAMA_ORIGINS=${origin}` : `allow the origin ${origin} on that server`;
         return fail(
             'lna',
-            `The browser blocked access to ${target.host} on your local network. Allow local network access when the browser asks, and ${serverHint}`,
+            `The browser likely blocked access to ${target.host} on your local network. Allow local network access when the browser asks, and ${serverHint}`,
         );
     }
     switch (resolved.kind) {
         case 'ollama':
-            return fail('cors', `Ollama did not accept requests from this page. Start it with: OLLAMA_ORIGINS=${origin} ollama serve`);
+            return fail(
+                'cors',
+                `Could not reach ${target.host}. Is Ollama running? If it is, it may be rejecting requests from this page: start it with OLLAMA_ORIGINS=${origin} ollama serve`,
+            );
         case 'openai-compatible':
             return fail(
                 'cors',
-                `The server did not accept requests from this page. For LiteLLM set LITELLM_CORS_ORIGINS=${origin}. For other servers, allow the origin ${origin}.`,
+                `Could not reach ${target.host}. Likely causes: the server is not running, the URL is wrong, or it rejects requests from this origin. For LiteLLM set LITELLM_CORS_ORIGINS=${origin}. For other servers, allow the origin ${origin}.`,
             );
         case 'openai':
-            return fail('auth', 'OpenAI refused the request without CORS headers. This usually means the API key is invalid or revoked.');
+            return fail(
+                'network',
+                `Could not reach ${target.host}. Likely causes: no network or proxy blocks it, or the API key is invalid or revoked (OpenAI sends no CORS headers on that error).`,
+            );
         default:
-            return fail('network', `Could not reach ${target.host}. Check your network or proxy settings.`);
+            return fail(
+                'network',
+                `Could not reach ${target.host}. Likely causes: no network, a proxy or firewall is blocking it, or the URL is wrong.`,
+            );
     }
 }
 

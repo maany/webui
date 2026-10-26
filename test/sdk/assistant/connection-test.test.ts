@@ -83,6 +83,13 @@ describe('buildTestRequest', () => {
         });
     });
 
+    it('never sends credentials through the relay, even when a key is present', () => {
+        const compat = buildTestRequest({ ...operator, apiKey: 'sk-leak' })!;
+        expect(compat.init.headers).toEqual({ 'content-type': 'application/json' });
+        const claude = buildTestRequest({ ...operatorAnthropic, apiKey: 'sk-leak' })!;
+        expect(claude.init.headers).toEqual({ 'content-type': 'application/json', 'anthropic-version': '2023-06-01' });
+    });
+
     it('has no request for an OpenAI-compatible provider without a base URL', () => {
         expect(buildTestRequest({ ...litellm, baseURL: undefined })).toBeUndefined();
     });
@@ -163,7 +170,7 @@ describe('testProviderConnection', () => {
         await expect(run(ollama, failNetwork())).resolves.toEqual({
             ok: false,
             code: 'cors',
-            hint: 'Ollama did not accept requests from this page. Start it with: OLLAMA_ORIGINS=http://localhost:3000 ollama serve',
+            hint: 'Could not reach localhost:11434. Is Ollama running? If it is, it may be rejecting requests from this page: start it with OLLAMA_ORIGINS=http://localhost:3000 ollama serve',
         });
     });
 
@@ -172,7 +179,7 @@ describe('testProviderConnection', () => {
         expect(result).toEqual({
             ok: false,
             code: 'lna',
-            hint: 'The browser blocked access to localhost:11434 on your local network. Allow local network access when the browser asks, and start Ollama with OLLAMA_ORIGINS=https://rucio-ui.cern.ch',
+            hint: 'The browser likely blocked access to localhost:11434 on your local network. Allow local network access when the browser asks, and start Ollama with OLLAMA_ORIGINS=https://rucio-ui.cern.ch',
         });
     });
 
@@ -187,12 +194,24 @@ describe('testProviderConnection', () => {
         expect(result).toEqual({
             ok: false,
             code: 'cors',
-            hint: 'The server did not accept requests from this page. For LiteLLM set LITELLM_CORS_ORIGINS=https://rucio-ui.cern.ch. For other servers, allow the origin https://rucio-ui.cern.ch.',
+            hint: 'Could not reach litellm.example.org. Likely causes: the server is not running, the URL is wrong, or it rejects requests from this origin. For LiteLLM set LITELLM_CORS_ORIGINS=https://rucio-ui.cern.ch. For other servers, allow the origin https://rucio-ui.cern.ch.',
         });
     });
 
-    it('treats an opaque OpenAI failure as a key problem', async () => {
-        await expect(run(openai, failNetwork())).resolves.toMatchObject({ ok: false, code: 'auth' });
+    it('hedges an opaque OpenAI failure and mentions the key as one possible cause', async () => {
+        const result = await run(openai, failNetwork());
+        expect(result).toMatchObject({ ok: false, code: 'network' });
+        expect(result.ok === false && result.hint).toContain('API key');
+        expect(result.ok === false && result.hint).toContain('Likely causes');
+    });
+
+    it('uses relay specific messages for relay 403 and 5xx', async () => {
+        await expect(run(operator, respond(403))).resolves.toMatchObject({ ok: false, code: 'auth', hint: expect.stringContaining('Rucio bot') });
+        await expect(run(operator, respond(500))).resolves.toEqual({
+            ok: false,
+            code: 'network',
+            hint: 'The server returned HTTP 500. Try again later.',
+        });
     });
 
     it('reports a network problem for Anthropic and the relay', async () => {
@@ -221,11 +240,18 @@ describe('testProviderConnection', () => {
                     init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
                 }),
         );
-        await expect(run(openai, hang, { timeoutMs: 2000 })).resolves.toEqual({
-            ok: false,
-            code: 'network',
-            hint: 'No answer within 2 seconds. Check the base URL and that the server is running.',
-        });
+        jest.useFakeTimers();
+        try {
+            const pending = run(openai, hang, { timeoutMs: 2000 });
+            await jest.advanceTimersByTimeAsync(2000);
+            await expect(pending).resolves.toEqual({
+                ok: false,
+                code: 'network',
+                hint: 'No answer within 2 seconds. Check the base URL and that the server is running.',
+            });
+        } finally {
+            jest.useRealTimers();
+        }
     });
 
     it('stops when the caller aborts', async () => {
