@@ -2,6 +2,52 @@ import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from '@open
 import { REDACTED, ScrubbingSpanProcessor, scrubAttributes, scrubText } from '@/lib/infrastructure/assistant/telemetry-scrubber';
 
 describe('scrubText', () => {
+    describe('fix round 6', () => {
+        const HEX = '0123456789abcdef0123456789abcdef';
+
+        it('keeps DIDs and names on lines that contain an earlier =', () => {
+            for (const text of [
+                `copies=2 created for user.jdoe:run-v2-${HEX}`,
+                `Rule created with copies=1 for dataset user.jdoe:data-v1-${HEX} on CERN-PROD`,
+                `| copies=2 | user.jdoe:run-v2-${HEX} |`,
+                `Use \x60x=1\x60 with \x60user.jdoe:run-v2-${HEX}\x60`,
+                `x=1 SITE-token-${HEX}`,
+                `?scope=user.jdoe&name=run-v2-${HEX}`,
+            ]) {
+                expect(scrubText(text)).toBe(text);
+            }
+        });
+
+        it('still redacts DN tokens whose last part has spaces or punctuation', () => {
+            for (const cn of ['John Doe', 'John Doe (1)', 'Doe, John']) {
+                expect(scrubText(`jdoe-/DC=ch/OU=Organic Units/CN=${cn}-webui-${HEX}`)).not.toContain(HEX);
+            }
+        });
+
+        it('redacts tokens after JSON escaped line breaks and tabs', () => {
+            for (const text of [
+                String.raw`{"role":"assistant","content":"Here it is:\nroot-root-webui-${HEX}"}`,
+                String.raw`{"content":"Here is your token:\n\nroot-root-webui-${HEX}"}`,
+                String.raw`{"content":"Token\troot-root-webui-${HEX}"}`,
+                String.raw`{\"content\":\"line\\nroot-root-webui-${HEX}\"}`,
+            ]) {
+                expect(scrubText(text)).not.toContain(HEX);
+            }
+            expect(scrubText(String.raw`{"content":"see\nuser.jdoe:run-v2-${HEX}"}`)).toContain(HEX);
+        });
+
+        it('accepts weak keys followed by a quoted value in JS and YAML shapes', () => {
+            expect(scrubText("{secret: 'hunter 22'}")).toBe("{secret: '[REDACTED]'}");
+            expect(scrubText('secret: "hunter 22"')).toBe('secret: "[REDACTED]"');
+            expect(scrubText('{ pass: "hunter22" }')).toBe('{ pass: "[REDACTED]" }');
+            expect(scrubText("Here's the secret: it works")).toBe("Here's the secret: it works");
+        });
+
+        it('treats a JSON \\/ escape as part of a cookie value', () => {
+            expect(scrubText(String.raw`{"h":"Cookie: a=b\/c; other=secret2"}`)).not.toContain('secret2');
+        });
+    });
+
     describe('fix round 5', () => {
         const HEX = '0123456789abcdef0123456789abcdef';
 
@@ -202,6 +248,10 @@ describe('scrubText', () => {
         ['AIza prefixes', 'AIza'.repeat(20000)],
         ['xai prefixes', 'xai-'.repeat(20000)],
         ['escaped quotes', '\\"token\\": '.repeat(6000)],
+        ['escaped newline token starts', '\\na-'.repeat(20000)],
+        ['escaped tab dn starts', '\\ta/b-'.repeat(13000)],
+        ['dn attribute starts', '/CN=a b-'.repeat(10000)],
+        ['weak key colon quotes', 'secret: "'.repeat(9000)],
         ['cookie double escaped openers', 'Cookie: a=\\\\\\"'.repeat(5000)],
         ['cookie json escapes', `Cookie: a=${'\\\\t'.repeat(26000)}`],
         ['escaped header object openers', '\\"name\\":\\"cookie\\",\\"value\\":\\"'.repeat(2000)],

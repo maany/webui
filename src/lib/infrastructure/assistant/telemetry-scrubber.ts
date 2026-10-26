@@ -38,11 +38,11 @@ const SECRET_KEY_NAMES = [
     'token',
 ].join('|');
 
-/** Short key names that are also ordinary words: keys only when quoted (`"secret":`) or followed by `=`. */
+/** Short key names that are also ordinary words: keys only when quoted (`"secret":`), followed by `=`, or followed by `:` and a quoted value. */
 const WEAK_KEY_NAMES = ['pwd', 'pass', 'secret'].join('|');
 
 /** A secret key name, as used by every key based rule below. */
-const SECRET_KEY = String.raw`(?:${SECRET_KEY_NAMES}|(?<=["'])(?:${WEAK_KEY_NAMES})(?=\\?["'])|(?:${WEAK_KEY_NAMES})(?=\s*=))`;
+const SECRET_KEY = String.raw`(?:${SECRET_KEY_NAMES}|(?<=["'])(?:${WEAK_KEY_NAMES})(?=\\?["'])|(?:${WEAK_KEY_NAMES})(?=\s*=|\s*:\s*\\?["']))`;
 
 /** camelCase key names (`langfuseSecretKey`), matched case sensitively after a lower case letter or digit. */
 const CAMEL_KEY_NAMES = [
@@ -73,11 +73,11 @@ const SECRET_HEADER_NAMES = 'x-api-key|authorization|proxy-authorization|x-rucio
 /**
  * Cookie header value: `name=value` pairs. A value may be quoted (`sid="abc"`, `sid=\"abc\"` in a JSON string,
  * `sid=\\\"abc\\\"` in JSON in JSON); a quoted value only counts when a cookie delimiter follows its closing quote, so a
- * value ending in `=` cannot swallow the next JSON field. JSON escapes `\\`, `\t` and `\u` are part of the value.
+ * value ending in `=` cannot swallow the next JSON field. JSON escapes `\\`, `\t`, `\u` and `\/` are part of the value.
  * Stops at a line end, a raw quote (end of a JSON string) or any other backslash (end of a JSON-in-JSON string).
  * Each alternative scans only to the next quote or backslash, so the rule is linear.
  */
-const COOKIE_VALUE = String.raw`(?:=\\\\\\"[^"\\\r\n]*\\\\\\"(?=[;\s]|\\|$)|=\\"[^"\\\r\n]*\\"(?=[;\s"]|\\[rnt"\\]|$)|="[^"\r\n]*"(?=[;\s]|$)|\\(?:\\|t|u)|[^\r\n"\\])+`;
+const COOKIE_VALUE = String.raw`(?:=\\\\\\"[^"\\\r\n]*\\\\\\"(?=[;\s]|\\|$)|=\\"[^"\\\r\n]*\\"(?=[;\s"]|\\[rnt"\\]|$)|="[^"\r\n]*"(?=[;\s]|$)|\\(?:\\|t|u|/)|[^\r\n"\\])+`;
 
 /** Inside a raw JSON string: escapes are consumed, the value ends at the closing quote. */
 const RAW_QUOTED_VALUE = String.raw`(?:\\[\s\S]|[^"\\])*`;
@@ -92,6 +92,12 @@ const ESCAPED_HEADER_VALUE = String.raw`(?:\\\\(?:\\[\s\S]|[^\\])|\\[^"\\]|[^"\\
 
 /** Characters that delimit a standalone token in text, markdown and code. */
 const TOKEN_DELIMITERS = String.raw`\s"'<>()\[\]{}\x60*,;|`;
+
+/**
+ * A token run starts at a delimiter, the text start or right after a JSON escaped line break or tab (`\n`, `\r`, `\t`).
+ * Runs stop at a backslash, so each start scans a disjoint run and the rules stay linear.
+ */
+const TOKEN_START = String.raw`(?:(?<![^${TOKEN_DELIMITERS}])|(?<=\\[nrt]))`;
 
 /**
  * End of a standalone Rucio token: not followed by more name characters or by `.ext`, so a DID such as
@@ -152,20 +158,18 @@ const SCRUB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
     // starts at a delimiter (whitespace, quotes, brackets, backticks, `*`, `,`, `;`, `|`) or the text start, has at least
     // three parts before the hex, and ends at TOKEN_END. DIDs (scope:name, extensions) and two-part names such as
     // SITE-token-<hex> are kept. Only run starts are tried.
-    [
-        new RegExp(String.raw`(?<![^${TOKEN_DELIMITERS}])[A-Za-z0-9_]+-[^${TOKEN_DELIMITERS}]*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`, 'g'),
-        REDACTED,
-    ],
-    // Tokens whose identity is an x509 DN or OIDC subject: the run holds a `/` or `=` before the tail.
+    [new RegExp(String.raw`${TOKEN_START}[A-Za-z0-9_]+-[^${TOKEN_DELIMITERS}\\]*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`, 'g'), REDACTED],
+    // Tokens whose identity is an x509 DN or OIDC subject: the run holds a `/` or `=` before the tail. Query strings
+    // (`?scope=user.jdoe&name=...`) are not identities, so `?` and `&` end the run.
     [
         new RegExp(
-            String.raw`(?<![^${TOKEN_DELIMITERS}])[^${TOKEN_DELIMITERS}:/=]*[/=][^${TOKEN_DELIMITERS}]*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`,
+            String.raw`${TOKEN_START}[^${TOKEN_DELIMITERS}\\:/=?&]*[/=][^${TOKEN_DELIMITERS}\\?&]*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`,
             'g',
         ),
         REDACTED,
     ],
-    // The last DN part may hold spaces (`CN=John Doe-<appid>-<hex>`): one bounded start after each `=`.
-    [new RegExp(String.raw`(?<==)[^\r\n"'<>=/]{1,128}-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`, 'g'), REDACTED],
+    // The last DN part may hold spaces (`CN=John Doe-<appid>-<hex>`): one bounded start after each DN attribute (`/CN=`).
+    [new RegExp(String.raw`(?<=/[A-Za-z]{1,16}=)[^\r\n"'<>=/]{1,128}-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`, 'g'), REDACTED],
 ];
 
 /** Content attributes removed when content must not leave the browser (level lowered after capture). */
