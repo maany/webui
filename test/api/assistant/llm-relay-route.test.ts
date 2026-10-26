@@ -165,9 +165,9 @@ describe('/api/assistant/llm/[...path]', () => {
 
     it('cancels the upstream body on a redirect', async () => {
         jest.spyOn(console, 'error').mockImplementation(() => undefined);
-        const cancel = jest.fn();
-        const body = new ReadableStream({ cancel });
-        upstream.mockResolvedValueOnce(new Response(body, { status: 302, headers: { location: 'http://x/' } }));
+        const cancel = jest.fn(async () => undefined);
+        const redirect = { status: 302, headers: new Headers({ location: 'http://x/' }), body: { cancel } };
+        upstream.mockResolvedValueOnce(redirect as unknown as Response);
         expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(502);
         expect(cancel).toHaveBeenCalled();
     });
