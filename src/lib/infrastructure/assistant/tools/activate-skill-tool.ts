@@ -27,10 +27,14 @@ const CLOSING_SKILL_TAG_ALL = new RegExp(CLOSING_SKILL_TAG.source, 'gi');
 /**
  * Rewrites any closing skill tag hiding in a body to `<\/tag`. Matches after NFKC normalisation and
  * format-character stripping, so full-width, zero-width, entity and spaced variants are caught too.
- * Benign text is returned untouched.
+ * Benign text is returned untouched; a body that hides a closing tag comes back as the normalised copy.
  */
 function neutraliseSkillTags(body: string): string {
-    const normalised = body.normalize('NFKC').replace(/[\p{Cf}\p{Mn}]/gu, '');
+    // NFKD first so a mark cannot compose with `<` (U+226E) before the strip; NFKC after to fold full-width forms.
+    const normalised = body
+        .normalize('NFKD')
+        .replace(/[\p{Cf}\p{Mn}]/gu, '')
+        .normalize('NFKC');
     return CLOSING_SKILL_TAG.test(normalised) ? normalised.replace(CLOSING_SKILL_TAG_ALL, (_match, tag: string) => `<\\/${tag}`) : body;
 }
 

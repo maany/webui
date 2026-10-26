@@ -133,21 +133,25 @@ export function skillToolFilter(
  * call order, and the guard waits for pending activations to settle) and all later steps.
  */
 export function guardToolsForSkills(tools: RegisteredTool<any>[], tracker: SkillActivationTracker = skillActivations): RegisteredTool<any>[] {
-    return tools.map(tool => ({
-        spec: tool.spec,
-        execute: async (args, ctx): Promise<unknown | ToolError> => {
-            await tracker.whenSettled(ctx.conversationId);
-            if (!tracker.allows(ctx.conversationId, tool.spec.name)) {
-                const active = tracker.active(ctx.conversationId).map(s => s.name);
-                const names = active.join(', ');
-                const phrase = active.length > 1 ? `the skills ${names} are active` : `the skill ${names} is active`;
-                const allowed = tracker.restriction(ctx.conversationId) ?? [];
-                return {
-                    error: 'denied_by_policy',
-                    message: `${tool.spec.name} is not available while ${phrase}. Allowed tools: ${allowed.join(', ') || 'none'}.`,
-                };
-            }
-            return tool.execute(args, ctx);
-        },
-    }));
+    return tools.map(tool => {
+        // activate_skill is always allowed and must register its pending activation synchronously at call start.
+        if (tool.spec.name === ACTIVATE_SKILL_TOOL) return tool;
+        return {
+            spec: tool.spec,
+            execute: async (args, ctx): Promise<unknown | ToolError> => {
+                await tracker.whenSettled(ctx.conversationId);
+                if (!tracker.allows(ctx.conversationId, tool.spec.name)) {
+                    const active = tracker.active(ctx.conversationId).map(s => s.name);
+                    const names = active.join(', ');
+                    const phrase = active.length > 1 ? `the skills ${names} are active` : `the skill ${names} is active`;
+                    const allowed = tracker.restriction(ctx.conversationId) ?? [];
+                    return {
+                        error: 'denied_by_policy',
+                        message: `${tool.spec.name} is not available while ${phrase}. Allowed tools: ${allowed.join(', ') || 'none'}.`,
+                    };
+                }
+                return tool.execute(args, ctx);
+            },
+        };
+    });
 }
