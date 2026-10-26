@@ -1,3 +1,5 @@
+import type { AccountTab } from '@/component-library/pages/Account/details/details-account-types';
+
 /**
  * Shared navigation utilities for constructing search URLs
  * Used by SearchBar, CommandPalette, and list pages
@@ -124,7 +126,7 @@ export function buildRuleSearchUrl(filters: RuleSearchFilters = {}): string {
  * Build URL for Rule detail page (direct navigation by ID)
  */
 export function buildRuleDetailUrl(ruleId: string): string {
-    return `/rule/${ruleId}`;
+    return `/rule/${encodeURIComponent(ruleId)}`;
 }
 
 /**
@@ -140,6 +142,64 @@ export function buildSubscriptionSearchUrl(account?: string): string {
     urlParams.set('autoSearch', 'true');
 
     return `/subscriptions?${urlParams.toString()}`;
+}
+
+/**
+ * Build URL for a DID detail page
+ */
+export function buildDIDDetailUrl(scope: string, name: string): string {
+    return `/did/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`;
+}
+
+/**
+ * Build URL for an RSE detail page
+ */
+export function buildRSEDetailUrl(name: string): string {
+    return `/rse/${encodeURIComponent(name)}`;
+}
+
+/**
+ * Build URL for an account detail page. The overview tab is the default and has no ?tab= parameter,
+ * matching DetailsAccountClient's own URL updates.
+ */
+export function buildAccountDetailUrl(account: string, tab?: AccountTab): string {
+    const base = `/account/${encodeURIComponent(account)}`;
+    return tab && tab !== 'overview' ? `${base}?tab=${tab}` : base;
+}
+
+/**
+ * Build URL for the account list (admins only)
+ */
+export function buildAccountsListUrl(): string {
+    return '/accounts';
+}
+
+/**
+ * Build URL for a subscription detail page
+ */
+export function buildSubscriptionDetailUrl(account: string, name: string): string {
+    return `/subscription/${encodeURIComponent(account)}/${encodeURIComponent(name)}`;
+}
+
+/**
+ * Build URL for the create rule wizard
+ */
+export function buildRuleCreateUrl(): string {
+    return '/rule/create';
+}
+
+/**
+ * Build URL for the dashboard
+ */
+export function buildDashboardUrl(): string {
+    return '/dashboard';
+}
+
+/**
+ * Build URL for the Rucio bot settings page
+ */
+export function buildAssistantSettingsUrl(): string {
+    return '/assistant/settings';
 }
 
 /**
