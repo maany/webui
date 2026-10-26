@@ -89,7 +89,8 @@ const SCRUB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
     [/-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----END )[\s\S])*(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----)?/g, REDACTED],
     // Cookie header lines carry several name=value pairs: redact to the end of the line, or to a quote or backslash
     // inside a JSON string. Only when the value looks like `name=value`; anything else falls through to the key rule.
-    [/((?<![A-Za-z0-9])(?:set-cookie|cookie)[ \t]*:[ \t]*)(?=[^\s=;,"\\]+=)[^\r\n"\\]+/gi, `$1${REDACTED}`],
+    // The lookahead is bounded (cookie names are short) so it stays linear on long inputs.
+    [/((?<![A-Za-z0-9])(?:set-cookie|cookie)[ \t]*:[ \t]*)(?=[^\s=;,"\\:]{1,256}=)[^\r\n"\\]+/gi, `$1${REDACTED}`],
     // Quoted values with a raw (unescaped) opening quote: consume escapes, so "a\"b c" is redacted to its closing quote.
     [new RegExp(`((?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES})["']?\\s*[:=]\\s*(["']))(?:\\\\[\\s\\S]|(?!\\2)[^\\\\])+`, 'gi'), `$1${REDACTED}`],
     // Quoted values may hold spaces and commas: "password": "correct horse", secret_key = "a phrase"
