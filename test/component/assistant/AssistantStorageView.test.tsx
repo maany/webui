@@ -91,4 +91,44 @@ describe('AssistantStorageView', () => {
         render(<AssistantStorageView {...props({ error: 'Could not delete this chat.' })} />);
         expect(screen.getByRole('alert')).toHaveTextContent('Could not delete this chat.');
     });
+
+    describe('retention inputs', () => {
+        const edit = (label: string, value: string, commit: 'blur' | 'enter' = 'blur') => {
+            const input = screen.getByLabelText(label);
+            fireEvent.change(input, { target: { value } });
+            if (commit === 'blur') fireEvent.blur(input);
+            else fireEvent.keyDown(input, { key: 'Enter' });
+            return input;
+        };
+
+        it('rounds a fractional value to an integer', () => {
+            const p = props();
+            render(<AssistantStorageView {...p} />);
+            edit('Delete chats older than (days)', '1.5');
+            expect(p.onRetentionChange).toHaveBeenLastCalledWith({ maxAgeDays: 2, maxTotalMB: 50, clearOnLogout: false });
+        });
+
+        it('clamps to the allowed range', () => {
+            const p = props();
+            render(<AssistantStorageView {...p} />);
+            edit('Delete chats older than (days)', '99999');
+            expect(p.onRetentionChange).toHaveBeenLastCalledWith({ maxAgeDays: 3650, maxTotalMB: 50, clearOnLogout: false });
+            edit('Keep at most (MB)', '0', 'enter');
+            expect(p.onRetentionChange).toHaveBeenLastCalledWith({ maxAgeDays: 30, maxTotalMB: 1, clearOnLogout: false });
+            edit('Keep at most (MB)', '5000');
+            expect(p.onRetentionChange).toHaveBeenLastCalledWith({ maxAgeDays: 30, maxTotalMB: 1024, clearOnLogout: false });
+        });
+
+        it('lets the user clear the field while typing and restores it when left empty', () => {
+            const p = props();
+            render(<AssistantStorageView {...p} />);
+            const input = screen.getByLabelText('Delete chats older than (days)') as HTMLInputElement;
+            fireEvent.change(input, { target: { value: '' } });
+            expect(input.value).toBe('');
+            expect(p.onRetentionChange).not.toHaveBeenCalled();
+            fireEvent.blur(input);
+            expect(p.onRetentionChange).not.toHaveBeenCalled();
+            expect(input.value).toBe('30');
+        });
+    });
 });

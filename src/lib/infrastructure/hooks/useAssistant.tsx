@@ -177,6 +177,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     const runnerRef = useRef<AgentRunner | null>(null);
     /** Owner token of the turn (or send) in flight; set synchronously so two sends cannot both start. */
     const busyRef = useRef<object | null>(null);
+    const deletingAllRef = useRef(false);
     const deletedRef = useRef<Set<string>>(new Set());
     const openSeqRef = useRef(0);
     const generationRef = useRef(0);
@@ -619,7 +620,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     const send = useCallback(
         async (text: string, options: { attachPageContext?: boolean } = {}) => {
             const trimmed = text.trim();
-            if (!trimmed || busyRef.current) return;
+            if (!trimmed || busyRef.current || deletingAllRef.current) return;
             const token = {};
             busyRef.current = token;
             openSeqRef.current += 1;
@@ -809,20 +810,28 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     const deleteAllConversations = useCallback(async () => {
         const accountKey = depsRef.current.accountKey;
         if (!accountKey) return;
-        const { repository } = await depsRef.current.repository;
-        const ids = new Set((await repository.listConversations(accountKey)).map(item => item.id));
-        const open = conversationRef.current;
-        if (open && open.accountKey === accountKey) ids.add(open.id);
-        // Marked first so a streaming turn of any of these skips every later write.
-        for (const id of ids) deletedRef.current.add(id);
-        if (open && ids.has(open.id)) resetView();
+        // Blocks new sends until the delete settles; a turn already running is stopped below.
+        deletingAllRef.current = true;
+        const ids = new Set<string>();
         try {
-            await repository.deleteAll(accountKey);
-        } catch (deleteError) {
-            for (const id of ids) deletedRef.current.delete(id);
-            throw deleteError;
+            const { repository } = await depsRef.current.repository;
+            for (const item of await repository.listConversations(accountKey)) ids.add(item.id);
+            // A turn that created its conversation while the list was loading is covered too.
+            const open = conversationRef.current;
+            if (open && open.accountKey === accountKey) ids.add(open.id);
+            // Marked first so a streaming turn of any of these skips every later write.
+            for (const id of ids) deletedRef.current.add(id);
+            if (open && ids.has(open.id)) resetView();
+            try {
+                await repository.deleteAll(accountKey);
+            } catch (deleteError) {
+                for (const id of ids) deletedRef.current.delete(id);
+                throw deleteError;
+            }
+            await refreshConversations();
+        } finally {
+            deletingAllRef.current = false;
         }
-        await refreshConversations();
     }, [refreshConversations, resetView]);
 
     return {

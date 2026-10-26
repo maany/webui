@@ -1,5 +1,8 @@
+const mockSession: { current: { user: { rucioAccount: string; rucioVO: string } } | null } = {
+    current: { user: { rucioAccount: 'root', rucioVO: 'def' } },
+};
 jest.mock('next-auth/react', () => ({
-    useSession: () => ({ data: { user: { rucioAccount: 'root', rucioVO: 'def' } } }),
+    useSession: () => ({ data: mockSession.current }),
 }));
 jest.mock('@/lib/infrastructure/assistant/indexeddb-conversation-repository', () => ({
     createConversationRepository: jest.fn(),
@@ -16,6 +19,7 @@ import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell'
 import { makeConversation } from 'test/fixtures/assistant-fixtures';
 
 function setup(shellOverrides: Record<string, unknown> = {}) {
+    mockSession.current = { user: { rucioAccount: 'root', rucioVO: 'def' } };
     const repository = new InMemoryConversationRepository();
     (createConversationRepository as jest.Mock).mockResolvedValue({ repository, persistent: true });
     const notifyStorageChanged = jest.fn();
@@ -88,5 +92,59 @@ describe('AssistantStorageSection', () => {
         expect(await screen.findByText('Data tables use 2.0 kB.')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Free memory now' }));
         await waitFor(() => expect(memoryControls.freeMemory).toHaveBeenCalled());
+    });
+
+    it('leaves the list intact and does not notify when a delete fails', async () => {
+        const { repository, notifyStorageChanged } = setup();
+        await seed(repository);
+        jest.spyOn(repository, 'deleteConversation').mockRejectedValueOnce(new Error('disk full'));
+        renderSection();
+        fireEvent.click(await screen.findByRole('button', { name: 'Delete Conversation c1' }));
+        expect(await screen.findByText('Could not delete this chat.')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Delete Conversation c1' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Delete Conversation c2' })).toBeInTheDocument();
+        expect(notifyStorageChanged).not.toHaveBeenCalled();
+    });
+
+    it('shows an error when freeing memory fails', async () => {
+        const memoryControls = { memoryBytes: jest.fn().mockResolvedValue(2048), freeMemory: jest.fn().mockRejectedValue(new Error('worker gone')) };
+        setup({ memoryControls });
+        renderSection();
+        await screen.findByText('Data tables use 2.0 kB.');
+        fireEvent.click(screen.getByRole('button', { name: 'Free memory now' }));
+        expect(await screen.findByText('Could not free memory.')).toBeInTheDocument();
+    });
+
+    it('shows an error instead of rejecting when the chats cannot be loaded', async () => {
+        const { repository } = setup();
+        jest.spyOn(repository, 'listConversations').mockRejectedValue(new Error('db closed'));
+        renderSection();
+        expect(await screen.findByText('Could not load saved chats.')).toBeInTheDocument();
+    });
+
+    it('shows an error instead of rejecting when the repository cannot be opened', async () => {
+        setup();
+        (createConversationRepository as jest.Mock).mockRejectedValue(new Error('blocked'));
+        renderSection();
+        expect(await screen.findByText('Could not load saved chats.')).toBeInTheDocument();
+    });
+
+    it('shows an error when the reload after a delete fails', async () => {
+        const { repository } = setup();
+        await seed(repository);
+        renderSection();
+        fireEvent.click(await screen.findByRole('button', { name: 'Delete Conversation c1' }));
+        jest.spyOn(repository, 'listConversations').mockRejectedValue(new Error('db closed'));
+        expect(await screen.findByText('Could not load saved chats.')).toBeInTheDocument();
+    });
+
+    it('clears the list when the account signs out', async () => {
+        const { repository } = setup();
+        await seed(repository);
+        const { rerender } = renderSection();
+        await screen.findByRole('button', { name: 'Delete Conversation c1' });
+        mockSession.current = null;
+        rerender(<AssistantStorageSection settings={getDefaultAssistantSettings()} onUpdate={jest.fn()} />);
+        await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete Conversation c1' })).not.toBeInTheDocument());
     });
 });

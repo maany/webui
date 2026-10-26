@@ -29,6 +29,64 @@ export interface AssistantStorageViewProps {
     error?: string;
 }
 
+const LOAD_ERROR = 'Could not load saved chats.';
+const RETENTION_LIMITS = { maxAgeDays: { min: 1, max: 3650 }, maxTotalMB: { min: 1, max: 1024 } };
+
+/**
+ * Keeps what the user types as text so the field can be cleared and retyped. Whole numbers in range
+ * are saved as they are typed; anything else is rounded and clamped on blur or Enter, and an empty
+ * field goes back to the saved value.
+ */
+function RetentionNumberInput({
+    label,
+    value,
+    min,
+    max,
+    onCommit,
+}: {
+    label: string;
+    value: number;
+    min: number;
+    max: number;
+    onCommit(next: number): void;
+}) {
+    const [text, setText] = useState(String(value));
+    useEffect(() => setText(String(value)), [value]);
+    const commit = () => {
+        const parsed = Number(text);
+        if (text.trim() === '' || !Number.isFinite(parsed)) {
+            setText(String(value));
+            return;
+        }
+        const next = Math.min(max, Math.max(min, Math.round(parsed)));
+        setText(String(next));
+        if (next !== value) onCommit(next);
+    };
+    return (
+        <label className="flex items-center gap-2 text-sm">
+            <span className="w-48">{label}</span>
+            <input
+                type="number"
+                min={min}
+                max={max}
+                step={1}
+                value={text}
+                onChange={event => {
+                    const raw = event.target.value;
+                    setText(raw);
+                    const parsed = Number(raw);
+                    if (raw.trim() !== '' && Number.isInteger(parsed) && parsed >= min && parsed <= max && parsed !== value) onCommit(parsed);
+                }}
+                onBlur={commit}
+                onKeyDown={event => {
+                    if (event.key === 'Enter') commit();
+                }}
+                className="w-24 rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-0 dark:bg-neutral-900 px-2 py-1"
+            />
+        </label>
+    );
+}
+
 /** Presentational storage and cleanup controls (spec 9.4). */
 export function AssistantStorageView(props: AssistantStorageViewProps) {
     const [confirmAll, setConfirmAll] = useState(false);
@@ -123,28 +181,20 @@ export function AssistantStorageView(props: AssistantStorageViewProps) {
 
             <fieldset className="space-y-3">
                 <legend className="text-lg font-semibold">Retention</legend>
-                <label className="flex items-center gap-2 text-sm">
-                    <span className="w-48">Delete chats older than (days)</span>
-                    <input
-                        type="number"
-                        min={1}
-                        max={3650}
-                        value={retention.maxAgeDays}
-                        onChange={event => props.onRetentionChange({ ...retention, maxAgeDays: Math.max(1, Number(event.target.value) || 1) })}
-                        className="w-24 rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-0 dark:bg-neutral-900 px-2 py-1"
-                    />
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                    <span className="w-48">Keep at most (MB)</span>
-                    <input
-                        type="number"
-                        min={1}
-                        max={1024}
-                        value={retention.maxTotalMB}
-                        onChange={event => props.onRetentionChange({ ...retention, maxTotalMB: Math.max(1, Number(event.target.value) || 1) })}
-                        className="w-24 rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-0 dark:bg-neutral-900 px-2 py-1"
-                    />
-                </label>
+                <RetentionNumberInput
+                    label="Delete chats older than (days)"
+                    value={retention.maxAgeDays}
+                    min={RETENTION_LIMITS.maxAgeDays.min}
+                    max={RETENTION_LIMITS.maxAgeDays.max}
+                    onCommit={maxAgeDays => props.onRetentionChange({ ...retention, maxAgeDays })}
+                />
+                <RetentionNumberInput
+                    label="Keep at most (MB)"
+                    value={retention.maxTotalMB}
+                    min={RETENTION_LIMITS.maxTotalMB.min}
+                    max={RETENTION_LIMITS.maxTotalMB.max}
+                    onCommit={maxTotalMB => props.onRetentionChange({ ...retention, maxTotalMB })}
+                />
                 <label className="flex items-center gap-2 text-sm">
                     <input
                         type="checkbox"
@@ -188,23 +238,37 @@ export function AssistantStorageSection({
 
     useEffect(() => {
         let cancelled = false;
-        void createConversationRepository().then(result => {
-            if (!cancelled) setStore(result);
-        });
+        createConversationRepository()
+            .then(result => {
+                if (!cancelled) setStore(result);
+            })
+            .catch(() => {
+                if (!cancelled) setError(LOAD_ERROR);
+            });
         return () => {
             cancelled = true;
         };
     }, []);
 
     const reload = useCallback(async () => {
-        if (!store || !accountKey) return;
-        setConversations(await store.repository.listConversations(accountKey));
-        setSizes(await store.repository.estimateSizes(accountKey));
-        if (typeof navigator !== 'undefined' && navigator.storage?.estimate) {
-            const estimate = await navigator.storage.estimate().catch(() => undefined);
-            if (estimate?.usage !== undefined && estimate.quota !== undefined) setBrowserUsage({ usage: estimate.usage, quota: estimate.quota });
+        if (!accountKey) {
+            setConversations([]);
+            setSizes({ perConversation: {}, totalBytes: 0 });
+            setError(undefined);
+            return;
         }
-        setMemoryBytes(shell.memoryControls ? await shell.memoryControls.memoryBytes() : null);
+        if (!store) return;
+        try {
+            setConversations(await store.repository.listConversations(accountKey));
+            setSizes(await store.repository.estimateSizes(accountKey));
+            if (typeof navigator !== 'undefined' && navigator.storage?.estimate) {
+                const estimate = await navigator.storage.estimate().catch(() => undefined);
+                if (estimate?.usage !== undefined && estimate.quota !== undefined) setBrowserUsage({ usage: estimate.usage, quota: estimate.quota });
+            }
+            setMemoryBytes(shell.memoryControls ? await shell.memoryControls.memoryBytes() : null);
+        } catch {
+            setError(LOAD_ERROR);
+        }
     }, [store, accountKey, shell.memoryControls]);
 
     useEffect(() => {
@@ -225,11 +289,29 @@ export function AssistantStorageSection({
         await reload();
     };
 
+    const freeMemory = async () => {
+        if (!shell.memoryControls) return;
+        setError(undefined);
+        try {
+            await shell.memoryControls.freeMemory();
+        } catch {
+            setError('Could not free memory.');
+            return;
+        }
+        await reload();
+    };
+
     const exportConversation = async (id: string, format: 'md' | 'json') => {
         if (!store) return;
         const conversation = conversations.find(item => item.id === id);
         if (!conversation) return;
-        const messages = await store.repository.listMessages(id);
+        let messages;
+        try {
+            messages = await store.repository.listMessages(id);
+        } catch {
+            setError('Could not export this chat.');
+            return;
+        }
         if (format === 'md') downloadText(exportFileName(conversation, 'md'), 'text/markdown', conversationToMarkdown(conversation, messages));
         else downloadText(exportFileName(conversation, 'json'), 'application/json', conversationToJson(conversation, messages));
     };
@@ -258,7 +340,7 @@ export function AssistantStorageSection({
                     else if (accountKey) await store?.repository.deleteAll(accountKey);
                 }, 'Could not delete chats.')
             }
-            onFreeMemory={() => void shell.memoryControls?.freeMemory().then(reload)}
+            onFreeMemory={() => void freeMemory()}
         />
     );
 }

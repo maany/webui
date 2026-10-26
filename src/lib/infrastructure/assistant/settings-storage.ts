@@ -44,7 +44,7 @@ const TelemetrySinkSchema = z.object({
     headers: z.record(z.string(), z.string()).optional(),
 });
 
-export const AssistantSettingsSchema: z.ZodType<AssistantSettings> = z.object({
+const SettingsObjectSchema = z.object({
     version: z.literal(STORAGE_VERSION),
     providers: z.array(ProviderSchema),
     activeProviderId: z.string().min(1),
@@ -59,8 +59,14 @@ export const AssistantSettingsSchema: z.ZodType<AssistantSettings> = z.object({
         shareWithOperator: z.boolean().default(false),
     }),
     display: z.object({ detail: z.enum(['compact', 'verbose']) }),
-    retention: z.object({ maxAgeDays: z.number().int().positive(), maxTotalMB: z.number().positive(), clearOnLogout: z.boolean() }),
+    retention: z.object({
+        maxAgeDays: z.number().int().min(1).max(3650),
+        maxTotalMB: z.number().int().min(1).max(1024),
+        clearOnLogout: z.boolean(),
+    }),
 });
+
+export const AssistantSettingsSchema: z.ZodType<AssistantSettings> = SettingsObjectSchema;
 
 const SessionKeysSchema = z.record(z.string(), z.string());
 
@@ -93,15 +99,42 @@ function readSessionKeys(): Record<string, string> {
     }
 }
 
-/** zod-validated; resets to the defaults on a missing entry, version mismatch, invalid JSON or schema violation. */
+/**
+ * Parses each top-level section on its own and keeps the valid ones, so one bad field
+ * (for example a hand-edited retention value) does not reset providers and keys.
+ * Providers that fail individually are dropped.
+ */
+function salvageSettings(value: unknown): AssistantSettings | undefined {
+    if (typeof value !== 'object' || value === null || (value as { version?: unknown }).version !== STORAGE_VERSION) return undefined;
+    const stored = value as Record<string, unknown>;
+    const result: Record<string, unknown> = { ...getDefaultAssistantSettings() };
+    for (const key of Object.keys(SettingsObjectSchema.shape) as (keyof typeof SettingsObjectSchema.shape)[]) {
+        if (key === 'version') continue;
+        if (key === 'providers') {
+            if (Array.isArray(stored.providers)) {
+                result.providers = stored.providers.flatMap(item => {
+                    const provider = ProviderSchema.safeParse(item);
+                    return provider.success ? [provider.data] : [];
+                });
+            }
+            continue;
+        }
+        const section = SettingsObjectSchema.shape[key].safeParse(stored[key]);
+        if (section.success) result[key] = section.data;
+    }
+    return result as unknown as AssistantSettings;
+}
+
+/** zod-validated; salvages valid sections of a partly invalid entry, resets to the defaults on a missing entry, version mismatch or invalid JSON. */
 export function loadAssistantSettings(): AssistantSettings {
     if (!isBrowser()) return getDefaultAssistantSettings();
     try {
         const raw = localStorage.getItem(ASSISTANT_SETTINGS_KEY);
         if (!raw) return getDefaultAssistantSettings();
-        const parsed = AssistantSettingsSchema.safeParse(JSON.parse(raw));
-        if (!parsed.success) return getDefaultAssistantSettings();
-        const settings = parsed.data;
+        const json: unknown = JSON.parse(raw);
+        const parsed = AssistantSettingsSchema.safeParse(json);
+        const settings = parsed.success ? parsed.data : salvageSettings(json);
+        if (!settings) return getDefaultAssistantSettings();
         if (settings.keyStorage !== 'session') return settings;
         const keys = readSessionKeys();
         return {

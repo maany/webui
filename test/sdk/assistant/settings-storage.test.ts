@@ -67,11 +67,11 @@ describe('assistant settings storage', () => {
         expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
     });
 
-    it('resets to the defaults on tampered values', () => {
+    it('resets only the tampered section, and the whole entry for a non-object', () => {
         localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...withProviders(), toolPolicies: { create_rule: 'always' } }));
-        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
+        expect(loadAssistantSettings()).toEqual({ ...withProviders(), toolPolicies: {} });
         localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...withProviders(), providers: [{ ...claude, kind: 'gemini' }] }));
-        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
+        expect(loadAssistantSettings()).toEqual({ ...withProviders(), providers: [] });
         localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify('just a string'));
         expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
     });
@@ -96,12 +96,12 @@ describe('assistant settings storage', () => {
         expect(loadAssistantSettings().telemetry.shareWithOperator).toBe(true);
     });
 
-    it('resets to the defaults when shareWithOperator is not a boolean', () => {
+    it('resets the telemetry section when shareWithOperator is not a boolean', () => {
         localStorage.setItem(
             ASSISTANT_SETTINGS_KEY,
             JSON.stringify({ ...withProviders(), telemetry: { contentLevel: 'metadata', enabled: true, shareWithOperator: 'yes' } }),
         );
-        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
+        expect(loadAssistantSettings()).toEqual(withProviders());
     });
 
     it('keeps API keys out of localStorage when keyStorage is session', () => {
@@ -182,5 +182,32 @@ describe('assistant settings storage', () => {
         });
         clearAssistantSettings();
         expect(sessionStorage.getItem(ASSISTANT_SESSION_KEYS_KEY)).toBeNull();
+    });
+
+    it('keeps providers and resets only the retention section when it is invalid', () => {
+        const stored = { ...withProviders(), retention: { maxAgeDays: 1.5, maxTotalMB: 50, clearOnLogout: true } };
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify(stored));
+        const loaded = loadAssistantSettings();
+        expect(loaded.providers.map(provider => provider.id)).toEqual(['p-claude', 'p-ollama']);
+        expect(loaded.activeProviderId).toBe('p-claude');
+        expect(loaded.display).toEqual({ detail: 'verbose' });
+        expect(loaded.retention).toEqual(getDefaultAssistantSettings().retention);
+    });
+
+    it('rejects an out-of-range retention and drops only the invalid providers', () => {
+        const stored = {
+            ...withProviders(),
+            providers: [claude, { id: 'bad', kind: 'nope', label: 'x', model: 'm' }, ollama],
+            retention: { maxAgeDays: 99999, maxTotalMB: 50, clearOnLogout: false },
+        };
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify(stored));
+        const loaded = loadAssistantSettings();
+        expect(loaded.providers.map(provider => provider.id)).toEqual(['p-claude', 'p-ollama']);
+        expect(loaded.retention).toEqual(getDefaultAssistantSettings().retention);
+    });
+
+    it('still resets everything on a version mismatch', () => {
+        localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...withProviders(), version: 2 }));
+        expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
     });
 });

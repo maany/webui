@@ -788,4 +788,32 @@ describe('useAssistantController races', () => {
         jest.spyOn(repository, 'deleteAll').mockRejectedValueOnce(new Error('disk full'));
         await expect(hook.result.current.deleteAllConversations!()).rejects.toThrow('disk full');
     });
+
+    it('refuses to send while deleteAllConversations is in progress', async () => {
+        const { hook, repository, created } = setup([textScript('never')]);
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        const original = repository.listConversations.bind(repository);
+        jest.spyOn(repository, 'listConversations').mockImplementationOnce(async accountKey => {
+            await gate;
+            return original(accountKey);
+        });
+        let deleting!: Promise<void>;
+        act(() => {
+            deleting = hook.result.current.deleteAllConversations!();
+        });
+        await act(async () => {
+            await hook.result.current.send('too early');
+        });
+        expect(created).toHaveLength(0);
+        await act(async () => {
+            release();
+            await deleting;
+        });
+        expect(await repository.listConversations('root@def')).toEqual([]);
+        await act(async () => {
+            await hook.result.current.send('after');
+        });
+        expect(created).toHaveLength(1);
+    });
 });
