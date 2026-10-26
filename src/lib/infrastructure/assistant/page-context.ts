@@ -1,4 +1,5 @@
 import type { PageContext } from '@/lib/core/entity/assistant/page-context';
+import { isSecretFieldName } from '@/lib/core/services/assistant-secret-keys';
 
 export const PAGE_SUMMARY_MAX_CHARS = 500;
 const TITLE_MAX_CHARS = 200;
@@ -7,20 +8,8 @@ const PARAM_KEY_MAX_CHARS = 64;
 const PARAM_VALUE_MAX_CHARS = 256;
 const MAX_PARAMS = 30;
 
-const SENSITIVE_EXACT_KEYS = new Set([
-    'code',
-    'password',
-    'secret',
-    'key',
-    'apikey',
-    'session',
-    'sessionid',
-    'auth',
-    'authorization',
-    'jwt',
-    'bearer',
-]);
-const SENSITIVE_KEY_SUFFIXES = ['token', 'secret', 'password', 'apikey'];
+/** Param names dropped on top of the shared secret-name rule: OAuth codes and generic keys. */
+const PARAM_ONLY_SENSITIVE_KEYS = new Set(['code', 'key']);
 
 function normaliseParamKey(key: string): string {
     return key
@@ -30,10 +19,9 @@ function normaliseParamKey(key: string): string {
         .replace(/[-_]/g, '');
 }
 
-/** Credential-like param names: exact names, or names ending in token, secret, password or apikey. */
+/** Credential-like param names: the shared secret-name rule plus code and key. */
 function isSensitiveParamKey(key: string): boolean {
-    const normalised = normaliseParamKey(key);
-    return SENSITIVE_EXACT_KEYS.has(normalised) || SENSITIVE_KEY_SUFFIXES.some(suffix => normalised.endsWith(suffix));
+    return isSecretFieldName(key) || PARAM_ONLY_SENSITIVE_KEYS.has(normaliseParamKey(key));
 }
 
 const CLOSING_DATA_TAG = /(?:<|&lt;)\s*\/\s*(?:page_context|conversation_summary)\b/i;

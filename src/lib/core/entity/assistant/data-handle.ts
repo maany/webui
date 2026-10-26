@@ -29,6 +29,7 @@ export interface RowsToolResult {
     columns: string[];
     sample: Record<string, unknown>[]; // at most 3 rows
     error?: ToolError;
+    notices?: string[]; // list-dids notices, for example "refine the wildcard"
 }
 
 export interface SqlResult {
