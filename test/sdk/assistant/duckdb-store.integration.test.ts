@@ -95,12 +95,13 @@ describe('DuckDbDataHandleStore on real DuckDB', () => {
 
     it('blocks file access and configuration changes inside DuckDB itself', async () => {
         await expect(engine.query("SELECT * FROM read_csv('/etc/passwd')")).rejects.toThrow(/disabled by configuration/);
-        await expect(engine.exec('SET enable_external_access = true')).rejects.toThrow();
+        await expect(engine.exec("SET memory_limit = '1GB'")).rejects.toThrow(/configuration has been locked/);
         await expect(engine.exec("COPY rules_1 TO 'out.csv'")).rejects.toThrow(/disabled by configuration/);
     });
 
     describe('bypass attempts leave the data intact', () => {
-        const attempts = [
+        // The guard must reject these before DuckDB sees them.
+        const guarded = [
             'SELECT 1 AS a$$$; DROP TABLE rules_1; SELECT 1 AS b$$',
             'SELECT 1 AS é$$; DROP TABLE rules_1; SELECT é$$',
             "SELECT * FROM rules_1, '/etc/passwd'",
@@ -114,13 +115,13 @@ describe('DuckDbDataHandleStore on real DuckDB', () => {
             expect(result.rows).toEqual([{ n: 3 }]);
         }
 
-        it.each(attempts)('query rejects or fails safely: %s', async sql => {
-            await expect(store.query(sql, { maxRows: 10 })).rejects.toThrow();
+        it.each(guarded)('query is rejected by the guard: %s', async sql => {
+            await expect(store.query(sql, { maxRows: 10 })).rejects.toMatchObject({ code: 'invalid_sql' });
             await expectRulesIntact();
         });
 
-        it.each(attempts)('saveAs rejects or fails safely: %s', async sql => {
-            await expect(store.query(sql, { maxRows: 10, saveAs: 'bypassed' })).rejects.toThrow();
+        it.each(guarded)('saveAs is rejected by the guard: %s', async sql => {
+            await expect(store.query(sql, { maxRows: 10, saveAs: 'bypassed' })).rejects.toMatchObject({ code: 'invalid_sql' });
             expect(store.listHandles().some(handle => handle.name === 'bypassed')).toBe(false);
             await expect(engine.query('SELECT * FROM bypassed')).rejects.toThrow();
             await expectRulesIntact();

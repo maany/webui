@@ -3,51 +3,156 @@ import { arrowTableToRows, type ArrowLikeTable } from './arrow-rows';
 import { abortError } from '../abort';
 
 export const DUCKDB_ASSET_PATH = '/duckdb/';
+export const STARTUP_TIMEOUT_MS = 30_000;
+/** How long a cancelled query may keep running before the worker is terminated. */
+export const ABORT_GRACE_MS = 2000;
 
-export async function createDuckDbWasmEngine(): Promise<DuckDbEngine> {
-    if (typeof window === 'undefined' || typeof Worker === 'undefined') {
+const START_ERROR = 'The SQL scratchpad could not start';
+
+interface WorkerLike {
+    addEventListener(type: string, listener: (event: unknown) => void): void;
+    removeEventListener(type: string, listener: (event: unknown) => void): void;
+    terminate(): void;
+}
+
+interface ConnLike {
+    query(sql: string): Promise<unknown>;
+    cancelSent(): Promise<unknown>;
+    close(): Promise<unknown>;
+    insertJSONFromPath(file: string, options: { name: string }): Promise<unknown>;
+}
+
+interface DbLike {
+    instantiate(mainModule: string, pthreadWorker?: string | null): Promise<unknown>;
+    open(config: Record<string, unknown>): Promise<unknown>;
+    connect(): Promise<ConnLike>;
+    terminate(): Promise<unknown>;
+    registerFileText(name: string, text: string): Promise<unknown>;
+    dropFile(name: string): Promise<unknown>;
+}
+
+interface DuckDbModuleLike {
+    selectBundle(bundles: Record<string, { mainModule: string; mainWorker: string }>): Promise<{
+        mainModule: string;
+        mainWorker: string | null;
+        pthreadWorker?: string | null;
+    }>;
+    VoidLogger: new () => unknown;
+    AsyncDuckDB: new (logger: never, worker: never) => DbLike;
+}
+
+/** Injection points so tests can drive the engine without a browser. Defaults are the real ones. */
+export interface DuckDbWasmEngineDeps {
+    loadModule?: () => Promise<DuckDbModuleLike>;
+    createWorker?: (url: string) => WorkerLike;
+    assetBase?: string;
+    startupTimeoutMs?: number;
+    abortGraceMs?: number;
+    /** Called when the engine terminated itself (a cancelled query would not stop), so the owner can forget it. */
+    onTerminated?: () => void;
+}
+
+export async function createDuckDbWasmEngine(deps: DuckDbWasmEngineDeps = {}): Promise<DuckDbEngine> {
+    if (!deps.createWorker && (typeof window === 'undefined' || typeof Worker === 'undefined')) {
         throw new Error('The SQL scratchpad needs a browser with Web Worker support');
     }
-    const duckdb = await import('@duckdb/duckdb-wasm');
-    const base = new URL(DUCKDB_ASSET_PATH, window.location.origin).href;
+    const duckdb = await (deps.loadModule ?? (() => import('@duckdb/duckdb-wasm') as unknown as Promise<DuckDbModuleLike>))();
+    const base = deps.assetBase ?? new URL(DUCKDB_ASSET_PATH, window.location.origin).href;
     const bundle = await duckdb.selectBundle({
         mvp: { mainModule: `${base}duckdb-mvp.wasm`, mainWorker: `${base}duckdb-browser-mvp.worker.js` },
         eh: { mainModule: `${base}duckdb-eh.wasm`, mainWorker: `${base}duckdb-browser-eh.worker.js` },
     });
     if (!bundle.mainWorker) throw new Error('No DuckDB worker bundle is available');
-    const worker = new Worker(bundle.mainWorker);
-    const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), worker);
-    try {
-        await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-        await db.open({ query: { castBigIntToDouble: true, castDecimalToDouble: true } });
-    } catch (error) {
-        await db.terminate();
-        throw error;
-    }
-    const conn = await db.connect();
-    let fileSeq = 0;
+    const worker = deps.createWorker ? deps.createWorker(bundle.mainWorker) : (new Worker(bundle.mainWorker) as unknown as WorkerLike);
+    const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger() as never, worker as never);
 
-    const query = async (sql: string, signal?: AbortSignal): Promise<DuckDbQueryResult> => {
-        if (signal?.aborted) throw abortError();
-        const onAbort = () => {
-            void conn.cancelSent();
-        };
-        signal?.addEventListener('abort', onAbort, { once: true });
-        try {
-            const table = await conn.query(sql);
-            if (signal?.aborted) throw abortError();
-            return arrowTableToRows(table as unknown as ArrowLikeTable);
-        } finally {
-            signal?.removeEventListener('abort', onAbort);
-        }
+    // A worker script that fails to load (for example a redirect to the login page) never answers, so race startup
+    // against the worker's own failure events and a timeout.
+    let failStartup: (error: Error) => void = () => undefined;
+    const startupFailure = new Promise<never>((_, reject) => {
+        failStartup = reject;
+    });
+    const onWorkerError = () => failStartup(new Error(START_ERROR));
+    worker.addEventListener('error', onWorkerError);
+    worker.addEventListener('messageerror', onWorkerError);
+    const timer = setTimeout(() => failStartup(new Error(START_ERROR)), deps.startupTimeoutMs ?? STARTUP_TIMEOUT_MS);
+    let conn: ConnLike;
+    try {
+        conn = await Promise.race([
+            (async () => {
+                await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+                await db.open({ query: { castBigIntToDouble: true, castDecimalToDouble: true } });
+                return db.connect();
+            })(),
+            startupFailure,
+        ]);
+    } catch (error) {
+        worker.terminate();
+        void db.terminate().catch(() => undefined);
+        throw error instanceof Error && error.message === START_ERROR ? error : new Error(START_ERROR);
+    } finally {
+        clearTimeout(timer);
+        worker.removeEventListener('error', onWorkerError);
+        worker.removeEventListener('messageerror', onWorkerError);
+    }
+
+    let fileSeq = 0;
+    let dead = false;
+    const inflight = new Set<(error: Error) => void>();
+
+    const terminate = async (): Promise<void> => {
+        if (dead) return;
+        dead = true;
+        // Terminate the worker first: it is the only thing that stops a running query.
+        worker.terminate();
+        inflight.forEach(reject => reject(abortError()));
+        inflight.clear();
+        void conn.close().catch(() => undefined);
+        await db.terminate().catch(() => undefined);
+    };
+
+    const query = (sql: string, signal?: AbortSignal): Promise<DuckDbQueryResult> => {
+        if (dead || signal?.aborted) return Promise.reject(abortError());
+        return new Promise<DuckDbQueryResult>((resolve, reject) => {
+            let settled = false;
+            let graceTimer: ReturnType<typeof setTimeout> | undefined;
+            const finish = (settle: () => void) => {
+                if (settled) return;
+                settled = true;
+                if (graceTimer !== undefined) clearTimeout(graceTimer);
+                signal?.removeEventListener('abort', onAbort);
+                inflight.delete(fail);
+                settle();
+            };
+            const fail = (error: Error) => finish(() => reject(error));
+            const onAbort = () => {
+                try {
+                    void Promise.resolve(conn.cancelSent()).catch(() => undefined);
+                } catch {
+                    // Cancellation is best effort; the grace timer below still ends the query.
+                }
+                graceTimer = setTimeout(() => {
+                    fail(abortError());
+                    void terminate().then(() => deps.onTerminated?.());
+                }, deps.abortGraceMs ?? ABORT_GRACE_MS);
+            };
+            inflight.add(fail);
+            signal?.addEventListener('abort', onAbort, { once: true });
+            conn.query(sql).then(
+                table => finish(() => (signal?.aborted ? reject(abortError()) : resolve(arrowTableToRows(table as unknown as ArrowLikeTable)))),
+                error => fail(error),
+            );
+        });
     };
 
     return {
         exec: async sql => {
+            if (dead) throw abortError();
             await conn.query(sql);
         },
         query,
         insertJSON: async (table, jsonText) => {
+            if (dead) throw abortError();
             fileSeq += 1;
             const file = `rucio_ingest_${fileSeq}.json`;
             await db.registerFileText(file, jsonText);
@@ -57,12 +162,6 @@ export async function createDuckDbWasmEngine(): Promise<DuckDbEngine> {
                 await db.dropFile(file);
             }
         },
-        terminate: async () => {
-            try {
-                await conn.close();
-            } finally {
-                await db.terminate();
-            }
-        },
+        terminate,
     };
 }

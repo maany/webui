@@ -2,7 +2,7 @@ import { RUN_SQL_TOOL_NAME } from '@/lib/core/entity/assistant/tool';
 import type { DataHandle, DataHandleColumn, DataHandleProvenance, SqlResult } from '@/lib/core/entity/assistant/data-handle';
 import type { AssistantDataHandleStorePort, IngestRowsOptions } from '@/lib/core/port/secondary/assistant-data-handle-store-port';
 import { checkReadOnlySql } from '@/lib/core/services/assistant-sql-guard';
-import { abortError, errorMessage } from '@/lib/infrastructure/assistant/abort';
+import { abortError } from '@/lib/infrastructure/assistant/abort';
 import { ENGINE_INIT_SQL, type DuckDbEngine, type DuckDbEngineFactory, type DuckDbQueryResult } from './duckdb-engine';
 import { normalizeRows } from './row-normalizer';
 
@@ -312,14 +312,14 @@ export class DuckDbDataHandleStore implements AssistantDataHandleStorePort {
                 let engine: DuckDbEngine;
                 try {
                     engine = await this.factory();
-                } catch (error) {
-                    throw new DataHandleStoreError('unavailable', `The SQL scratchpad could not start: ${errorMessage(error)}`);
+                } catch {
+                    throw new DataHandleStoreError('unavailable', 'The SQL scratchpad could not start');
                 }
                 try {
                     for (const statement of ENGINE_INIT_SQL) await engine.exec(statement);
-                } catch (error) {
+                } catch {
                     await engine.terminate().catch(() => undefined);
-                    throw new DataHandleStoreError('unavailable', `The SQL scratchpad could not be secured: ${errorMessage(error)}`);
+                    throw new DataHandleStoreError('unavailable', 'The SQL scratchpad could not start');
                 }
                 return engine;
             })();

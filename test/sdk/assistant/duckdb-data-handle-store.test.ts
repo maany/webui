@@ -144,7 +144,7 @@ describe('DuckDbDataHandleStore.ingestRows', () => {
         const store = new DuckDbDataHandleStore(factory);
         await expect(store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 })).rejects.toMatchObject({
             code: 'unavailable',
-            message: 'The SQL scratchpad could not start: wasm blocked',
+            message: 'The SQL scratchpad could not start',
         });
         await expect(store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 })).resolves.toMatchObject({ rowCount: 1 });
         expect(factory).toHaveBeenCalledTimes(2);
