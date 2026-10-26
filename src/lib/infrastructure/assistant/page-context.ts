@@ -23,7 +23,11 @@ const SENSITIVE_EXACT_KEYS = new Set([
 const SENSITIVE_KEY_SUFFIXES = ['token', 'secret', 'password', 'apikey'];
 
 function normaliseParamKey(key: string): string {
-    return key.toLowerCase().replace(/[-_]/g, '');
+    return key
+        .normalize('NFKC')
+        .replace(/\p{Cf}/gu, '')
+        .toLowerCase()
+        .replace(/[-_]/g, '');
 }
 
 /** Credential-like param names: exact names, or names ending in token, secret, password or apikey. */
@@ -32,7 +36,8 @@ function isSensitiveParamKey(key: string): boolean {
     return SENSITIVE_EXACT_KEYS.has(normalised) || SENSITIVE_KEY_SUFFIXES.some(suffix => normalised.endsWith(suffix));
 }
 
-const CLOSING_DATA_TAG = /(?:<|&lt;)\s*\/\s*(?:page_context|conversation_summary)\b/gi;
+const CLOSING_DATA_TAG = /(?:<|&lt;)\s*\/\s*(?:page_context|conversation_summary)\b/i;
+const CLOSING_DATA_TAG_ALL = new RegExp(CLOSING_DATA_TAG.source, 'gi');
 
 /**
  * Removes closing tags of the untrusted-data blocks so text cannot end the block early.
@@ -40,10 +45,9 @@ const CLOSING_DATA_TAG = /(?:<|&lt;)\s*\/\s*(?:page_context|conversation_summary
  * zero-width, entity and spaced variants are caught too.
  */
 export function neutraliseDataTags(text: string): string {
-    return text
-        .normalize('NFKC')
-        .replace(/\p{Cf}/gu, '')
-        .replace(CLOSING_DATA_TAG, '[removed tag]');
+    const normalised = text.normalize('NFKC').replace(/\p{Cf}/gu, '');
+    // Benign text is returned untouched; only text hiding a closing tag is rewritten.
+    return CLOSING_DATA_TAG.test(normalised) ? normalised.replace(CLOSING_DATA_TAG_ALL, '[removed tag]') : text;
 }
 
 /** Single-line, tag-safe text for a field of the page context. */

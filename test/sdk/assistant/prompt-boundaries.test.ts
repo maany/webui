@@ -140,3 +140,16 @@ describe('fix round 1', () => {
         expect(note).not.toMatch(/<\/page_context>/);
     });
 });
+
+describe('fix round 2', () => {
+    it('passes benign non-ASCII text through byte-identical', () => {
+        const benign = '\uFB01le\u00B2\u200D\u540D';
+        const prompt = buildSystemPrompt({ toolNames: [], now: new Date(), compactedSummary: benign });
+        expect(prompt).toContain(`<conversation_summary>\n${benign}\n</conversation_summary>`);
+        expect(ctx({ title: benign }).title).toBe(benign);
+    });
+
+    it.each(['tok\u200Ben', '\uFF54\uFF4F\uFF4B\uFF45\uFF4E', 'X\u200D-Api\u00AD-Key'])('drops the obfuscated key %j', name => {
+        expect(ctx({ searchParams: new URLSearchParams([[name, 'v']]) }).params).toEqual({});
+    });
+});
