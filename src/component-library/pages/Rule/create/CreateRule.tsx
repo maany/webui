@@ -1,11 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import {
-    CreateRuleGrouping,
-    CreateRuleOptions,
-    CreateRuleParameters,
-    CreateRuleStorage,
-    getEmptyCreateRuleParameters,
-} from '@/lib/infrastructure/data/view-model/rule';
+import { CreateRuleOptions, CreateRuleParameters, CreateRuleStorage, getEmptyCreateRuleParameters } from '@/lib/infrastructure/data/view-model/rule';
 import { Heading } from '@/component-library/atoms/misc/Heading';
 import Timeline from '@/component-library/features/Timeline';
 import { HiArrowLeft, HiArrowRight } from 'react-icons/hi';
@@ -13,11 +7,8 @@ import { Button } from '@/component-library/atoms/form/button';
 import { CreateRuleStageData } from '@/component-library/pages/Rule/create/stage-dids/CreateRuleStageData';
 import { CreateRuleStageStorage } from '@/component-library/pages/Rule/create/stage-rses/CreateRuleStageStorage';
 import { LoadingSpinner } from '@/component-library/atoms/loading/LoadingSpinner';
-import {
-    CreateRuleOptionsErrors,
-    CreateRuleStageOptions,
-    getEmptyOptionsErrors,
-} from '@/component-library/pages/Rule/create/stage-options/CreateRuleStageOptions';
+import { CreateRuleStageOptions } from '@/component-library/pages/Rule/create/stage-options/CreateRuleStageOptions';
+import { CreateRuleOptionsErrors, computeOptionsErrors, getEmptyOptionsErrors } from '@/component-library/pages/Rule/create/create-rule-validation';
 import { ListDIDsViewModel } from '@/lib/infrastructure/data/view-model/list-did';
 import { CreateRuleStageSummary } from '@/component-library/pages/Rule/create/stage-summary/CreateRuleStageSummary';
 import { CreateRuleStageSubmission } from '@/component-library/pages/Rule/create/stage-submission/CreateRuleStageSubmission';
@@ -76,34 +67,7 @@ export const CreateRule = (props: CreateRuleProps) => {
     const [optionsErrors, setOptionsErrors] = useState<CreateRuleOptionsErrors>(getEmptyOptionsErrors());
 
     const checkOptionsErrors = () => {
-        const totalDataSize = parameters.dids.reduce((accumulator, current) => accumulator + current.bytes, 0);
-
-        const newOptionErrors = getEmptyOptionsErrors();
-        const { copies, daysLifetime, grouping, comments } = parameters;
-
-        newOptionErrors.copiesInvalid = isNaN(copies) || copies < 1 || copies > parameters.rses.length;
-        newOptionErrors.tooManyCopies =
-            !parameters.askApproval &&
-            parameters.rses.filter(rse => {
-                if (rse.bytes_remaining >= totalDataSize) return true;
-                // if the bytes_limit is -1, it means there is no limit (infinite quota)
-                if (rse.bytes_limit === -1 && rse.has_quota) return true;
-                return false;
-            }).length < copies;
-
-        newOptionErrors.lifetimeInvalid = daysLifetime !== undefined && (isNaN(daysLifetime) || daysLifetime < 1);
-
-        newOptionErrors.commentsEmpty = parameters.askApproval && !comments;
-        newOptionErrors.groupingInvalid =
-            grouping !== undefined &&
-            grouping !== CreateRuleGrouping.DATASET &&
-            grouping !== CreateRuleGrouping.ALL &&
-            grouping !== CreateRuleGrouping.NONE;
-
-        newOptionErrors.sampleCountInvalid =
-            parameters.sample && (!parameters.sampleFileCount || isNaN(parameters.sampleFileCount) || parameters.sampleFileCount < 1);
-
-        setOptionsErrors(newOptionErrors);
+        setOptionsErrors(computeOptionsErrors(parameters));
     };
 
     useEffect(() => {
