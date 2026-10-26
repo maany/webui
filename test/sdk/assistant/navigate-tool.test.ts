@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Role } from '@/lib/core/entity/auth-models';
+import { RuleState } from '@/lib/core/entity/rucio';
 import { createNavigateTool, NavigateResult } from '@/lib/infrastructure/assistant/tools/page/navigate';
 import { MOBILE_MEDIA_QUERY } from '@/lib/infrastructure/assistant/tools/page/page-tool-utils';
 import { FakePageActionRegistry } from 'test/fixtures/fake-page-action-registry';
@@ -94,7 +95,7 @@ describe('navigate tool', () => {
         const registry = new FakePageActionRegistry();
         offer(registry, 'rules.filter');
         const result = (await tool.execute(
-            { page: 'rules', params: { state: 'Stuck' } },
+            { page: 'rules', params: { state: RuleState.STUCK } },
             makeTestToolContext({ pages: registry, navigate }),
         )) as NavigateResult;
 
