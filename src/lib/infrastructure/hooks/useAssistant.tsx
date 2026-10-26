@@ -123,6 +123,11 @@ function titleFrom(text: string): string {
     return line.length > TITLE_MAX_CHARS ? `${line.slice(0, TITLE_MAX_CHARS - 3)}...` : line;
 }
 
+/** True when the error means the Rucio session no longer works (directly, or as a 401 from the operator relay). */
+function isSessionExpired(error: string, relay: boolean): boolean {
+    return error === SESSION_EXPIRED_ERROR || (relay && /\b401\b/.test(error));
+}
+
 function sumUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
     return {
         inputTokens: a.inputTokens + b.inputTokens,
@@ -164,7 +169,10 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     const assistantRef = useRef<ChatMessage | null>(null);
     const abortRef = useRef<AbortController | null>(null);
     const runnerRef = useRef<AgentRunner | null>(null);
-    const busyRef = useRef(false);
+    /** Owner token of the turn (or send) in flight; set synchronously so two sends cannot both start. */
+    const busyRef = useRef<object | null>(null);
+    const deletedRef = useRef<Set<string>>(new Set());
+    const openSeqRef = useRef(0);
     const generationRef = useRef(0);
     const lastContextRouteRef = useRef<string | undefined>(undefined);
     const accountRef = useRef(deps.accountKey);
@@ -195,6 +203,10 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         },
         [setMessages],
     );
+
+    const release = useCallback((token: object) => {
+        if (busyRef.current === token) busyRef.current = null;
+    }, []);
 
     const refreshConversations = useCallback(async () => {
         const accountKey = depsRef.current.accountKey;
@@ -237,6 +249,8 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         abortRef.current?.abort();
         approvals.expireOpen();
         generationRef.current += 1;
+        openSeqRef.current += 1;
+        busyRef.current = null;
         setPending([]);
         setConversation(undefined);
         setMessages([]);
@@ -280,9 +294,14 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     }, [deps.accountKey, refreshConversations, resetView]);
 
     const compact = useCallback(
-        async (history: ChatMessage[], provider: ResolvedProvider, signal: AbortSignal, force: boolean): Promise<ChatMessage[]> => {
-            const current = conversationRef.current;
-            if (!current) return history;
+        async (
+            current: Conversation,
+            history: ChatMessage[],
+            provider: ResolvedProvider,
+            signal: AbortSignal,
+            force: boolean,
+            isCurrent: () => boolean,
+        ): Promise<ChatMessage[]> => {
             const plan = planCompaction(history, KEEP_RECENT_TURNS) ?? (force ? planCompaction(history, 1) : undefined);
             if (!plan) return history;
             try {
@@ -295,11 +314,13 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     signal,
                 });
                 if (!text) return history;
-                const updated: Conversation = { ...current, compactedSummary: text, compactedUpToMessageId: plan.upToMessageId };
+                if (signal.aborted || !isCurrent()) return history;
+                const live = conversationRef.current?.id === current.id ? conversationRef.current : current;
+                const updated: Conversation = { ...live, compactedSummary: text, compactedUpToMessageId: plan.upToMessageId };
                 setConversation(updated);
-                await repository.saveConversation(updated);
+                if (!deletedRef.current.has(current.id)) await repository.saveConversation(updated);
                 depsRef.current.bus.emit({ type: 'compaction', conversationId: current.id, upToMessageId: plan.upToMessageId, at: Date.now() });
-                setContextFraction(null);
+                if (isCurrent()) setContextFraction(null);
                 return plan.keep;
             } catch (compactError) {
                 if (compactError instanceof Error && compactError.message === SESSION_EXPIRED_ERROR) throw compactError;
@@ -310,16 +331,26 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     );
 
     const runTurn = useCallback(
-        async (userMessage: ChatMessage, provider: ResolvedProvider, options: TurnOptions): Promise<void> => {
-            const d = depsRef.current;
-            const startConversation = conversationRef.current;
-            if (!startConversation) return;
-            const { repository } = await d.repository;
+        async (
+            conversation: Conversation,
+            userMessage: ChatMessage,
+            provider: ResolvedProvider,
+            options: TurnOptions,
+            token: object,
+        ): Promise<void> => {
             const generation = generationRef.current;
             const isCurrent = () => generation === generationRef.current;
+            const d = depsRef.current;
+            const startConversation = conversation;
+            const alive = () => !deletedRef.current.has(startConversation.id);
+            const latestConversation = () => (conversationRef.current?.id === startConversation.id ? conversationRef.current : startConversation);
+            const { repository } = await d.repository;
+            if (!isCurrent()) {
+                release(token);
+                return;
+            }
             const controller = new AbortController();
             abortRef.current = controller;
-            busyRef.current = true;
             setStatusState('streaming');
             setError(undefined);
             setSessionExpired(false);
@@ -337,16 +368,23 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             let history = messagesAfter(before, startConversation.compactedUpToMessageId);
             if (options.forceCompaction || shouldCompact(contextFractionRef.current)) {
                 try {
-                    history = await compact(history, provider, controller.signal, options.forceCompaction);
+                    history = await compact(startConversation, history, provider, controller.signal, options.forceCompaction, isCurrent);
                 } catch {
                     // The relay no longer accepts the session: stop before any model call.
-                    busyRef.current = false;
+                    release(token);
                     if (abortRef.current === controller) abortRef.current = null;
                     if (isCurrent()) {
                         setSessionExpired(true);
-                        setError(describeRunError(SESSION_EXPIRED_ERROR));
+                        setError(describeRunError(SESSION_EXPIRED_ERROR, { relay: provider.via === 'relay' }));
                         setStatusState('error');
                     }
+                    return;
+                }
+                if (controller.signal.aborted || !isCurrent()) {
+                    // Stopped or replaced while summarising: do not call the model.
+                    release(token);
+                    if (abortRef.current === controller) abortRef.current = null;
+                    if (isCurrent()) setStatusState('idle');
                     return;
                 }
             }
@@ -368,14 +406,14 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             });
 
             const tools = d.visibleTools();
-            const policyFor = d.makePolicyFor(() => new Set(conversationRef.current?.conversationAllow ?? []));
+            const policyFor = d.makePolicyFor(() => new Set(latestConversation().conversationAllow));
             const runner = d.createRunner(() => ({
                 provider,
                 tools,
                 policyFor,
                 systemPrompt: buildSystemPrompt({
                     toolNames: tools.map(tool => tool.spec.name),
-                    compactedSummary: conversationRef.current?.compactedSummary,
+                    compactedSummary: latestConversation().compactedSummary,
                     now: new Date(),
                     extraSections: depsRef.current.systemPromptSections?.() ?? [],
                 }),
@@ -427,7 +465,13 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     if (update.type === 'finished') {
                         finalStatus = update.status;
                         finalError = update.error;
-                        if (update.status === 'error' && update.error === CONTEXT_OVERFLOW_ERROR && options.allowOverflowRetry) {
+                        if (
+                            update.status === 'error' &&
+                            update.error === CONTEXT_OVERFLOW_ERROR &&
+                            options.allowOverflowRetry &&
+                            !controller.signal.aborted &&
+                            isCurrent()
+                        ) {
                             overflow = true;
                             assistantRef.current = message;
                             continue;
@@ -464,7 +508,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                         setPending(pendingRef.current.filter(item => item.toolCallId !== update.toolCallId));
                     }
                     if (isCurrent()) replaceMessage(message);
-                    if (update.type === 'tool-result' || update.type === 'approval-required') await repository.saveMessage(message);
+                    if ((update.type === 'tool-result' || update.type === 'approval-required') && alive()) await repository.saveMessage(message);
                 }
             } catch (runError) {
                 finalStatus = controller.signal.aborted ? 'stopped' : 'error';
@@ -475,7 +519,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             }
 
             runnerRef.current = null;
-            busyRef.current = false;
+            if (!overflow) release(token);
             if (abortRef.current === controller) abortRef.current = null;
             if (isCurrent()) setPending([]);
 
@@ -487,41 +531,55 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             const finalMessage: ChatMessage = { ...(assistantRef.current ?? assistant), ...(sawUsage ? { usage: turnUsage } : {}) };
             if (assistantRef.current?.id === finalMessage.id) assistantRef.current = null;
 
+            const emitFinished = (status: typeof finalStatus, error: string | undefined) =>
+                d.bus.emit({ type: 'turn-finished', turnId, status, usage: turnUsage, ...(error ? { error } : {}), at: Date.now() });
+
             if (overflow) {
+                emitFinished('error', finalError);
+                if (!alive()) {
+                    release(token);
+                    return;
+                }
                 if (isCurrent()) replaceMessage(finalMessage);
-                await runTurn(userMessage, provider, { allowOverflowRetry: false, forceCompaction: true, assistantId: finalMessage.id });
+                await runTurn(
+                    startConversation,
+                    userMessage,
+                    provider,
+                    { allowOverflowRetry: false, forceCompaction: true, assistantId: finalMessage.id },
+                    token,
+                );
                 return;
             }
 
-            await repository.saveMessage(finalMessage);
-            const latest = (await repository.getConversation(startConversation.id)) ?? startConversation;
-            const updatedConversation: Conversation = {
-                ...latest,
-                ...(isCurrent() && conversationRef.current ? conversationRef.current : {}),
-                updatedAt: monotonicIso(),
-                providerId: provider.providerId,
-                model: provider.model,
-                usage: sawUsage ? addUsage(latest.usage ?? EMPTY_USAGE_TOTALS, turnUsage) : latest.usage,
-            };
-            await repository.saveConversation(updatedConversation);
-            d.bus.emit({
-                type: 'turn-finished',
-                turnId,
-                status: finalStatus,
-                usage: turnUsage,
-                ...(finalError ? { error: finalError } : {}),
-                at: Date.now(),
-            });
+            // A conversation deleted while the turn ran must not be written back.
+            if (alive()) await repository.saveMessage(finalMessage);
+            let updatedConversation: Conversation | undefined;
+            if (alive()) {
+                const latest = await repository.getConversation(startConversation.id);
+                if (latest && alive()) {
+                    updatedConversation = {
+                        ...latest,
+                        ...(isCurrent() && conversationRef.current?.id === latest.id ? conversationRef.current : {}),
+                        updatedAt: monotonicIso(),
+                        providerId: provider.providerId,
+                        model: provider.model,
+                        usage: sawUsage ? addUsage(latest.usage ?? EMPTY_USAGE_TOTALS, turnUsage) : latest.usage,
+                    };
+                    await repository.saveConversation(updatedConversation);
+                }
+            }
+            emitFinished(finalStatus, finalError);
 
             if (isCurrent()) {
                 replaceMessage(finalMessage);
-                setConversation(updatedConversation);
+                if (updatedConversation) setConversation(updatedConversation);
                 setContextWindow(provider.contextWindow);
                 if (lastInputTokens !== null) setContextFraction(provider.contextWindow ? lastInputTokens / provider.contextWindow : null);
                 if (finalStatus === 'error') {
-                    const described = describeRunError(finalError ?? 'Something went wrong.', { relay: provider.via === 'relay' });
-                    setError(described);
-                    setSessionExpired(described === describeRunError(SESSION_EXPIRED_ERROR));
+                    const relay = provider.via === 'relay';
+                    const message = finalError ?? 'Something went wrong.';
+                    setError(describeRunError(message, { relay }));
+                    setSessionExpired(isSessionExpired(message, relay));
                     setStatusState('error');
                 } else {
                     setStatusState('idle');
@@ -529,71 +587,84 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             }
             void repository
                 .enforceRetention(
-                    d.retention(),
+                    depsRef.current.retention(),
                     new Date(),
                     [conversationRef.current?.id, startConversation.id].filter((id): id is string => typeof id === 'string'),
                 )
                 .catch(() => [])
                 .then(() => refreshConversations());
         },
-        [compact, refreshConversations, replaceMessage, setContextFraction, setConversation, setPending],
+        [compact, refreshConversations, release, replaceMessage, setContextFraction, setConversation, setPending],
     );
 
     const send = useCallback(
         async (text: string, options: { attachPageContext?: boolean } = {}) => {
             const trimmed = text.trim();
             if (!trimmed || busyRef.current) return;
-            const d = depsRef.current;
-            const accountKey = d.accountKey;
-            if (!accountKey) {
-                setError('Sign in to use Rucio bot.');
-                setStatusState('error');
-                return;
+            const token = {};
+            busyRef.current = token;
+            try {
+                const d = depsRef.current;
+                const accountKey = d.accountKey;
+                setSessionExpired(false);
+                if (!accountKey) {
+                    setError('Sign in to use Rucio bot.');
+                    setStatusState('error');
+                    return;
+                }
+                const provider = d.resolveProvider();
+                if ('error' in provider) {
+                    setError(providerErrorMessage(provider.error));
+                    setStatusState('error');
+                    return;
+                }
+                const generation = generationRef.current;
+                const superseded = () => generation !== generationRef.current || depsRef.current.accountKey !== accountKey;
+                const { repository } = await d.repository;
+                if (superseded()) return;
+                let current = conversationRef.current;
+                if (!current) {
+                    const now = monotonicIso();
+                    current = {
+                        id: createId(),
+                        accountKey,
+                        title: titleFrom(trimmed),
+                        createdAt: now,
+                        updatedAt: now,
+                        providerId: provider.providerId,
+                        model: provider.model,
+                        usage: EMPTY_USAGE_TOTALS,
+                        conversationAllow: [],
+                        handles: [],
+                    };
+                    setConversation(current);
+                    await repository.saveConversation(current);
+                    if (superseded()) return;
+                }
+                const parts: MessagePart[] = [{ type: 'text', text: trimmed }];
+                const context = options.attachPageContext === false ? undefined : d.pageContext();
+                if (context) {
+                    const note = navigationNote(lastContextRouteRef.current, context);
+                    if (note) parts.push({ type: 'notice', level: 'info', text: note });
+                    parts.push({ type: 'page-context', context });
+                    lastContextRouteRef.current = context.route;
+                }
+                const userMessage: ChatMessage = { id: createId(), conversationId: current.id, role: 'user', parts, createdAt: monotonicIso() };
+                setMessages([...messagesRef.current, userMessage]);
+                await repository.saveMessage(userMessage);
+                if (superseded()) return;
+                void refreshConversations();
+                await runTurn(current, userMessage, provider, { allowOverflowRetry: true, forceCompaction: false }, token);
+            } finally {
+                release(token);
             }
-            const provider = d.resolveProvider();
-            if ('error' in provider) {
-                setError(providerErrorMessage(provider.error));
-                setStatusState('error');
-                return;
-            }
-            const { repository } = await d.repository;
-            let current = conversationRef.current;
-            if (!current) {
-                const now = monotonicIso();
-                current = {
-                    id: createId(),
-                    accountKey,
-                    title: titleFrom(trimmed),
-                    createdAt: now,
-                    updatedAt: now,
-                    providerId: provider.providerId,
-                    model: provider.model,
-                    usage: EMPTY_USAGE_TOTALS,
-                    conversationAllow: [],
-                    handles: [],
-                };
-                setConversation(current);
-                await repository.saveConversation(current);
-            }
-            const parts: MessagePart[] = [{ type: 'text', text: trimmed }];
-            const context = options.attachPageContext === false ? undefined : d.pageContext();
-            if (context) {
-                const note = navigationNote(lastContextRouteRef.current, context);
-                if (note) parts.push({ type: 'notice', level: 'info', text: note });
-                parts.push({ type: 'page-context', context });
-                lastContextRouteRef.current = context.route;
-            }
-            const userMessage: ChatMessage = { id: createId(), conversationId: current.id, role: 'user', parts, createdAt: monotonicIso() };
-            setMessages([...messagesRef.current, userMessage]);
-            await repository.saveMessage(userMessage);
-            void refreshConversations();
-            await runTurn(userMessage, provider, { allowOverflowRetry: true, forceCompaction: false });
         },
-        [refreshConversations, runTurn, setConversation, setMessages],
+        [refreshConversations, release, runTurn, setConversation, setMessages],
     );
 
     const retry = useCallback(async () => {
         if (busyRef.current) return;
+        const current = conversationRef.current;
         const all = messagesRef.current;
         let userIndex = -1;
         for (let i = all.length - 1; i >= 0; i--) {
@@ -602,30 +673,44 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 break;
             }
         }
-        if (userIndex < 0) return;
-        const provider = depsRef.current.resolveProvider();
-        if ('error' in provider) {
-            setError(providerErrorMessage(provider.error));
-            setStatusState('error');
-            return;
+        if (!current || userIndex < 0) return;
+        const token = {};
+        busyRef.current = token;
+        try {
+            setSessionExpired(false);
+            const provider = depsRef.current.resolveProvider();
+            if ('error' in provider) {
+                setError(providerErrorMessage(provider.error));
+                setStatusState('error');
+                return;
+            }
+            const failed = all[userIndex + 1];
+            await runTurn(
+                current,
+                all[userIndex],
+                provider,
+                { allowOverflowRetry: true, forceCompaction: false, ...(failed ? { assistantId: failed.id } : {}) },
+                token,
+            );
+        } finally {
+            release(token);
         }
-        const failed = all[userIndex + 1];
-        await runTurn(all[userIndex], provider, { allowOverflowRetry: true, forceCompaction: false, ...(failed ? { assistantId: failed.id } : {}) });
-    }, [runTurn]);
+    }, [release, runTurn]);
 
     const continueTurn = useCallback(() => send('Continue.', { attachPageContext: false }), [send]);
 
     const stop = useCallback(() => {
         abortRef.current?.abort();
         approvals.expireOpen();
-    }, [approvals]);
+        setPending([]);
+    }, [approvals, setPending]);
 
     const resolveApproval = useCallback(
         (toolCallId: string, decision: 'approved' | 'rejected', scope: 'once' | 'conversation') => {
             const pending = pendingRef.current.find(item => item.toolCallId === toolCallId);
             const runner = runnerRef.current;
             const accountKey = depsRef.current.accountKey;
-            if (!pending || !runner || !accountKey) return;
+            if (!pending || !runner || !accountKey || abortRef.current?.signal.aborted) return;
             const effectiveScope = scope === 'conversation' && pending.allowConversationScope ? 'conversation' : 'once';
             const current = conversationRef.current;
             if (decision === 'approved' && effectiveScope === 'conversation' && current && !current.conversationAllow.includes(pending.toolName)) {
@@ -665,13 +750,18 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         async (id: string) => {
             const accountKey = depsRef.current.accountKey;
             if (!accountKey) return;
+            let seq = ++openSeqRef.current;
+            const stale = () => openSeqRef.current !== seq || depsRef.current.accountKey !== accountKey;
             const { repository } = await depsRef.current.repository;
             const stored = await repository.getConversation(id);
-            if (!stored || stored.accountKey !== accountKey) return;
+            if (stale() || !stored || stored.accountKey !== accountKey) return;
             resetView();
+            seq = openSeqRef.current;
             const loaded = await repository.listMessages(id);
+            if (stale()) return;
             const repaired = expireStaleParts(loaded, accountKey, new Date().toISOString());
             await Promise.all(repaired.filter((message, index) => message !== loaded[index]).map(message => repository.saveMessage(message)));
+            if (stale()) return;
             setConversation(stored);
             setMessages(repaired);
         },
@@ -680,8 +770,10 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
 
     const deleteConversation = useCallback(
         async (id: string) => {
-            const { repository } = await depsRef.current.repository;
+            // Marked first so a streaming turn of this conversation skips every later write.
+            deletedRef.current.add(id);
             if (conversationRef.current?.id === id) resetView();
+            const { repository } = await depsRef.current.repository;
             await repository.deleteConversation(id);
             await refreshConversations();
         },

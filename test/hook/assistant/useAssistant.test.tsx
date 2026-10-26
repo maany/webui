@@ -280,6 +280,9 @@ describe('useAssistantController', () => {
 
     it('protects the open conversation from retention', async () => {
         const { hook, repository } = setup([textScript('ok')]);
+        await act(async () => {
+            await Promise.resolve();
+        });
         const spy = jest.spyOn(repository, 'enforceRetention');
         await act(async () => {
             await hook.result.current.send('hello');
@@ -287,7 +290,7 @@ describe('useAssistantController', () => {
         await waitFor(() => expect(spy.mock.calls.length).toBeGreaterThan(0));
         const id = hook.result.current.conversation?.id;
         expect(id).toBeDefined();
-        for (const call of spy.mock.calls.slice(-1)) expect(call[2]).toContain(id);
+        for (const call of spy.mock.calls) expect(call[2]).toContain(id);
     });
 
     it('flags an expired session when the runner finishes with session_expired', async () => {
@@ -358,5 +361,274 @@ describe('useAssistantController', () => {
             hook.result.current.stop();
             await sending;
         });
+    });
+});
+
+describe('useAssistantController races', () => {
+    it('does not resurrect a conversation deleted while its turn streams', async () => {
+        const { hook, repository } = setup([approvalScript]);
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('delete rule r1');
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals).toHaveLength(1));
+        const id = hook.result.current.conversation!.id;
+        await act(async () => {
+            await hook.result.current.deleteConversation(id);
+            await sending;
+        });
+        await act(async () => {
+            await hook.result.current.refreshConversations?.();
+        });
+        expect(await repository.getConversation(id)).toBeUndefined();
+        expect(await repository.listMessages(id)).toEqual([]);
+        expect(hook.result.current.conversations).toEqual([]);
+    });
+
+    it('ignores a send whose account switched while the conversation was being saved', async () => {
+        const { hook, repository, created } = setup([textScript('never')]);
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        const original = repository.saveConversation.bind(repository);
+        jest.spyOn(repository, 'saveConversation').mockImplementationOnce(async conversation => {
+            await gate;
+            await original(conversation);
+        });
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('question from A');
+        });
+        act(() => {
+            hook.rerender({ accountKey: 'jdoe@def' });
+        });
+        await act(async () => {
+            release();
+            await sending;
+        });
+        expect(hook.result.current.messages).toEqual([]);
+        expect(hook.result.current.conversation).toBeUndefined();
+        expect(created).toHaveLength(0);
+        for (const conversation of await repository.listConversations('root@def')) {
+            expect(await repository.listMessages(conversation.id)).toEqual([]);
+        }
+    });
+
+    it('drops a send when another conversation was opened while it was saving', async () => {
+        const { hook, repository, created } = setup([textScript('never')]);
+        await repository.saveConversation(makeConversation('y', 'root@def'));
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        const original = repository.saveConversation.bind(repository);
+        jest.spyOn(repository, 'saveConversation').mockImplementationOnce(async conversation => {
+            await gate;
+            await original(conversation);
+        });
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('question for X');
+        });
+        await act(async () => {
+            await hook.result.current.openConversation('y');
+        });
+        await act(async () => {
+            release();
+            await sending;
+        });
+        expect(hook.result.current.conversation?.id).toBe('y');
+        expect(hook.result.current.messages).toEqual([]);
+        expect(created).toHaveLength(0);
+    });
+
+    it('ignores an open that finishes after the account switched', async () => {
+        const { hook, repository } = setup([textScript('x')]);
+        await repository.saveConversation(makeConversation('a-1', 'root@def'));
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        const original = repository.getConversation.bind(repository);
+        jest.spyOn(repository, 'getConversation').mockImplementationOnce(async id => {
+            await gate;
+            return original(id);
+        });
+        let opening!: Promise<void>;
+        act(() => {
+            opening = hook.result.current.openConversation('a-1');
+        });
+        act(() => {
+            hook.rerender({ accountKey: 'jdoe@def' });
+        });
+        await act(async () => {
+            await new Promise(resolve => setTimeout(resolve, 20));
+        });
+        await act(async () => {
+            release();
+            await opening;
+        });
+        expect(hook.result.current.conversation).toBeUndefined();
+        expect(hook.result.current.messages).toEqual([]);
+    });
+
+    it('keeps the new conversation view clean when summarize resolves after newConversation', async () => {
+        const { hook, summarize, created } = setup([
+            textScript('a1', 100),
+            textScript('a2', 100),
+            textScript('a3', 100),
+            textScript('a4', 100),
+            textScript('a5', 800),
+            textScript('a6', 100),
+        ]);
+        for (const question of ['q1', 'q2', 'q3', 'q4', 'q5']) {
+            await act(async () => {
+                await hook.result.current.send(question);
+            });
+        }
+        let release: () => void = () => undefined;
+        summarize.mockImplementationOnce(() => new Promise(resolve => (release = () => resolve({ text: 'late summary' }))));
+        const runnersBefore = created.length;
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('q6');
+        });
+        await waitFor(() => expect(summarize).toHaveBeenCalledTimes(1));
+        act(() => {
+            hook.result.current.newConversation();
+        });
+        await act(async () => {
+            release();
+            await sending;
+        });
+        expect(hook.result.current.conversation).toBeUndefined();
+        expect(hook.result.current.messages).toEqual([]);
+        expect(hook.result.current.status).toBe('idle');
+        expect(created).toHaveLength(runnersBefore);
+    });
+
+    it('runs exactly one turn for two sends in the same tick', async () => {
+        const { hook, created } = setup([textScript('one')]);
+        let first!: Promise<void>;
+        let second!: Promise<void>;
+        act(() => {
+            first = hook.result.current.send('first');
+            second = hook.result.current.send('second');
+        });
+        await act(async () => {
+            await Promise.all([first, second]);
+        });
+        expect(created).toHaveLength(1);
+        expect(hook.result.current.messages.filter(message => message.role === 'user')).toHaveLength(1);
+    });
+
+    it('clears sessionExpired when the next send fails on provider resolution', async () => {
+        const expired: Script = async function* () {
+            yield { type: 'finished', status: 'error', error: SESSION_EXPIRED_ERROR };
+        };
+        let provider: ReturnType<AssistantControllerDeps['resolveProvider']> = PROVIDER;
+        const { hook } = setup([expired], { resolveProvider: () => provider });
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        expect(hook.result.current.sessionExpired).toBe(true);
+        provider = { error: 'no-provider' };
+        await act(async () => {
+            await hook.result.current.send('again');
+        });
+        expect(hook.result.current.sessionExpired).toBeFalsy();
+        expect(hook.result.current.error).toContain('No model is configured');
+    });
+
+    it('flags an expired session for a relay 401', async () => {
+        const unauthorized: Script = async function* () {
+            yield { type: 'finished', status: 'error', error: 'Request failed with 401' };
+        };
+        const { hook } = setup([unauthorized]);
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        expect(hook.result.current.sessionExpired).toBe(true);
+    });
+
+    it('emits turn-finished for the overflowed attempt', async () => {
+        const overflow: Script = async function* () {
+            yield { type: 'finished', status: 'error', error: CONTEXT_OVERFLOW_ERROR };
+        };
+        const { hook, events } = setup([textScript('a1'), textScript('a2'), overflow, textScript('recovered')]);
+        for (const question of ['q1', 'q2', 'q3']) {
+            await act(async () => {
+                await hook.result.current.send(question);
+            });
+        }
+        const types = events.map(event => event.type);
+        expect(types.filter(type => type === 'turn-started')).toHaveLength(4);
+        expect(types.filter(type => type === 'turn-finished')).toHaveLength(4);
+    });
+
+    it('does not retry an overflow after the turn was stopped', async () => {
+        const overflowAfterStop: Script = async function* (input) {
+            await new Promise<void>(resolve => input.signal.addEventListener('abort', () => resolve()));
+            yield { type: 'finished', status: 'error', error: CONTEXT_OVERFLOW_ERROR };
+        };
+        const { hook, created } = setup([textScript('a1'), textScript('a2'), overflowAfterStop, textScript('never')]);
+        for (const question of ['q1', 'q2']) {
+            await act(async () => {
+                await hook.result.current.send(question);
+            });
+        }
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('q3');
+        });
+        await waitFor(() => expect(created).toHaveLength(3));
+        await act(async () => {
+            hook.result.current.stop();
+            await sending;
+        });
+        expect(created).toHaveLength(3);
+    });
+
+    it('clears pending approvals immediately on stop and ignores a later decision', async () => {
+        const { hook } = setup([approvalScript]);
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('delete rule r1');
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals).toHaveLength(1));
+        act(() => {
+            hook.result.current.stop();
+            hook.result.current.resolveApproval('call-1', 'approved', 'once');
+        });
+        expect(hook.result.current.pendingApprovals).toEqual([]);
+        await act(async () => {
+            await sending;
+        });
+        expect(hook.result.current.messages[1].parts).not.toContainEqual(expect.objectContaining({ type: 'approval', decision: 'approved' }));
+    });
+
+    it('reads retention settings live when the turn ends', async () => {
+        const overrides: Partial<AssistantControllerDeps> = { retention: () => ({ maxAgeDays: 30, maxTotalMB: 50, clearOnLogout: false }) };
+        let release: () => void = () => undefined;
+        const gated: Script = async function* () {
+            yield { type: 'text-delta', text: 'Hi' };
+            await new Promise<void>(resolve => (release = resolve));
+            yield { type: 'finished', status: 'completed' };
+        };
+        const { hook, repository } = setup([gated], overrides);
+        await act(async () => {
+            await Promise.resolve();
+        });
+        const spy = jest.spyOn(repository, 'enforceRetention');
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('hi');
+        });
+        await waitFor(() => expect(hook.result.current.status).toBe('streaming'));
+        overrides.retention = () => ({ maxAgeDays: 7, maxTotalMB: 50, clearOnLogout: false });
+        act(() => {
+            hook.rerender({ accountKey: 'root@def' });
+        });
+        await act(async () => {
+            release();
+            await sending;
+        });
+        await waitFor(() => expect(spy).toHaveBeenCalled());
+        expect(spy.mock.calls[spy.mock.calls.length - 1][0].maxAgeDays).toBe(7);
     });
 });
