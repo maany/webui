@@ -2,6 +2,64 @@ import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from '@open
 import { REDACTED, ScrubbingSpanProcessor, scrubAttributes, scrubText } from '@/lib/infrastructure/assistant/telemetry-scrubber';
 
 describe('scrubText', () => {
+    describe('fix round 5', () => {
+        const HEX = '0123456789abcdef0123456789abcdef';
+
+        it('does not let a cookie ending in = swallow the next JSON field', () => {
+            const out = scrubText('{"raw":"Cookie: sid=YWJjZA==","password":"hunter 22 x"}');
+            expect(out).toBe('{"raw":"Cookie: [REDACTED]","password":"[REDACTED]"}');
+        });
+
+        it('redacts Rucio tokens wrapped in punctuation', () => {
+            for (const [open, close] of [
+                ['`', '`'],
+                ['(', ')'],
+                ['**', '**'],
+                ['[', ']'],
+                ['a,', ''],
+                ['{t: ', '}'],
+            ]) {
+                expect(scrubText(`${open}root-root-webui-${HEX}${close}`)).not.toContain(HEX);
+            }
+        });
+
+        it('redacts x509 tokens whose last DN part contains a space', () => {
+            expect(scrubText(`jdoe-/DC=ch/DC=cern/OU=Organic Units/CN=John Doe-unknown-${HEX}`)).not.toContain(HEX);
+        });
+
+        it('redacts header tuple and header object values with escaped quotes', () => {
+            for (const input of [
+                String.raw`[["cookie","sid=\"abc\"; other=secret2"]]`,
+                String.raw`{"name":"cookie","value":"sid=\"abc\"; other=secret2"}`,
+                String.raw`{"value":"sid=\"abc\"; other=secret2","name":"cookie"}`,
+                String.raw`[["authorization","Bearer abcdef\"ghijkl"]]`,
+                String.raw`{\"name\":\"cookie\",\"value\":\"sid=\\\"abc\\\"; other=secret2\"}`,
+            ]) {
+                const out = scrubText(input);
+                expect(out).not.toContain('secret2');
+                expect(out).not.toContain('ghijkl');
+            }
+        });
+
+        it('handles cookies two escaping levels deep and JSON escapes inside cookie values', () => {
+            expect(scrubText(String.raw`{\"h\":\"Cookie: sid=\\\"abc\\\"; other=secret2\"}`)).not.toMatch(/abc|secret2/);
+            expect(scrubText(String.raw`{"h":"Cookie: a=b\\c; other=secret2"}`)).not.toContain('secret2');
+            expect(scrubText(String.raw`{"h":"Cookie: a=b\tc; other=secret2"}`)).not.toContain('secret2');
+        });
+
+        it('redacts nested arrays under a secret key', () => {
+            expect(scrubText('{"set-cookie":[["sid=abc"],"x=secret2"]}')).not.toContain('secret2');
+            expect(scrubText('{"token":["a",["b"],"secret2"]}')).not.toContain('secret2');
+        });
+
+        it('treats pass, pwd and secret as keys only with = or a quoted key name', () => {
+            expect(scrubText("Here's the secret: it works")).toBe("Here's the secret: it works");
+            expect(scrubText('pass: hunter22')).toBe('pass: hunter22');
+            expect(scrubText('{"secret":"hunter22"}')).toBe('{"secret":"[REDACTED]"}');
+            expect(scrubText('pwd=hunter22')).toBe('pwd=[REDACTED]');
+        });
+    });
+
     describe('fix round 4', () => {
         const HEX = '0123456789abcdef0123456789abcdef';
 
@@ -37,7 +95,7 @@ describe('scrubText', () => {
         it('treats passphrase, pwd, pass and secret as key names but not words that contain them (m3)', () => {
             expect(scrubText('passphrase=hunter22')).toBe('passphrase=[REDACTED]');
             expect(scrubText('{"pwd":"hunter22"}')).toBe('{"pwd":"[REDACTED]"}');
-            expect(scrubText('pass: hunter22')).toBe('pass: [REDACTED]');
+            expect(scrubText('"pass": hunter22')).toBe('"pass": [REDACTED]');
             expect(scrubText('secret=hunter22')).toBe('secret=[REDACTED]');
             expect(scrubText('the passage of the secretary was bypassed')).toBe('the passage of the secretary was bypassed');
         });
@@ -144,6 +202,13 @@ describe('scrubText', () => {
         ['AIza prefixes', 'AIza'.repeat(20000)],
         ['xai prefixes', 'xai-'.repeat(20000)],
         ['escaped quotes', '\\"token\\": '.repeat(6000)],
+        ['cookie double escaped openers', 'Cookie: a=\\\\\\"'.repeat(5000)],
+        ['cookie json escapes', `Cookie: a=${'\\\\t'.repeat(26000)}`],
+        ['escaped header object openers', '\\"name\\":\\"cookie\\",\\"value\\":\\"'.repeat(2000)],
+        ['value first openers', '"value":"a","name":"x",'.repeat(3500)],
+        ['nested secret arrays', `"token":[${'[a],'.repeat(20000)}`],
+        ['dn equals with spaces', '=a b'.repeat(20000)],
+        ['tokens in backticks', '`root-'.repeat(13000)],
         ['cookie quoted openers', 'Cookie: a="'.repeat(7000)],
         ['cookie escaped quoted openers', 'Cookie: a=\\"'.repeat(6000)],
         ['cookie escaped opener without close', `Cookie: a=\\"${'b'.repeat(80000)}`],
