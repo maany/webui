@@ -18,6 +18,8 @@ import EnvConfigGatewayOutputPort from '@/lib/core/port/secondary/env-config-gat
 import EnvConfigGateway from '../gateway/env-config-gateway';
 import FeatureConfigGatewayOutputPort from '@/lib/core/port/secondary/feature-config-gateway-output-port';
 import FeatureConfigGateway from '../gateway/feature-config-gateway';
+import AssistantConfigGatewayOutputPort from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
+import AssistantConfigGateway from '../gateway/assistant-config-gateway';
 import SetX509LoginSessionInputPort from '@/lib/core/port/primary/set-x509-login-session-input-port';
 import SetX509LoginSessionUseCase from '@/lib/core/use-case/set-x509-login-session-usecase';
 import SetX509LoginSessionController, { ISetX509LoginSessionController } from '../controller/set-x509-login-session-controller';
@@ -100,6 +102,7 @@ appContainer.bind<AuthServerGatewayOutputPort>(GATEWAYS.AUTH_SERVER).to(RucioAut
 appContainer.bind<DIDGatewayOutputPort>(GATEWAYS.DID).to(RucioDIDGateway);
 appContainer.bind<EnvConfigGatewayOutputPort>(GATEWAYS.ENV_CONFIG).to(EnvConfigGateway);
 appContainer.bind<FeatureConfigGatewayOutputPort>(GATEWAYS.FEATURE_CONFIG).to(FeatureConfigGateway);
+appContainer.bind<AssistantConfigGatewayOutputPort>(GATEWAYS.ASSISTANT_CONFIG).to(AssistantConfigGateway);
 appContainer.bind<RSEGatewayOutputPort>(GATEWAYS.RSE).to(RSEGateway);
 appContainer.bind<StreamGatewayOutputPort>(GATEWAYS.STREAM).to(StreamingGateway).inRequestScope();
 appContainer.bind<SubscriptionGatewayOutputPort>(GATEWAYS.SUBSCRIPTION).to(SubscriptionGateway);
