@@ -5,7 +5,7 @@ import { TOOL_POLICIES, type ToolPolicy, type ToolPolicyPrefs, type ToolRisk, ty
 
 export const POLICY_ORDER: readonly ToolPolicy[] = TOOL_POLICIES;
 
-function isToolPolicy(value: unknown): value is ToolPolicy {
+export function isToolPolicy(value: unknown): value is ToolPolicy {
     return typeof value === 'string' && (POLICY_ORDER as readonly string[]).includes(value);
 }
 

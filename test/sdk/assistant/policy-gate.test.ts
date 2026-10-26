@@ -143,4 +143,13 @@ describe('describePolicyReason', () => {
         expect(describePolicyReason(createRule.spec, {}, caps)).toBe('Changes to Rucio need your approval by default.');
         expect(describePolicyReason(listRules.spec, { list_rules: 'ask' }, caps)).toBe('Your settings ask before running this tool.');
     });
+
+    it('treats an invalid own preference like the effective policy does and falls back to the group', () => {
+        const prefs = { create_rule: 'bogus', 'group:rules': 'ask' } as unknown as ToolPolicyPrefs;
+        expect(describePolicyReason(createRule.spec, prefs, { ...caps, writePolicyCap: 'allow' })).toBe(
+            'Your settings ask before running Rules tools.',
+        );
+        const groupAllow = { create_rule: 'bogus', 'group:rules': 'allow' } as unknown as ToolPolicyPrefs;
+        expect(describePolicyReason(createRule.spec, groupAllow, caps)).toBe('Your operator requires approval for changes to Rucio.');
+    });
 });

@@ -137,6 +137,7 @@ describe('write tool visibility', () => {
         expect(visibleNames({ ...admin, permissionsReady: false })).toEqual([]);
     });
 });
+
 describe('write tool wiring for TanStack (PF12)', () => {
     it('converts every write spec input to a JSON object schema', () => {
         for (const tool of WRITE_TOOLS) {
