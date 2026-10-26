@@ -7,12 +7,14 @@ describe('OpenTelemetry packages under Jest', () => {
         const exporter = new InMemorySpanExporter();
         const provider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter })] });
         const tracer = provider.getTracer('setup');
-        const parent = tracer.startSpan('parent', { startTime: 1000 }, ROOT_CONTEXT);
-        tracer.startSpan('child', { startTime: 1100 }, trace.setSpan(ROOT_CONTEXT, parent)).end(1200);
-        parent.end(1300);
+        // Epoch milliseconds as real events carry them (numbers below performance.now() would be read as
+        // performance-relative times by the SDK).
+        const parent = tracer.startSpan('parent', { startTime: 1_700_000_001_000 }, ROOT_CONTEXT);
+        tracer.startSpan('child', { startTime: 1_700_000_001_100 }, trace.setSpan(ROOT_CONTEXT, parent)).end(1_700_000_001_200);
+        parent.end(1_700_000_001_300);
         const [child, root] = exporter.getFinishedSpans();
         expect(child.parentSpanContext?.spanId).toBe(root.spanContext().spanId);
-        expect(child.startTime).toEqual([1, 100000000]);
+        expect(child.startTime).toEqual([1_700_000_001, 100000000]);
     });
 
     it('resolves the browser OTLP exporter, which posts JSON with fetch in cors mode', async () => {

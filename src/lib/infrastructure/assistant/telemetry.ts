@@ -1,4 +1,4 @@
-import { ROOT_CONTEXT, SpanStatusCode, trace, type Attributes, type Span, type Tracer } from '@opentelemetry/api';
+import { ROOT_CONTEXT, SpanStatusCode, trace, type Attributes, type HrTime, type Span, type Tracer } from '@opentelemetry/api';
 import { BatchSpanProcessor, SimpleSpanProcessor, TracerProvider, type SpanExporter, type SpanProcessor } from '@opentelemetry/sdk-trace';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
@@ -59,6 +59,15 @@ interface TurnState {
 interface ToolState {
     span: Span;
     turnId: string;
+}
+
+/**
+ * Event times are epoch milliseconds. They are handed to the SDK as HrTime because the SDK reads a
+ * plain number that is not larger than performance.now() as a performance-relative time.
+ */
+export function epochMillisToHrTime(ms: number): HrTime {
+    const seconds = Math.floor(ms / 1000);
+    return [seconds, Math.round((ms - seconds * 1000) * 1e6)];
 }
 
 export function truncateContent(text: string, max: number): string {
@@ -138,7 +147,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
         }
     };
     const childOf = (parent: Span, name: string, startTime: number, attributes: Attributes): Span =>
-        options.tracer.startSpan(name, { startTime, attributes }, trace.setSpan(ROOT_CONTEXT, parent));
+        options.tracer.startSpan(name, { startTime: epochMillisToHrTime(startTime), attributes }, trace.setSpan(ROOT_CONTEXT, parent));
 
     const markError = (span: Span, code: string, message: string) => {
         span.setStatus({ code: SpanStatusCode.ERROR, message });
@@ -159,7 +168,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
         for (const [toolCallId, tool] of [...tools]) {
             if (tool.turnId === turnId) {
                 attempt(() => markError(tool.span, reason, reason));
-                attempt(() => tool.span.end(at));
+                attempt(() => tool.span.end(epochMillisToHrTime(at)));
                 tools.delete(toolCallId);
             }
         }
@@ -179,7 +188,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
             attempt(() => turn.span.setAttribute(A.ATTR_RUCIO_TURN_STATUS, 'aborted'));
             attempt(() => setUser(turn.span));
             attempt(() => markError(turn.span, 'aborted', 'aborted'));
-            attempt(() => turn.span.end(at));
+            attempt(() => turn.span.end(epochMillisToHrTime(at)));
         } finally {
             forgetTurn(turnId, turn);
         }
@@ -217,7 +226,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                 }
                 const span = options.tracer.startSpan(
                     `${A.GEN_AI_OPERATION_INVOKE_AGENT} ${TELEMETRY_AGENT_NAME}`,
-                    { startTime: event.at, attributes },
+                    { startTime: epochMillisToHrTime(event.at), attributes },
                     ROOT_CONTEXT,
                 );
                 turns.set(event.turnId, {
@@ -259,7 +268,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                     turn.lastOutput = output;
                 }
                 const span = childOf(turn.span, `${A.GEN_AI_OPERATION_CHAT} ${turn.model}`, start, attributes);
-                span.end(event.at);
+                span.end(epochMillisToHrTime(event.at));
                 turn.boundary = event.at;
                 return;
             }
@@ -296,7 +305,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                     [A.ATTR_RUCIO_APPROVAL_SCOPE]: event.scope,
                     [A.ATTR_RUCIO_APPROVAL_APPROVER]: event.approver,
                 };
-                target.addEvent('tool.approval', attributes, event.at);
+                target.addEvent('tool.approval', attributes, epochMillisToHrTime(event.at));
                 target.setAttributes(attributes);
                 return;
             }
@@ -315,7 +324,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                     const code = safeErrorCode(event.error.error);
                     markError(tool.span, code, isFull() ? `${code}: ${event.error.message}` : code);
                 }
-                tool.span.end(event.at);
+                tool.span.end(epochMillisToHrTime(event.at));
                 tools.delete(event.toolCallId);
                 const turn = turns.get(tool.turnId);
                 if (turn) {
@@ -341,7 +350,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                     attributes[A.ATTR_LANGFUSE_OBSERVATION_INPUT] = sql;
                 }
                 const span = childOf(parent, 'duckdb query', event.at - event.durationMs, attributes);
-                span.end(event.at);
+                span.end(epochMillisToHrTime(event.at));
                 return;
             }
             case 'skill-activated': {
@@ -354,7 +363,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                     [A.ATTR_RUCIO_SKILL_SOURCE]: event.source,
                     [A.ATTR_LANGFUSE_OBSERVATION_TYPE]: 'event',
                 });
-                span.end(event.at);
+                span.end(epochMillisToHrTime(event.at));
                 return;
             }
             case 'compaction': {
@@ -365,13 +374,13 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                     [A.ATTR_LANGFUSE_OBSERVATION_TYPE]: 'span',
                 };
                 if (turn) {
-                    childOf(turn.span, 'compaction', event.at, attributes).end(event.at);
+                    childOf(turn.span, 'compaction', event.at, attributes).end(epochMillisToHrTime(event.at));
                     return;
                 }
                 const span = options.tracer.startSpan(
                     'compaction',
                     {
-                        startTime: event.at,
+                        startTime: epochMillisToHrTime(event.at),
                         attributes: {
                             ...attributes,
                             [A.ATTR_SESSION_ID]: event.conversationId,
@@ -382,7 +391,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                     ROOT_CONTEXT,
                 );
                 setUser(span);
-                span.end(event.at);
+                span.end(epochMillisToHrTime(event.at));
                 return;
             }
             case 'turn-finished': {
@@ -420,7 +429,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                             turn.span.setAttribute(A.ATTR_LANGFUSE_OBSERVATION_STATUS_MESSAGE, event.status);
                         }
                     });
-                    attempt(() => turn.span.end(event.at));
+                    attempt(() => turn.span.end(epochMillisToHrTime(event.at)));
                 } finally {
                     forgetTurn(event.turnId, turn);
                 }
@@ -445,7 +454,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
         turns.clear();
         turnByConversation.clear();
         for (const tool of [...tools.values()]) {
-            attempt(() => tool.span.end(at));
+            attempt(() => tool.span.end(epochMillisToHrTime(at)));
         }
         tools.clear();
     }

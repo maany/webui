@@ -101,6 +101,18 @@ function setup(
 const ms = (time: HrTime) => time[0] * 1000 + time[1] / 1e6;
 
 describe('createTelemetryMapper', () => {
+    it('keeps event times as epoch milliseconds even when performance.now() is larger than them', () => {
+        const now = jest.spyOn(performance, 'now').mockReturnValue(1_000_000);
+        try {
+            const { mapper, byName } = setup();
+            TURN.forEach(event => mapper.handle(event));
+            const root = byName('invoke_agent Rucio bot');
+            expect([ms(root.startTime), ms(root.endTime)]).toEqual([1000, 2600]);
+        } finally {
+            now.mockRestore();
+        }
+    });
+
     it('builds one trace per turn with child spans in the right places', () => {
         const { mapper, spans, byName } = setup();
         TURN.forEach(event => mapper.handle(event));
