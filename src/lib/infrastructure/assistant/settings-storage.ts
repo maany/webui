@@ -130,8 +130,14 @@ export function saveAssistantSettings(settings: AssistantSettings): void {
             settings.providers.forEach(provider => {
                 if (provider.apiKey) keys[provider.id] = provider.apiKey;
             });
+            // The key-free entry goes first: if it cannot be written, drop the old entry so a plaintext key never stays behind.
+            try {
+                localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...settings, providers: settings.providers.map(withoutKey) }));
+            } catch (error) {
+                localStorage.removeItem(ASSISTANT_SETTINGS_KEY);
+                throw error;
+            }
             sessionStorage.setItem(ASSISTANT_SESSION_KEYS_KEY, JSON.stringify(keys));
-            localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...settings, providers: settings.providers.map(withoutKey) }));
         } else {
             sessionStorage.removeItem(ASSISTANT_SESSION_KEYS_KEY);
             localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify(settings));
@@ -144,8 +150,13 @@ export function saveAssistantSettings(settings: AssistantSettings): void {
 
 export function clearAssistantSettings(): void {
     if (!isBrowser()) return;
+    // Each storage in its own block so keys cannot outlive a clear when the other one throws.
     try {
         localStorage.removeItem(ASSISTANT_SETTINGS_KEY);
+    } catch {
+        console.error('Failed to clear assistant settings');
+    }
+    try {
         sessionStorage.removeItem(ASSISTANT_SESSION_KEYS_KEY);
     } catch {
         console.error('Failed to clear assistant settings');

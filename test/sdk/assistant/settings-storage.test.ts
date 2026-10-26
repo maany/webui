@@ -152,4 +152,35 @@ describe('assistant settings storage', () => {
         expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
         expect(() => saveAssistantSettings(withProviders())).not.toThrow();
     });
+
+    it('leaves no API key in localStorage after switching from local to session', () => {
+        saveAssistantSettings(withProviders());
+        expect(localStorage.getItem(ASSISTANT_SETTINGS_KEY)).toContain('sk-ant-secret');
+        saveAssistantSettings(withProviders({ keyStorage: 'session' }));
+        expect(localStorage.getItem(ASSISTANT_SETTINGS_KEY)).not.toContain('sk-ant-secret');
+    });
+
+    it('never leaves an older plaintext key in localStorage when the session save hits a quota error', () => {
+        jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        saveAssistantSettings(withProviders());
+        const realSetItem = Storage.prototype.setItem;
+        jest.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+            if (this === localStorage) throw new Error('QuotaExceededError');
+            realSetItem.call(this, key, value);
+        });
+        expect(() => saveAssistantSettings(withProviders({ keyStorage: 'session' }))).not.toThrow();
+        expect(localStorage.getItem(ASSISTANT_SETTINGS_KEY) ?? '').not.toContain('sk-ant-secret');
+    });
+
+    it('still clears sessionStorage keys when removing from localStorage throws', () => {
+        jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        saveAssistantSettings(withProviders({ keyStorage: 'session' }));
+        const realRemoveItem = Storage.prototype.removeItem;
+        jest.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+            if (this === localStorage) throw new Error('denied');
+            realRemoveItem.call(this, key);
+        });
+        clearAssistantSettings();
+        expect(sessionStorage.getItem(ASSISTANT_SESSION_KEYS_KEY)).toBeNull();
+    });
 });
