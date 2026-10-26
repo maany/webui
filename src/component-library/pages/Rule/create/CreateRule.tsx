@@ -51,6 +51,13 @@ const NextButton = ({
     );
 };
 
+/** Wizard state pushed in from outside the wizard (Rucio bot prefill). A new object applies it again. */
+export interface CreateRulePrefill {
+    parameters: CreateRuleParameters;
+    activeIndex: number;
+    nonce: number;
+}
+
 interface CreateRuleProps {
     getSavedParameters: () => CreateRuleParameters | undefined;
     getSavedIndex: () => number | undefined;
@@ -58,6 +65,7 @@ interface CreateRuleProps {
     setSavedIndex: (activeIndex: number) => void;
     removeSavedParameters: () => void;
     removeSavedIndex: () => void;
+    prefill?: CreateRulePrefill;
 }
 
 export const CreateRule = (props: CreateRuleProps) => {
@@ -65,6 +73,8 @@ export const CreateRule = (props: CreateRuleProps) => {
     const [parameters, setParameters] = useState<CreateRuleParameters>(getEmptyCreateRuleParameters());
     const [activeIndex, setActiveIndex] = useState<number>(0);
     const [optionsErrors, setOptionsErrors] = useState<CreateRuleOptionsErrors>(getEmptyOptionsErrors());
+    // Bumped on every prefill so the stages remount: some of them copy parameters into local state on mount
+    const [stageKey, setStageKey] = useState<number>(0);
 
     const checkOptionsErrors = () => {
         setOptionsErrors(computeOptionsErrors(parameters));
@@ -80,6 +90,16 @@ export const CreateRule = (props: CreateRuleProps) => {
 
         setIsLoading(false);
     }, []);
+
+    const prefill = props.prefill;
+    useEffect(() => {
+        if (isLoading || !prefill) return;
+        // Index 4 is the submission stage, which submits on mount: an external prefill may only reach stages 0 to 3
+        const index = Math.min(Math.max(Math.trunc(prefill.activeIndex) || 0, 0), 3);
+        setParameters(prefill.parameters);
+        setActiveIndex(index);
+        setStageKey(previous => previous + 1);
+    }, [prefill, isLoading]);
 
     // Effects to sync parameters and activeIndex with localStorage
     useEffect(() => {
@@ -178,9 +198,16 @@ export const CreateRule = (props: CreateRuleProps) => {
                     </header>
                     <Timeline steps={steps} activeIndex={activeIndex} onSwitch={activeIndex !== 4 ? setActiveIndex : undefined} />
                     <div>
-                        <CreateRuleStageData visible={activeIndex === 0} parameters={parameters} addDID={addDID} removeDID={removeDID} />
+                        <CreateRuleStageData
+                            key={`dids-${stageKey}`}
+                            visible={activeIndex === 0}
+                            parameters={parameters}
+                            addDID={addDID}
+                            removeDID={removeDID}
+                        />
                         {activeIndex === 1 && (
                             <CreateRuleStageStorage
+                                key={`rses-${stageKey}`}
                                 parameters={parameters}
                                 updateStorage={updateStorage}
                                 updateNeedsApproval={updateNeedsApproval}
@@ -188,9 +215,14 @@ export const CreateRule = (props: CreateRuleProps) => {
                             />
                         )}
                         {activeIndex === 2 && (
-                            <CreateRuleStageOptions parameters={parameters} updateOptionValue={updateOptionValue} errors={optionsErrors} />
+                            <CreateRuleStageOptions
+                                key={`options-${stageKey}`}
+                                parameters={parameters}
+                                updateOptionValue={updateOptionValue}
+                                errors={optionsErrors}
+                            />
                         )}
-                        {activeIndex === 3 && <CreateRuleStageSummary parameters={parameters} />}
+                        {activeIndex === 3 && <CreateRuleStageSummary key={`summary-${stageKey}`} parameters={parameters} />}
                     </div>
                     {activeIndex === 4 && (
                         <CreateRuleStageSubmission
