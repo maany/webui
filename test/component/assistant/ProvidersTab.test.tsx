@@ -32,8 +32,8 @@ function renderTab(options: { config?: AssistantConfig; settings?: Partial<Assis
             />
         );
     };
-    render(<Harness />);
-    return { latest, onTest };
+    const view = render(<Harness />);
+    return { latest, onTest, unmount: view.unmount };
 }
 
 const card = (label: string) => screen.getByRole('listitem', { name: label });
@@ -129,6 +129,7 @@ describe('ProvidersTab', () => {
         expect(await screen.findByText('Connected in 42 ms.')).toBeInTheDocument();
         expect(onTest).toHaveBeenCalledWith(
             expect.objectContaining({ providerId: 'p-claude', kind: 'anthropic', model: 'claude-sonnet-5-5', apiKey: 'sk-ant-test', via: 'direct' }),
+            expect.any(AbortSignal),
         );
     });
 
@@ -136,7 +137,10 @@ describe('ProvidersTab', () => {
         const { onTest } = renderTab();
         fireEvent.click(screen.getByRole('button', { name: 'Test connection for CERN GPT-OSS' }));
         await screen.findByText('Connected in 42 ms.');
-        expect(onTest).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'operator', via: 'relay', baseURL: '/api/assistant/llm' }));
+        expect(onTest).toHaveBeenCalledWith(
+            expect.objectContaining({ providerId: 'operator', via: 'relay', baseURL: '/api/assistant/llm' }),
+            expect.any(AbortSignal),
+        );
         expect(onTest.mock.calls[0][0]).not.toHaveProperty('apiKey');
     });
 
@@ -162,5 +166,58 @@ describe('ProvidersTab', () => {
         expect(
             screen.getByText('Rucio bot cannot use your active provider. Your operator does not allow this provider type. Choose another one below.'),
         ).toBeInTheDocument();
+    });
+
+    it('ends in a failure alert when the test rejects', async () => {
+        renderTab({ onTest: jest.fn(async () => Promise.reject(new Error('boom'))) });
+        fireEvent.click(screen.getByRole('button', { name: 'Test connection for CERN GPT-OSS' }));
+        expect(await screen.findByText('The connection test failed unexpectedly. Try again.')).toBeInTheDocument();
+    });
+
+    it('aborts a running test on unmount', async () => {
+        const signals: AbortSignal[] = [];
+        const onTest = jest.fn((_resolved: unknown, signal?: AbortSignal) => {
+            signals.push(signal as AbortSignal);
+            return new Promise<ConnectionTestResult>(() => {});
+        });
+        const { unmount } = renderTab({ onTest });
+        fireEvent.click(screen.getByRole('button', { name: 'Test connection for CERN GPT-OSS' }));
+        await waitFor(() => expect(signals).toHaveLength(1));
+        expect(signals[0].aborted).toBe(false);
+        unmount();
+        expect(signals[0].aborted).toBe(true);
+    });
+
+    it('ignores a result that arrives after the provider was edited', async () => {
+        let resolveTest: (result: ConnectionTestResult) => void = () => {};
+        const onTest = jest.fn(() => new Promise<ConnectionTestResult>(resolve => (resolveTest = resolve)));
+        renderTab({ settings: { providers: [claude] }, onTest });
+        fireEvent.click(screen.getByRole('button', { name: 'Test connection for My Claude' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Edit My Claude' }));
+        const dialog = await screen.findByRole('dialog');
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Save provider' }));
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+        resolveTest({ ok: true, latencyMs: 1 });
+        await Promise.resolve();
+        expect(screen.queryByText(/Connected in/)).not.toBeInTheDocument();
+    });
+
+    it('clears a shown result when the provider is edited', async () => {
+        renderTab({ settings: { providers: [claude] } });
+        fireEvent.click(screen.getByRole('button', { name: 'Test connection for My Claude' }));
+        await screen.findByText('Connected in 42 ms.');
+        fireEvent.click(screen.getByRole('button', { name: 'Edit My Claude' }));
+        const dialog = await screen.findByRole('dialog');
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Save provider' }));
+        await waitFor(() => expect(screen.queryByText('Connected in 42 ms.')).not.toBeInTheDocument());
+    });
+
+    it('selects the next allowed provider when the active one is deleted and there is no operator default', async () => {
+        const other: ProviderConfig = { id: 'p-other', kind: 'anthropic', label: 'Other', apiKey: 'k', model: 'claude-sonnet-5-5' };
+        const { latest } = renderTab({ config: DEFAULT_ASSISTANT_CONFIG, settings: { providers: [claude, other], activeProviderId: 'p-claude' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Delete My Claude' }));
+        const dialog = await screen.findByRole('dialog');
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Delete provider' }));
+        await waitFor(() => expect(latest.current.activeProviderId).toBe('p-other'));
     });
 });

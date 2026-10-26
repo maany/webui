@@ -31,7 +31,7 @@ export interface ProvidersTabProps {
     config: AssistantConfig;
     settings: AssistantSettings;
     onUpdate(patch: (settings: AssistantSettings) => AssistantSettings): void;
-    onTestConnection(resolved: ResolvedProvider): Promise<ConnectionTestResult>;
+    onTestConnection(resolved: ResolvedProvider, signal?: AbortSignal): Promise<ConnectionTestResult>;
     newId(): string;
 }
 
@@ -93,26 +93,69 @@ export const ProvidersTab: React.FC<ProvidersTabProps> = ({ config, settings, on
 
     const choose = (id: string) => onUpdate(s => ({ ...s, activeProviderId: id }));
 
-    const save = (provider: ProviderConfig) =>
+    const controllers = React.useRef(new Map<string, AbortController>());
+
+    React.useEffect(() => {
+        const map = controllers.current;
+        return () => {
+            map.forEach(controller => controller.abort());
+            map.clear();
+        };
+    }, []);
+
+    // Drops the running test and the shown result of a provider that changed or was removed.
+    const discardTest = (id: string) => {
+        controllers.current.get(id)?.abort();
+        controllers.current.delete(id);
+        setTests(current => {
+            if (!(id in current)) return current;
+            const rest = { ...current };
+            delete rest[id];
+            return rest;
+        });
+    };
+
+    const save = (provider: ProviderConfig) => {
+        discardTest(provider.id);
         onUpdate(s => {
             const exists = s.providers.some(p => p.id === provider.id);
             const providers = exists ? s.providers.map(p => (p.id === provider.id ? provider : p)) : [...s.providers, provider];
             const activeProviderId = !exists && s.activeProviderId === 'operator' && !config.defaultProvider ? provider.id : s.activeProviderId;
             return { ...s, providers, activeProviderId };
         });
+    };
 
-    const remove = (id: string) =>
-        onUpdate(s => ({
-            ...s,
-            providers: s.providers.filter(p => p.id !== id),
-            activeProviderId: s.activeProviderId === id ? 'operator' : s.activeProviderId,
-        }));
+    const remove = (id: string) => {
+        discardTest(id);
+        onUpdate(s => {
+            const providers = s.providers.filter(p => p.id !== id);
+            let activeProviderId = s.activeProviderId;
+            if (activeProviderId === id) {
+                const next = config.allowByok ? providers.find(p => config.allowedProviderKinds.includes(p.kind)) : undefined;
+                activeProviderId = config.defaultProvider ? 'operator' : next?.id ?? 'operator';
+            }
+            return { ...s, providers, activeProviderId };
+        });
+    };
 
     const runTest = async (id: string) => {
         const resolved = resolveActiveProvider({ ...settings, activeProviderId: id }, config, ASSISTANT_RELAY_BASE_URL, lookupModel);
+        controllers.current.get(id)?.abort();
+        const controller = new AbortController();
+        controllers.current.set(id, controller);
         setTests(current => ({ ...current, [id]: { status: 'testing' } }));
-        const result: ConnectionTestResult =
-            'error' in resolved ? { ok: false, code: 'unknown', hint: PROVIDER_ERROR_TEXT[resolved.error] } : await onTestConnection(resolved);
+        let result: ConnectionTestResult;
+        if ('error' in resolved) {
+            result = { ok: false, code: 'unknown', hint: PROVIDER_ERROR_TEXT[resolved.error] };
+        } else {
+            try {
+                result = await onTestConnection(resolved, controller.signal);
+            } catch {
+                result = { ok: false, code: 'unknown', hint: 'The connection test failed unexpectedly. Try again.' };
+            }
+        }
+        if (controller.signal.aborted) return;
+        controllers.current.delete(id);
         setTests(current => ({ ...current, [id]: { status: 'done', result } }));
     };
 
