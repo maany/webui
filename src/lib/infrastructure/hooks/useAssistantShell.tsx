@@ -6,6 +6,7 @@ import type { AssistantPageActionRegistryPort } from '@/lib/core/port/secondary/
 import { attachPageActionRegistry, useAttachedPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-bridge';
 import { createPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-registry';
 import { loadAssistantSettings } from '@/lib/infrastructure/assistant/settings-storage';
+import { useCommandPaletteOpen } from '@/lib/infrastructure/hooks/useCommandPalette';
 import { registerSignOutHook } from '@/lib/infrastructure/auth/sign-out-hooks';
 
 export type AssistantPanelState = 'closed' | 'open' | 'minimized';
@@ -85,6 +86,8 @@ const AssistantShellContext = createContext<AssistantShellValue | null>(null);
  */
 export function AssistantShellProvider({ children }: { children: ReactNode }) {
     const enabled = useFeature('assistant');
+    const paletteOpenRef = useRef(false);
+    const paletteOpen = useCommandPaletteOpen();
     const [panelState, setPanelState] = useState<AssistantPanelState>('closed');
     const [hasOpened, setHasOpened] = useState(false);
     const [registry] = useState(createPageActionRegistry);
@@ -125,6 +128,10 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
     const notifyStorageChanged = useCallback(() => setStorageVersion(version => version + 1), []);
 
     useEffect(() => {
+        paletteOpenRef.current = paletteOpen;
+    }, [paletteOpen]);
+
+    useEffect(() => {
         const before = panelStateRef.current;
         panelStateRef.current = panelState;
         if (panelState !== 'closed' || before === 'closed') return;
@@ -140,6 +147,8 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
         if (!enabled) return;
         const onKeyDown = (event: KeyboardEvent) => {
             if (!isAssistantShortcut(event)) return;
+            // Holding the keys must not flicker the panel, and the palette owns the keyboard while it is open.
+            if (event.repeat || paletteOpenRef.current) return;
             event.preventDefault();
             toggle();
         };

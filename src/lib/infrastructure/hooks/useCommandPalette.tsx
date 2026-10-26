@@ -97,3 +97,6 @@ export const useCommandPalette = (): CommandPaletteContextType => {
 
     return context;
 };
+
+/** Whether the command palette is open. False outside the provider, so shell code can read it without requiring one. */
+export const useCommandPaletteOpen = (): boolean => useContext(CommandPaletteContext)?.isOpen ?? false;

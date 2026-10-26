@@ -13,6 +13,7 @@ import { getAttachedPageActionRegistry } from '@/lib/infrastructure/assistant/pa
 import { ASSISTANT_SETTINGS_KEY, getDefaultAssistantSettings } from '@/lib/infrastructure/assistant/settings-storage';
 import { runSignOutHooks } from '@/lib/infrastructure/auth/sign-out-hooks';
 import { AssistantShellProvider, useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
+import { CommandPaletteProvider, useCommandPalette } from '@/lib/infrastructure/hooks/useCommandPalette';
 import { flagMap } from 'test/fixtures/assistant-flags';
 
 function PanelState() {
@@ -124,5 +125,49 @@ describe('Rucio bot shell', () => {
         expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
         expect(other).toHaveFocus();
         other.remove();
+    });
+
+    it('ignores auto-repeated shortcut keydowns', () => {
+        renderShell(true);
+        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('open');
+        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true, repeat: true });
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('open');
+    });
+
+    it('does nothing while the command palette is open', () => {
+        function OpenPalette() {
+            const { open, close } = useCommandPalette();
+            return (
+                <>
+                    <button type="button" onClick={open}>
+                        palette open
+                    </button>
+                    <button type="button" onClick={close}>
+                        palette close
+                    </button>
+                </>
+            );
+        }
+        render(
+            <FeatureProvider features={flagMap({ assistant: true })}>
+                <CommandPaletteProvider>
+                    <AssistantShellProvider>
+                        <OpenPalette />
+                        <PanelState />
+                    </AssistantShellProvider>
+                </CommandPaletteProvider>
+            </FeatureProvider>,
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'palette open' }));
+        const event = new KeyboardEvent('keydown', { key: 'K', ctrlKey: true, shiftKey: true, cancelable: true, bubbles: true });
+        act(() => {
+            window.dispatchEvent(event);
+        });
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
+        expect(event.defaultPrevented).toBe(false);
+        fireEvent.click(screen.getByRole('button', { name: 'palette close' }));
+        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('open');
     });
 });
