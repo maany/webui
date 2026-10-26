@@ -147,6 +147,24 @@ describe('policy changes and late tools during a run', () => {
         expect(updates.filter(update => update.type === 'tool-result').pop()).toMatchObject({ error: { error: 'denied_by_policy' } });
     });
 
+    it('refuses a call built as allow when its policy is denied after the tools were built', async () => {
+        const { fake, run, executed, policies } = setupWrite();
+        fake.setResponses([
+            { toolCalls: [{ name: 'do_write', input: { id: '1' } }] },
+            () => {
+                // The tools for this call were already built as allow.
+                policies.do_write = 'deny';
+                return { toolCalls: [{ name: 'do_write', input: { id: '2' } }] };
+            },
+            { text: 'done' },
+        ]);
+        const updates = await collectUpdates(run());
+        expect(executed).toEqual(['1']);
+        expect(updates.some(update => update.type === 'approval-required')).toBe(false);
+        expect(updates.filter(update => update.type === 'tool-result').pop()).toMatchObject({ error: { error: 'denied_by_policy' } });
+        expect(updates[updates.length - 1]).toEqual({ type: 'finished', status: 'completed' });
+    });
+
     it('resumes the approval of a tool built as ask when its policy becomes allow', async () => {
         const { fake, run, executed, policies } = setupWrite();
         policies.do_write = 'ask';
