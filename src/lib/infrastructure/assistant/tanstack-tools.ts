@@ -44,7 +44,7 @@ interface InvalidArgsMarker {
     [INVALID_ARGS_KEY]: { message: string; received: unknown };
 }
 
-function isInvalidArgsMarker(value: unknown): value is InvalidArgsMarker {
+export function isInvalidArgsMarker(value: unknown): value is InvalidArgsMarker {
     return typeof value === 'object' && value !== null && INVALID_ARGS_KEY in value;
 }
 
