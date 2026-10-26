@@ -30,6 +30,8 @@ function setup(
     const controller = new AbortController();
     let markSlowToolStarted: () => void = () => undefined;
     const slowToolStarted = new Promise<void>(resolve => (markSlowToolStarted = resolve));
+    let markSlowToolAborted: () => void = () => undefined;
+    const slowToolAborted = new Promise<void>(resolve => (markSlowToolAborted = resolve));
     const tools: RegisteredTool<any>[] = [
         makeTool('read_echo', 'read', z.object({ text: z.string() }), async args => {
             executed.push(`read_echo:${args.text}`);
@@ -45,6 +47,7 @@ function setup(
                     const timer = setTimeout(() => resolve({ ok: true }), options.slowToolMs ?? 5_000);
                     ctx.signal.addEventListener('abort', () => {
                         clearTimeout(timer);
+                        markSlowToolAborted();
                         reject(new Error('aborted'));
                     });
                 }),
@@ -85,7 +88,7 @@ function setup(
     );
     const run = (history: ChatMessage[] = [], signal: AbortSignal = controller.signal) =>
         runner.run({ conversationId: 'conv-1', turnId: 'turn-1', history, userMessage: makeUserMessage('hello'), signal });
-    return { runner, run, controller, executed, events, fake, policies, slowToolStarted };
+    return { runner, run, controller, executed, events, fake, policies, slowToolStarted, slowToolAborted };
 }
 
 const finished = (updates: RunnerUpdate[]) => updates[updates.length - 1];
@@ -194,11 +197,16 @@ describe('createAgentRunner', () => {
     });
 
     it('aborts an in-flight tool on stop', async () => {
-        const { run, controller, slowToolStarted } = setup([{ toolCalls: [{ name: 'slow_read', input: {} }] }, { text: 'never' }]);
+        const { run, controller, slowToolStarted, slowToolAborted } = setup([{ toolCalls: [{ name: 'slow_read', input: {} }] }, { text: 'never' }]);
         // Stop only once the tool is really running, so load cannot reorder the abort and the stream.
         void slowToolStarted.then(() => controller.abort());
         const updates = await collectUpdates(run());
-        expect(updates.find(update => update.type === 'tool-result')).toMatchObject({ error: { error: 'aborted' } });
+        // The stop ends the turn without waiting for the tool's rejection to be streamed back, so a tool-result
+        // may or may not precede `finished`; the reducer closes open tool calls as aborted either way.
+        await slowToolAborted;
+        const result = updates.find(update => update.type === 'tool-result');
+        if (result) expect(result).toMatchObject({ error: { error: 'aborted' } });
+        expect(updates.some(update => update.type === 'tool-call')).toBe(true);
         expect(finished(updates)).toEqual({ type: 'finished', status: 'stopped' });
     });
 
