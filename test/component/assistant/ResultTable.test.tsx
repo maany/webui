@@ -66,7 +66,7 @@ describe('ResultTable', () => {
     });
 
     it('survives bigint and dates in cells', () => {
-        render(<ResultTable columns={['a', 'b', 'c']} rows={[{ a: { x: 1n }, b: [2n], c: new Date('nope') }]} totalRows={1} />);
+        render(<ResultTable columns={['a', 'b', 'c']} rows={[{ a: { x: BigInt(1) }, b: [BigInt(2)], c: new Date('nope') }]} totalRows={1} />);
         expect(screen.getByText('{"x":"1"}')).toBeInTheDocument();
         expect(screen.getByText('["2"]')).toBeInTheDocument();
     });

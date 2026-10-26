@@ -68,12 +68,12 @@ describe('csv', () => {
     });
 
     it('serialises bigint, dates and nested values safely', () => {
-        expect(csvCell(5n)).toBe('5');
-        expect(csvCell({ a: 1n })).toBe('"{""a"":""1""}"');
-        expect(csvCell([1n])).toBe('"[""1""]"');
+        expect(csvCell(BigInt(5))).toBe('5');
+        expect(csvCell({ a: BigInt(1) })).toBe('"{""a"":""1""}"');
+        expect(csvCell([BigInt(1)])).toBe('"[""1""]"');
         expect(csvCell(new Date('2026-10-25T10:00:00.000Z'))).toBe('2026-10-25T10:00:00.000Z');
         expect(csvCell(new Date('nope'))).toBe('');
-        expect(stringifyValue({ a: 1n })).toBe('{"a":"1"}');
+        expect(stringifyValue({ a: BigInt(1) })).toBe('{"a":"1"}');
         expect(stringifyValue(new Date('nope'))).toBe('');
     });
 
