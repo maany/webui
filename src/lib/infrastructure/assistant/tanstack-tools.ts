@@ -27,6 +27,11 @@ export interface BuildToolsOptions {
     policyFor(toolName: string): ToolPolicy;
     makeToolContext(toolCallId: string): ToolExecutionContext;
     onResult: ToolResultObserver;
+    /**
+     * Policy to build a tool with instead of the live one. A rebuild during a run keeps the approval mode of tools
+     * built earlier, so a pending approval still matches its tool; execution checks stay live.
+     */
+    builtWith?: ReadonlyMap<string, ToolPolicy>;
 }
 
 export interface BuiltTools {
@@ -85,7 +90,7 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
     const builtPolicy = new Map<string, ToolPolicy>();
 
     for (const tool of tools) {
-        const policy = options.policyFor(tool.spec.name);
+        const policy = options.builtWith?.get(tool.spec.name) ?? options.policyFor(tool.spec.name);
         builtPolicy.set(tool.spec.name, policy);
 
         const execute = async (args: unknown, tanstackContext?: { toolCallId?: string }): Promise<unknown> => {

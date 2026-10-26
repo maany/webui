@@ -6,21 +6,28 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { DataHandleStoreProvider } from './DataHandleStoreContext';
 import { useFeatureFlags } from '@/component-library/features/feature-flags/FeatureProvider';
+import type { ChatMessage } from '@/lib/core/entity/assistant/conversation';
 import type { AssistantEventListener } from '@/lib/core/entity/assistant/events';
+import type { ToolSpec } from '@/lib/core/entity/assistant/tool';
 import { resolveActiveProvider } from '@/lib/core/services/assistant-provider';
 import { toolVisibility } from '@/lib/core/services/assistant-policy';
+import { addActiveTools, selectRunTools } from '@/lib/infrastructure/assistant/active-tools';
+import { withToolState } from '@/lib/infrastructure/assistant/conversation-tool-state';
+import { getAssistantDataHandleStore } from '@/lib/infrastructure/assistant/duckdb';
+import { deriveHandleRecords } from '@/lib/infrastructure/assistant/message-selectors';
 import { createAssistantEventBus, type AssistantEventBus } from '@/lib/infrastructure/assistant/event-bus';
 import { createConversationRepository } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
 import { lookupModel } from '@/lib/infrastructure/assistant/model-catalog';
-import { createNoopDataHandleStore } from '@/lib/infrastructure/assistant/noop-data-handle-store';
 import { buildPageContext, toAccountKey } from '@/lib/infrastructure/assistant/page-context';
 import { createPolicyFor } from '@/lib/infrastructure/assistant/policy-for';
 import { ASSISTANT_RELAY_BASE_URL, DEFAULT_BASE_URLS } from '@/lib/infrastructure/assistant/provider-kinds';
 import { completeText, createAgentRunner } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
-import { allTools } from '@/lib/infrastructure/assistant/tool-registry';
+import { allTools, getTool } from '@/lib/infrastructure/assistant/tool-registry';
+import { ASSISTANT_DATA_TOOLS_PROMPT } from '@/lib/infrastructure/assistant/tools';
 import { AssistantContext, useAssistantController, type AssistantControllerDeps } from '@/lib/infrastructure/hooks/useAssistant';
 import { useAssistantConfig } from '@/lib/infrastructure/hooks/useAssistantConfig';
 import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
+import { useDataHandleLifecycle } from '@/lib/infrastructure/hooks/useDataHandleLifecycle';
 import { useAssistantSettings } from '@/lib/infrastructure/hooks/useAssistantSettings';
 import { usePermissions } from '@/lib/infrastructure/hooks/usePermissions';
 
@@ -32,7 +39,7 @@ export type AssistantProviderOverrides = Partial<Pick<AssistantControllerDeps, '
 
 /**
  * Owns the event bus, runner factory, conversation repository, data handle
- * store (no-op until phase 2) and the chat controller. Lives in the lazily
+ * store (DuckDB) and the chat controller. Lives in the lazily
  * loaded assistant bundle. Reads only rucioAccount, rucioVO and role from the
  * session, never the session object or its token.
  */
@@ -50,13 +57,37 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     const queryClient = useQueryClient();
     const shell = useAssistantPanel();
     const [bus] = useState(createAssistantEventBus);
-    const [handles] = useState(() => overrides?.handles ?? createNoopDataHandleStore());
-    const [repository] = useState(() => overrides?.repository ?? createConversationRepository());
+    // find_tools active set of the open conversation, persisted as Conversation.activeTools by withToolState.
+    const activeToolsRef = useRef<{ conversationId: string | undefined; names: string[] }>({ conversationId: undefined, names: [] });
+    const messagesRef = useRef<ChatMessage[]>([]);
+    const conversationAllowRef = useRef<string[]>([]);
+    const [handles] = useState(() => overrides?.handles ?? getAssistantDataHandleStore());
+    // Every save goes through the wrapper: rows never reach IndexedDB and handle provenance is stored.
+    const [repository] = useState(() =>
+        (overrides?.repository ?? createConversationRepository()).then(({ repository: stored, persistent }) => ({
+            repository: withToolState(stored, id => (activeToolsRef.current.conversationId === id ? activeToolsRef.current.names : undefined)),
+            persistent,
+        })),
+    );
 
     const configRef = useRef(config);
     configRef.current = config;
     const settingsRef = useRef(settings);
     settingsRef.current = settings;
+
+    const isVisible = (spec: Pick<ToolSpec, 'requires' | 'risk'>): boolean =>
+        !!flags && toolVisibility(spec, { flags, role, permissionsReady: isReady }).visible;
+    // Live checks shared by find_tools, refresh_handle and the Refresh button on SQL results.
+    const isToolVisible = (name: string): boolean => {
+        const tool = getTool(name);
+        return tool !== undefined && isVisible(tool.spec);
+    };
+    const toolPolicy = (name: string) =>
+        createPolicyFor(
+            () => configRef.current,
+            () => settingsRef.current,
+            () => new Set(conversationAllowRef.current),
+        )(name);
 
     const deps: AssistantControllerDeps = {
         accountKey,
@@ -69,14 +100,26 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
                 ? { ...resolved, baseURL: DEFAULT_BASE_URLS[resolved.kind] }
                 : resolved;
         },
-        visibleTools: () => (flags ? allTools().filter(tool => toolVisibility(tool.spec, { flags, role, permissionsReady: isReady }).visible) : []),
+        // Visible tools that are always on or were loaded by find_tools in this conversation.
+        visibleTools: () => selectRunTools(allTools(), isVisible, new Set(activeToolsRef.current.names)),
+        systemPromptSections: () => [ASSISTANT_DATA_TOOLS_PROMPT],
         makePolicyFor: getConversationAllow =>
             createPolicyFor(
                 () => configRef.current,
                 () => settingsRef.current,
                 getConversationAllow,
             ),
-        toolContextExtras: () => ({ ...(flags ? { flags } : {}), ...(role ? { role } : {}), minimizePanel: shell.minimize }),
+        toolContextExtras: () => ({
+            ...(flags ? { flags } : {}),
+            ...(role ? { role } : {}),
+            minimizePanel: shell.minimize,
+            activateTools: (names: string[]) => {
+                activeToolsRef.current = { ...activeToolsRef.current, names: addActiveTools(activeToolsRef.current.names, names) };
+            },
+            isToolVisible,
+            toolPolicy,
+            handleRecords: () => deriveHandleRecords(messagesRef.current),
+        }),
         pageContext: () =>
             accountKey
                 ? buildPageContext({
@@ -98,13 +141,17 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     };
     const assistant = useAssistantController(deps);
 
-    // The same live checks refresh_handle applies, for the Refresh button on SQL results.
-    const conversationAllowRef = useRef<string[]>([]);
+    messagesRef.current = assistant.messages;
     conversationAllowRef.current = assistant.conversation?.conversationAllow ?? [];
-    const refreshGate = {
-        isToolVisible: (name: string) => deps.visibleTools().some(tool => tool.spec.name === name),
-        toolPolicy: (name: string) => deps.makePolicyFor(() => new Set(conversationAllowRef.current))(name),
-    };
+
+    // Another conversation (new chat, history, account switch) starts from its own stored active set.
+    const openConversationRef = useRef(assistant.conversation);
+    openConversationRef.current = assistant.conversation;
+    const openConversationId = assistant.conversation?.id;
+    useEffect(() => {
+        activeToolsRef.current = { conversationId: openConversationId, names: openConversationRef.current?.activeTools ?? [] };
+    }, [openConversationId]);
+    useDataHandleLifecycle(handles);
 
     const { registerMemoryControls, registerConversationControls, storageVersion } = shell;
     useEffect(
@@ -142,7 +189,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     return (
         <AssistantEventBusContext.Provider value={bus}>
             <AssistantContext.Provider value={assistant}>
-                <DataHandleStoreProvider store={handles} isToolVisible={refreshGate.isToolVisible} toolPolicy={refreshGate.toolPolicy}>
+                <DataHandleStoreProvider store={handles} isToolVisible={isToolVisible} toolPolicy={toolPolicy}>
                     {children}
                 </DataHandleStoreProvider>
             </AssistantContext.Provider>

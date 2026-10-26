@@ -30,7 +30,7 @@ import { CONTEXT_OVERFLOW_ERROR, SESSION_EXPIRED_ERROR, describeRunError } from 
 import { buildSystemPrompt, COMPACTION_SYSTEM_PROMPT, transcriptForSummary } from '@/lib/infrastructure/assistant/system-prompt';
 import type { AgentRunner, AgentRunnerDeps } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
 import { isInvalidArgsMarker } from '@/lib/infrastructure/assistant/tanstack-tools';
-import type { RegisteredTool } from '@/lib/infrastructure/assistant/tool-types';
+import type { RegisteredTool, ToolExecutionContext } from '@/lib/infrastructure/assistant/tool-types';
 
 export interface PendingApproval {
     toolCallId: string;
@@ -90,7 +90,16 @@ export interface AssistantControllerDeps {
     /** Extra system prompt sections for this turn (phase 2 data tools, phase 5 skill catalog). */
     systemPromptSections?(): string[];
     /** Extra ToolExecutionContext fields (phase 3 flags, role, minimizePanel; later phases add more). */
-    toolContextExtras(): { flags?: FeatureFlagMap; role?: Role; minimizePanel?: () => void };
+    toolContextExtras(): {
+        flags?: FeatureFlagMap;
+        role?: Role;
+        minimizePanel?: () => void;
+        /** Phase 2: find_tools active set, live tool visibility and policy, handle provenance. */
+        activateTools?: ToolExecutionContext['activateTools'];
+        isToolVisible?: ToolExecutionContext['isToolVisible'];
+        toolPolicy?: ToolExecutionContext['toolPolicy'];
+        handleRecords?: ToolExecutionContext['handleRecords'];
+    };
     pageContext(): PageContext | undefined;
     retention(): RetentionSettings;
     handles: AssistantDataHandleStorePort;
@@ -436,34 +445,38 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 userText: userMessage.parts.map(part => (part.type === 'text' ? part.text : '')).join(''),
             });
 
-            const tools = d.visibleTools();
             const policyFor = d.makePolicyFor(() => new Set(latestConversation().conversationAllow));
-            const runner = d.createRunner(() => ({
-                provider,
-                tools,
-                policyFor,
-                systemPrompt: buildSystemPrompt({
-                    toolNames: tools.map(tool => tool.spec.name),
-                    compactedSummary: latestConversation().compactedSummary,
-                    now: new Date(),
-                    extraSections: depsRef.current.systemPromptSections?.() ?? [],
-                }),
-                emit: event => depsRef.current.bus.emit(event),
-                makeToolContext: (toolCallId, toolTurnId) => ({
-                    signal: controller.signal,
-                    conversationId: startConversation.id,
-                    turnId: toolTurnId,
-                    toolCallId,
-                    accountKey: startConversation.accountKey,
-                    handles: depsRef.current.handles,
-                    pages: depsRef.current.pages,
-                    navigate: url => depsRef.current.navigate(url),
-                    queryClient: depsRef.current.queryClient,
+            // The runner calls this at the start of the run and again before every model call, so tools loaded by
+            // find_tools during the turn are offered on the next step.
+            const runner = d.createRunner(() => {
+                const tools = depsRef.current.visibleTools();
+                return {
+                    provider,
+                    tools,
+                    policyFor,
+                    systemPrompt: buildSystemPrompt({
+                        toolNames: tools.map(tool => tool.spec.name),
+                        compactedSummary: latestConversation().compactedSummary,
+                        now: new Date(),
+                        extraSections: depsRef.current.systemPromptSections?.() ?? [],
+                    }),
                     emit: event => depsRef.current.bus.emit(event),
-                    ...depsRef.current.toolContextExtras(),
-                }),
-                maxSteps: d.maxSteps ?? DEFAULT_MAX_STEPS,
-            }));
+                    makeToolContext: (toolCallId, toolTurnId) => ({
+                        signal: controller.signal,
+                        conversationId: startConversation.id,
+                        turnId: toolTurnId,
+                        toolCallId,
+                        accountKey: startConversation.accountKey,
+                        handles: depsRef.current.handles,
+                        pages: depsRef.current.pages,
+                        navigate: url => depsRef.current.navigate(url),
+                        queryClient: depsRef.current.queryClient,
+                        emit: event => depsRef.current.bus.emit(event),
+                        ...depsRef.current.toolContextExtras(),
+                    }),
+                    maxSteps: d.maxSteps ?? DEFAULT_MAX_STEPS,
+                };
+            });
             runnerRef.current = runner;
 
             let turnTokens: TokenUsage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };

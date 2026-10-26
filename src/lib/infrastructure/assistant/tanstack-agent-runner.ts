@@ -1,4 +1,13 @@
-import { chat, fromSpecTokenUsage, maxIterations, type AnyTextAdapter, type ChatMiddleware, type ModelMessage, type StreamChunk } from '@tanstack/ai';
+import {
+    chat,
+    fromSpecTokenUsage,
+    maxIterations,
+    type AnyTextAdapter,
+    type ChatMiddleware,
+    type ChatMiddlewareConfig,
+    type ModelMessage,
+    type StreamChunk,
+} from '@tanstack/ai';
 import { ChatClient, stream } from '@tanstack/ai-client';
 import type { ChatMessage, MessagePart } from '@/lib/core/entity/assistant/conversation';
 import type { AssistantEvent } from '@/lib/core/entity/assistant/events';
@@ -313,6 +322,17 @@ interface ApprovalInterruptLike {
 }
 
 /**
+ * Rebuilds the tool list before every model call of a run. TanStack calls onConfig at init and at the start of
+ * each agent iteration, so tools loaded by find_tools (and policy changes) apply to the next step of the same turn.
+ */
+export function createRefreshToolsMiddleware(rebuild: () => ChatMiddlewareConfig['tools']): ChatMiddleware {
+    return {
+        name: 'rucio-refresh-tools',
+        onConfig: () => ({ tools: rebuild() }),
+    };
+}
+
+/**
  * The agent loop. One run is one user turn. It drives a headless TanStack
  * ChatClient over an in-process stream() connection, so approval pauses and
  * resumes need no server.
@@ -355,8 +375,22 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
             makeToolContext: toolCallId => d.makeToolContext(toolCallId, input.turnId),
             onResult: recordDuration,
         });
-        // Later phases append to this list (for example telemetry or skill middleware).
-        const middleware: ChatMiddleware[] = [createPolicyMiddleware(name => d.policyFor(name), recordDuration)];
+        // Reads deps() again so tools loaded mid-turn by find_tools are offered on the next model call.
+        const buildTools = () => {
+            const fresh = deps();
+            return buildTanstackTools(fresh.tools, {
+                policyFor: name => fresh.policyFor(name),
+                makeToolContext: toolCallId => fresh.makeToolContext(toolCallId, input.turnId),
+                onResult: recordDuration,
+                // Tools built at the start keep their approval mode, so a pending approval still resumes.
+                builtWith: built.builtPolicy,
+            }).serverTools;
+        };
+        // Later phases append to this list (for example telemetry or skill middleware). The refresh stays first.
+        const middleware: ChatMiddleware[] = [
+            createRefreshToolsMiddleware(buildTools),
+            createPolicyMiddleware(name => d.policyFor(name), recordDuration),
+        ];
         if (d.toolFilter) middleware.push(createToolFilterMiddleware(d.toolFilter, d.tools));
         const historyMessages = toModelMessages(input.history);
 
@@ -381,7 +415,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                             parentRunId: runInput.parentRunId,
                             resume: runInput.resume,
                             abortController: linkedAbortController(abortSignal),
-                            tools: built.serverTools,
+                            tools: buildTools(),
                             middleware,
                             agentLoopStrategy: maxIterations(Math.max(d.maxSteps - modelCalls, 0)),
                         }) as AsyncIterable<StreamChunk>,
