@@ -32,13 +32,13 @@ export default function Page() {
         schema: RuleCreatePrefillSchema,
         apply: async args => {
             if (stageIndex.current === SUBMISSION_STAGE) {
-                throw toolError('unavailable', 'The wizard is submitting a rule. Wait for it to finish, then try again.');
+                throw toolError('unavailable', 'The wizard shows a submitted rule. Ask the user to reload the create rule page to start a new one.');
             }
             const id = ++prefillCount.current;
             const result = await resolveRuleCreatePrefill(args);
             if (id !== prefillCount.current) throw toolError('aborted', 'A newer prefill replaced this one.');
             if (stageIndex.current === SUBMISSION_STAGE) {
-                throw toolError('unavailable', 'The wizard is submitting a rule. Wait for it to finish, then try again.');
+                throw toolError('unavailable', 'The wizard shows a submitted rule. Ask the user to reload the create rule page to start a new one.');
             }
             setPrefill({ parameters: result.parameters, activeIndex: result.activeIndex, nonce: id });
             return result.summary;

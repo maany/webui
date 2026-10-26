@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { DIDType, RuleState } from '@/lib/core/entity/rucio';
-import { isValidAccountName } from '@/lib/core/utils/account-validation';
+import { ACCOUNT_NAME_PATTERN_REGEX, isValidAccountName } from '@/lib/core/utils/account-validation';
 import { buildDIDSearchUrl, buildRSESearchUrl, buildRuleSearchUrl, buildSubscriptionSearchUrl } from '@/lib/infrastructure/utils/navigation';
 import { DATE_PARAM, DID_TYPE_NAMES, didTypeFromName, ruleSearchFilters } from '@/lib/infrastructure/assistant/page-url-params';
 
@@ -48,7 +48,10 @@ export const RULES_FILTER_DESCRIPTION = 'Filter the rule list on this page and r
 
 export const RulesFilterSchema = z
     .object({
-        account: z.string().min(1).max(255).optional(),
+        account: z
+            .string()
+            .regex(ACCOUNT_NAME_PATTERN_REGEX, 'Not a valid account filter (lowercase letters, digits, - _ and * wildcards).')
+            .optional(),
         scope: z.string().min(1).max(255).optional(),
         name: z.string().min(1).max(255).optional().describe('DID name, * wildcards allowed'),
         activity: z.string().min(1).max(255).optional(),

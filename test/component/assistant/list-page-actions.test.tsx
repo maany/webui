@@ -13,6 +13,7 @@ import { FakePageActionRegistry } from 'test/fixtures/fake-page-action-registry'
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
 const mockMounts = jest.fn();
+const mockSearchStart = jest.fn();
 
 jest.mock('next/navigation', () => ({
     useRouter: () => ({ replace: mockReplace, push: mockPush }),
@@ -33,7 +34,11 @@ jest.mock('@/component-library/pages/DID/list/ListDID', () => ({
     ListDID: mockList('ListDID', p => ({ firstPattern: p.firstPattern, autoSearch: p.autoSearch, initialType: p.initialType })),
 }));
 jest.mock('@/component-library/pages/Rule/list/ListRule', () => ({
-    ListRule: mockList('ListRule', p => ({ autoSearch: p.autoSearch, initialFilters: p.initialFilters })),
+    ListRule: mockList('ListRule', p => {
+        const onSearchStart = p.onSearchStart as (filters: Record<string, unknown>) => void;
+        mockSearchStart.mockImplementation(() => onSearchStart({ account: 'jdoe', scope: '*', name: '', activity: '' }));
+        return { autoSearch: p.autoSearch, initialFilters: p.initialFilters };
+    }),
 }));
 jest.mock('@/component-library/pages/RSE/list/ListRSE', () => ({
     ListRSE: mockList('ListRSE', p => ({ initialExpression: p.initialExpression, autoSearch: p.autoSearch })),
@@ -54,7 +59,7 @@ describe('list page actions', () => {
         detach = attachPageActionRegistry(registry);
     });
 
-    afterEach(() => detach());
+    afterEach(() => act(() => detach()));
 
     it('dids.search runs a new search and keeps the URL in sync', async () => {
         render(<ListDIDClient />);
@@ -84,6 +89,33 @@ describe('list page actions', () => {
             initialFilters: { account: 'jdoe', scope: '*', name: '', activity: '', state: 'Stuck' },
         });
         expect(mockMounts.mock.calls.filter(([name]) => name === 'ListRule')).toHaveLength(2);
+
+        await act(async () => {
+            await registry.invoke('rules.filter', { scope: 'user.jdoe', state: 'OK' });
+        });
+
+        expect(mockReplace).toHaveBeenCalledTimes(2);
+        expect(shown('ListRule')).toEqual({
+            autoSearch: true,
+            initialFilters: { account: '', scope: 'user.jdoe', name: '', activity: '', state: 'OK' },
+        });
+        expect(mockMounts.mock.calls.filter(([name]) => name === 'ListRule')).toHaveLength(3);
+    });
+
+    it('rules.filter rejects an invalid account filter', async () => {
+        render(<ListRuleClient />);
+        await expect(registry.invoke('rules.filter', { account: 'Not Valid!' })).rejects.toMatchObject({ error: 'invalid_args' });
+        await act(async () => {
+            await registry.invoke('rules.filter', { account: 'jd*' });
+        });
+        expect(mockReplace).toHaveBeenCalledTimes(1);
+    });
+
+    it('dids.search rejects a colon in the scope and changes nothing', async () => {
+        render(<ListDIDClient />);
+        await expect(registry.invoke('dids.search', { scope: 'user:jdoe', name: 'data*' })).rejects.toMatchObject({ error: 'invalid_args' });
+        expect(mockReplace).not.toHaveBeenCalled();
+        expect(mockMounts.mock.calls.filter(([name]) => name === 'ListDID')).toHaveLength(1);
     });
 
     it('rules.filter rejects an empty filter without touching the page', async () => {
@@ -112,13 +144,46 @@ describe('list page actions', () => {
             </QueryClientProvider>,
         );
 
+        mockReplace.mockClear();
+
         await act(async () => {
             await registry.invoke('subscriptions.filter', { account: 'jdoe' });
         });
 
-        expect(mockReplace).toHaveBeenCalledWith('/subscriptions?account=jdoe&autoSearch=true', { scroll: false });
+        expect(mockReplace).toHaveBeenLastCalledWith('/subscriptions?account=jdoe&autoSearch=true', { scroll: false });
+        expect(mockReplace).toHaveBeenCalledTimes(1);
         expect(shown('ListSubscription')).toEqual({ accountFilter: 'jdoe', autoSearch: true });
         await expect(registry.invoke('subscriptions.filter', { account: 'Not Valid!' })).rejects.toMatchObject({ error: 'invalid_args' });
+        expect(mockReplace).toHaveBeenCalledTimes(1);
+    });
+
+    it('subscriptions.filter does not win over a later, different accountFilter prop', async () => {
+        const tree = (accountFilter: string) => (
+            <QueryClientProvider client={new QueryClient()}>
+                <ListSubscriptionClient accountFilter={accountFilter} autoSearch={true} />
+            </QueryClientProvider>
+        );
+        const { rerender } = render(tree('root'));
+
+        await act(async () => {
+            await registry.invoke('subscriptions.filter', { account: 'jdoe' });
+        });
+        expect(shown('ListSubscription').accountFilter).toBe('jdoe');
+
+        rerender(tree('alice'));
+        expect(shown('ListSubscription').accountFilter).toBe('alice');
+    });
+
+    it('a user search after an action still pushes the URL', async () => {
+        render(<ListRuleClient />);
+        await act(async () => {
+            await registry.invoke('rules.filter', { account: 'jdoe' });
+        });
+        mockPush.mockClear();
+        act(() => {
+            mockSearchStart();
+        });
+        expect(mockPush).toHaveBeenCalledTimes(1);
     });
 
     it('unregisters when the list page unmounts', () => {

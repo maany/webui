@@ -25,7 +25,7 @@ export const ListSubscriptionClient = (props: ListSubscriptionClientProps) => {
 
     // Set by the subscriptions.filter page action. ListSubscription only auto-searches on mount,
     // so a new searchKey remounts it for the new account.
-    const [accountOverride, setAccountOverride] = useState<string | null>(null);
+    const [override, setOverride] = useState<{ account: string; against: string | undefined } | null>(null);
     const [searchKey, setSearchKey] = useState(0);
 
     usePageAction({
@@ -35,7 +35,7 @@ export const ListSubscriptionClient = (props: ListSubscriptionClientProps) => {
         apply: async args => {
             const target = subscriptionsFilterTarget(args);
             hasUpdatedUrl.current = true;
-            setAccountOverride(target.account);
+            setOverride({ account: target.account, against: props.accountFilter });
             setSearchKey(previous => previous + 1);
             router.replace(target.url, { scroll: false });
             return target.summary;
@@ -55,6 +55,12 @@ export const ListSubscriptionClient = (props: ListSubscriptionClientProps) => {
         refetchOnWindowFocus: false,
         enabled: !props.accountFilter, // Only fetch if accountFilter is not provided
     });
+
+    // The override is dropped once a later, different accountFilter prop arrives (an in-app link)
+    const accountOverride =
+        override && (props.accountFilter === undefined || props.accountFilter === override.against || props.accountFilter === override.account)
+            ? override.account
+            : null;
 
     // Determine the account to use
     const account = accountOverride || props.accountFilter || siteHeader?.activeAccount?.rucioAccount;

@@ -1,4 +1,4 @@
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { usePageDescribe } from '@/lib/infrastructure/hooks/usePageDescribe';
 import { attachPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-bridge';
 import { FakePageActionRegistry } from 'test/fixtures/fake-page-action-registry';
@@ -12,7 +12,7 @@ describe('usePageDescribe', () => {
         detach = attachPageActionRegistry(registry);
     });
 
-    afterEach(() => detach());
+    afterEach(() => act(() => detach()));
 
     it('sets the describer on mount and clears it on unmount', () => {
         const { unmount } = renderHook(() => usePageDescribe(() => 'Rule abc, state Stuck.'));
@@ -51,7 +51,7 @@ describe('usePageDescribe', () => {
         renderHook(() => usePageDescribe(() => 'x', { enabled: false }));
         expect(registry.describe()).toBeUndefined();
 
-        detach();
+        act(() => detach());
         expect(() => renderHook(() => usePageDescribe(() => 'x'))).not.toThrow();
     });
 });

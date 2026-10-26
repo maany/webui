@@ -11,8 +11,9 @@ export interface UsePageActionOptions {
 
 /**
  * Offers a typed action of the current page to Rucio bot. The action is registered on mount and
- * removed on unmount. The latest `apply` and `schema` are always used, so callers can pass inline
- * closures without re-registering on every render. Does nothing while Rucio bot is off (no registry attached).
+ * removed on unmount. The latest `apply` is always used, so callers can pass inline closures without
+ * re-registering on every render. The schema, name and description are read when the action registers
+ * (a new name or description registers it again). Does nothing while Rucio bot is off (no registry attached).
  */
 export function usePageAction<I>(action: PageActionRegistration<I>, options: UsePageActionOptions = {}): void {
     const registry = useAttachedPageActionRegistry();

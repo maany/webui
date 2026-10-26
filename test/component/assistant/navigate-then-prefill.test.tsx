@@ -43,11 +43,12 @@ const quotaRow = {
     total_expected_usage: 1000,
 };
 
-const fetchRoutes = jest.fn(async (url: string, _init?: RequestInit) => {
+const defaultRoutes = async (url: string, _init?: RequestInit) => {
     if (url.startsWith('/api/feature/list-dids?')) return ndjsonResponse([didRow]);
     if (url === '/api/feature/list-account-rse-quotas') return ndjsonResponse([quotaRow]);
     throw new Error(`unexpected fetch ${url}`);
-});
+};
+const fetchRoutes = jest.fn(defaultRoutes);
 
 /** Stands in for the App Router: renders the wizard page when the URL is /rule/create. */
 const Harness = () => {
@@ -86,6 +87,7 @@ describe('navigate, then prefill the create rule wizard', () => {
     beforeEach(() => {
         localStorage.clear();
         fetchRoutes.mockClear();
+        fetchRoutes.mockImplementation(defaultRoutes);
         (global as unknown as { fetch: unknown }).fetch = fetchRoutes;
         window.history.pushState({}, '', '/dashboard');
         registry = new FakePageActionRegistry();
@@ -143,8 +145,38 @@ describe('navigate, then prefill the create rule wizard', () => {
         fetchRoutes.mockClear();
 
         const result = await createPageActionTool().execute({ name: 'rule_create.prefill', args }, ctx);
-        expect(result).toMatchObject({ error: 'unavailable', message: expect.stringContaining('submitting') });
+        expect(result).toMatchObject({ error: 'unavailable', message: expect.stringContaining('reload the create rule page') });
         expect(screen.getByTestId('stage-submission')).toBeInTheDocument();
+    });
+
+    it('refuses when the wizard reaches the submission stage while the DIDs are still resolving', async () => {
+        window.history.pushState({}, '', '/rule/create');
+        render(<Harness />);
+        await waitFor(() => expect(registry.list().map(action => action.name)).toContain('rule_create.prefill'));
+        const ctx = makeTestToolContext({ pages: registry });
+        const args = { dids: ['user.jdoe:file1'], rseExpression: 'tier=1' };
+
+        await createPageActionTool().execute({ name: 'rule_create.prefill', args }, ctx);
+        await screen.findByTestId('stage-summary');
+
+        let releaseFetch: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => {
+            releaseFetch = resolve;
+        });
+        fetchRoutes.mockImplementation(async (url: string, init?: RequestInit) => {
+            if (url.startsWith('/api/feature/list-dids?')) await gate;
+            return defaultRoutes(url, init);
+        });
+        const pending = createPageActionTool().execute({ name: 'rule_create.prefill', args }, ctx);
+
+        fireEvent.click(screen.getByRole('button', { name: /submit/i }));
+        await screen.findByTestId('stage-submission');
+        const savedParameters = localStorage.getItem('create_rule_parameters');
+
+        releaseFetch();
+        expect(await pending).toMatchObject({ error: 'unavailable', message: expect.stringContaining('reload the create rule page') });
+        expect(screen.getByTestId('stage-submission')).toBeInTheDocument();
+        expect(localStorage.getItem('create_rule_parameters')).toBe(savedParameters);
     });
 
     it('lets the newest of two racing prefills win', async () => {
