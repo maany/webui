@@ -6,6 +6,7 @@ jest.mock('next-auth/react', () => ({
 }));
 jest.mock('@/lib/infrastructure/assistant/indexeddb-conversation-repository', () => ({
     createConversationRepository: jest.fn(),
+    deleteAssistantDatabase: jest.fn(),
 }));
 jest.mock('@/lib/infrastructure/hooks/useAssistantShell', () => ({ useAssistantPanel: jest.fn() }));
 
@@ -13,7 +14,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AssistantStorageSection } from '@/component-library/features/assistant/settings/AssistantStorageSection';
 import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/in-memory-conversation-repository';
-import { createConversationRepository } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
+import { createConversationRepository, deleteAssistantDatabase } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
 import { getDefaultAssistantSettings } from '@/lib/infrastructure/assistant/settings-storage';
 import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { makeConversation } from 'test/fixtures/assistant-fixtures';
@@ -163,5 +164,104 @@ describe('AssistantStorageSection', () => {
         mockSession.current = null;
         rerender(<AssistantStorageSection settings={getDefaultAssistantSettings()} onUpdate={jest.fn()} />);
         await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete Conversation c1' })).not.toBeInTheDocument());
+    });
+
+    describe('other accounts', () => {
+        async function seedOthers(repository: InMemoryConversationRepository) {
+            await seed(repository);
+            await repository.saveConversation(makeConversation('b1', 'bob@def', '2026-10-22T08:00:00.000Z'));
+            await repository.saveConversation(makeConversation('b2', 'bob@def', '2026-10-21T08:00:00.000Z'));
+            await repository.saveConversation(makeConversation('k1', 'carol@atlas', '2026-10-20T08:00:00.000Z'));
+        }
+
+        it('lists the other accounts and leaves the current account out', async () => {
+            const { repository } = setup();
+            await seedOthers(repository);
+            renderSection();
+            expect(await screen.findByText('bob@def')).toBeInTheDocument();
+            expect(screen.getByText('carol@atlas')).toBeInTheDocument();
+            expect(screen.getByText(/^2 chats, /)).toBeInTheDocument();
+            expect(screen.queryByText('root@def')).not.toBeInTheDocument();
+        });
+
+        it('hides the section when only the current account has chats', async () => {
+            const { repository } = setup();
+            await seed(repository);
+            renderSection();
+            await screen.findByText(/chats? for this account/);
+            expect(screen.queryByText('Other accounts in this browser')).not.toBeInTheDocument();
+        });
+
+        it('deletes one other account through the repository, never the controller', async () => {
+            const conversationControls = { deleteConversation: jest.fn(), deleteAll: jest.fn() };
+            const { repository, notifyStorageChanged } = setup({ conversationControls });
+            await seedOthers(repository);
+            renderSection();
+            fireEvent.click(await screen.findByRole('button', { name: 'Delete chats of bob@def' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Confirm delete of bob@def' }));
+            await waitFor(() => expect(screen.queryByText('bob@def')).not.toBeInTheDocument());
+            expect(notifyStorageChanged).toHaveBeenCalled();
+            expect(await repository.listConversations('bob@def')).toEqual([]);
+            expect((await repository.listConversations('carol@atlas')).length).toBe(1);
+            expect((await repository.listConversations('root@def')).length).toBe(2);
+            expect(conversationControls.deleteAll).not.toHaveBeenCalled();
+        });
+
+        it('shows an inline message when deleting another account fails', async () => {
+            const { repository, notifyStorageChanged } = setup();
+            await seedOthers(repository);
+            jest.spyOn(repository, 'deleteAll').mockRejectedValueOnce(new Error('disk full'));
+            renderSection();
+            fireEvent.click(await screen.findByRole('button', { name: 'Delete chats of bob@def' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Confirm delete of bob@def' }));
+            expect(await screen.findByText('Could not delete the chats of bob@def.')).toBeInTheDocument();
+            expect(screen.getByText('bob@def')).toBeInTheDocument();
+            expect(notifyStorageChanged).not.toHaveBeenCalled();
+        });
+
+        it('deletes the whole Rucio bot database for all accounts and reopens the store', async () => {
+            const { repository, notifyStorageChanged } = setup();
+            await seedOthers(repository);
+            (deleteAssistantDatabase as jest.Mock).mockReset().mockImplementation(() => repository.deleteAll());
+            (createConversationRepository as jest.Mock).mockClear();
+            renderSection();
+            fireEvent.click(await screen.findByRole('button', { name: 'Delete Rucio bot data for all accounts' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Delete everything' }));
+            await waitFor(() => expect(deleteAssistantDatabase).toHaveBeenCalledTimes(1));
+            await waitFor(() => expect(notifyStorageChanged).toHaveBeenCalled());
+            await waitFor(() => expect(screen.queryByText('Other accounts in this browser')).not.toBeInTheDocument());
+            expect(screen.queryByRole('button', { name: 'Delete Conversation c1' })).not.toBeInTheDocument();
+            expect(createConversationRepository).toHaveBeenCalledTimes(2);
+        });
+
+        it('stops a running turn through the controller before deleting all accounts', async () => {
+            const conversationControls = { deleteConversation: jest.fn(), deleteAll: jest.fn().mockResolvedValue(undefined) };
+            const { repository } = setup({ conversationControls });
+            await seedOthers(repository);
+            (deleteAssistantDatabase as jest.Mock).mockReset().mockResolvedValue(undefined);
+            renderSection();
+            fireEvent.click(await screen.findByRole('button', { name: 'Delete Rucio bot data for all accounts' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Delete everything' }));
+            await waitFor(() => expect(deleteAssistantDatabase).toHaveBeenCalledTimes(1));
+            expect(conversationControls.deleteAll).toHaveBeenCalledTimes(1);
+        });
+
+        it('shows an inline message when deleting all accounts fails', async () => {
+            const { repository, notifyStorageChanged } = setup();
+            await seedOthers(repository);
+            (deleteAssistantDatabase as jest.Mock).mockReset().mockRejectedValue(new Error('blocked'));
+            renderSection();
+            fireEvent.click(await screen.findByRole('button', { name: 'Delete Rucio bot data for all accounts' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Delete everything' }));
+            expect(await screen.findByText('Could not delete Rucio bot data.')).toBeInTheDocument();
+            expect(notifyStorageChanged).not.toHaveBeenCalled();
+        });
+
+        it('shows an error instead of rejecting when listing accounts fails', async () => {
+            const { repository } = setup();
+            jest.spyOn(repository, 'listAccounts').mockRejectedValue(new Error('db closed'));
+            renderSection();
+            expect(await screen.findByText('Could not load saved chats.')).toBeInTheDocument();
+        });
     });
 });

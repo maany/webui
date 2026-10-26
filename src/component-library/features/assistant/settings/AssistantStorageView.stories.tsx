@@ -45,3 +45,13 @@ export const Default: Story = {};
 export const NoChats: Story = { args: { conversations: [], sizes: {}, totalBytes: 0 } };
 export const MemoryInUse: Story = { args: { memoryBytes: 24_000_000 } };
 export const NotPersistent: Story = { args: { persistent: false } };
+export const OtherAccounts: Story = {
+    args: {
+        otherAccounts: [
+            { accountKey: 'jdoe@def', conversations: 3, bytes: 84_000 },
+            { accountKey: 'mlassnig@atlas', conversations: 1, bytes: 9_500 },
+        ],
+        onDeleteAccount: fn(),
+        onDeleteAllAccounts: fn(),
+    },
+};

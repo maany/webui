@@ -24,7 +24,7 @@ async function openAssistantDb(onBlocking: (db: IDBPDatabase<AssistantDB>) => vo
             const messages = db.createObjectStore('messages', { keyPath: 'id' });
             messages.createIndex('byConversation', 'conversationId');
         },
-        // Another tab, or clear on logout, wants to delete or upgrade the database: let it.
+        // Another tab, or a clear of all accounts, wants to delete or upgrade the database: let it.
         blocking() {
             if (holder.db) {
                 onBlocking(holder.db);
@@ -219,6 +219,22 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
         return jsonBytes(conversation) + messages.reduce((sum, message) => sum + jsonBytes(message), 0);
     }
 
+    async listAccounts(): Promise<Array<{ accountKey: string; conversations: number; bytes: number }>> {
+        const conversations = await this.run<Conversation[] | null>(
+            db => db.getAll('conversations'),
+            async () => null,
+        );
+        if (conversations === null) return (this.fallback as InMemoryConversationRepository).listAccounts();
+        const totals = new Map<string, { conversations: number; bytes: number }>();
+        for (const conversation of conversations) {
+            const total = totals.get(conversation.accountKey) ?? { conversations: 0, bytes: 0 };
+            total.conversations += 1;
+            total.bytes += await this.conversationBytes(conversation);
+            totals.set(conversation.accountKey, total);
+        }
+        return Array.from(totals, ([accountKey, total]) => ({ accountKey, ...total })).sort((a, b) => a.accountKey.localeCompare(b.accountKey));
+    }
+
     async estimateSizes(accountKey: string): Promise<{ perConversation: Record<string, number>; totalBytes: number }> {
         const perConversation: Record<string, number> = {};
         let totalBytes = 0;
@@ -296,7 +312,7 @@ export async function createConversationRepository(
     }
 }
 
-/** Deletes every stored conversation of every account (clear on logout). Never throws and never hangs. */
+/** Deletes every stored conversation of every account (the "all accounts" cleanup). Never throws and never hangs. */
 export async function deleteAssistantDatabase(timeoutMs: number = DELETE_TIMEOUT_MS): Promise<void> {
     // Set before anything else: a turn still running must not reopen the database behind this clear.
     clearEpoch += 1;

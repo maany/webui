@@ -7,7 +7,7 @@ import type { Conversation } from '@/lib/core/entity/assistant/conversation';
 import type { AssistantSettings, RetentionSettings } from '@/lib/core/entity/assistant/settings';
 import type { AssistantConversationRepositoryPort } from '@/lib/core/port/secondary/assistant-conversation-repository-port';
 import { conversationToJson, conversationToMarkdown, downloadText, exportFileName } from '@/lib/infrastructure/assistant/conversation-export';
-import { createConversationRepository } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
+import { createConversationRepository, deleteAssistantDatabase } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
 import { toAccountKey } from '@/lib/infrastructure/assistant/page-context';
 import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { formatBytes } from '../format';
@@ -25,6 +25,10 @@ export interface AssistantStorageViewProps {
     onDelete(id: string): void;
     onDeleteAll(): void;
     onFreeMemory(): void;
+    /** Accounts other than the current one that have chats in this browser. Hidden when empty. */
+    otherAccounts?: Array<{ accountKey: string; conversations: number; bytes: number }>;
+    onDeleteAccount?(accountKey: string): void;
+    onDeleteAllAccounts?(): void;
     /** Inline failure message from the last delete attempt. */
     error?: string;
 }
@@ -90,7 +94,10 @@ function RetentionNumberInput({
 /** Presentational storage and cleanup controls (spec 9.4). */
 export function AssistantStorageView(props: AssistantStorageViewProps) {
     const [confirmAll, setConfirmAll] = useState(false);
+    const [confirmAccount, setConfirmAccount] = useState<string | null>(null);
+    const [confirmEverything, setConfirmEverything] = useState(false);
     const { retention } = props;
+    const otherAccounts = props.otherAccounts ?? [];
     return (
         <section aria-labelledby="assistant-conversations-heading" className="space-y-6">
             <div className="space-y-2">
@@ -179,6 +186,74 @@ export function AssistantStorageView(props: AssistantStorageViewProps) {
                     ))}
             </div>
 
+            {otherAccounts.length > 0 && (
+                <div className="space-y-2">
+                    <h3 className="text-lg font-semibold">Other accounts in this browser</h3>
+                    <ul className="divide-y divide-neutral-200 dark:divide-neutral-800 rounded-md border border-neutral-200 dark:border-neutral-800">
+                        {otherAccounts.map(account => (
+                            <li key={account.accountKey} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center">
+                                <div className="flex-1 min-w-0">
+                                    <p className="truncate text-sm font-medium">{account.accountKey}</p>
+                                    <p className="text-xs text-neutral-500">
+                                        {account.conversations} {account.conversations === 1 ? 'chat' : 'chats'}, {formatBytes(account.bytes)}
+                                    </p>
+                                </div>
+                                {confirmAccount === account.accountKey ? (
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-sm">Delete these chats?</span>
+                                        <Button
+                                            size="sm"
+                                            variant="error"
+                                            aria-label={`Confirm delete of ${account.accountKey}`}
+                                            onClick={() => {
+                                                setConfirmAccount(null);
+                                                props.onDeleteAccount?.(account.accountKey);
+                                            }}
+                                        >
+                                            Delete
+                                        </Button>
+                                        <Button size="sm" variant="neutral" onClick={() => setConfirmAccount(null)}>
+                                            Cancel
+                                        </Button>
+                                    </div>
+                                ) : (
+                                    <Button
+                                        size="sm"
+                                        variant="error"
+                                        aria-label={`Delete chats of ${account.accountKey}`}
+                                        onClick={() => setConfirmAccount(account.accountKey)}
+                                    >
+                                        Delete
+                                    </Button>
+                                )}
+                            </li>
+                        ))}
+                    </ul>
+                    {confirmEverything ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm">Delete the Rucio bot chats of every account in this browser, including this one?</span>
+                            <Button
+                                size="sm"
+                                variant="error"
+                                onClick={() => {
+                                    setConfirmEverything(false);
+                                    props.onDeleteAllAccounts?.();
+                                }}
+                            >
+                                Delete everything
+                            </Button>
+                            <Button size="sm" variant="neutral" onClick={() => setConfirmEverything(false)}>
+                                Cancel
+                            </Button>
+                        </div>
+                    ) : (
+                        <Button size="sm" variant="error" onClick={() => setConfirmEverything(true)}>
+                            Delete Rucio bot data for all accounts
+                        </Button>
+                    )}
+                </div>
+            )}
+
             <fieldset className="space-y-3">
                 <legend className="text-lg font-semibold">Retention</legend>
                 <RetentionNumberInput
@@ -234,6 +309,8 @@ export function AssistantStorageSection({
     const [sizes, setSizes] = useState<{ perConversation: Record<string, number>; totalBytes: number }>({ perConversation: {}, totalBytes: 0 });
     const [browserUsage, setBrowserUsage] = useState<{ usage: number; quota: number } | undefined>(undefined);
     const [memoryBytes, setMemoryBytes] = useState<number | null>(null);
+    const [otherAccounts, setOtherAccounts] = useState<Array<{ accountKey: string; conversations: number; bytes: number }>>([]);
+    const [storeEpoch, setStoreEpoch] = useState(0);
     const [error, setError] = useState<string | undefined>(undefined);
 
     useEffect(() => {
@@ -254,19 +331,28 @@ export function AssistantStorageSection({
             cancelled = true;
             unsubscribe?.();
         };
-    }, []);
+    }, [storeEpoch]);
 
     const reload = useCallback(async () => {
-        if (!accountKey) {
-            setConversations([]);
-            setSizes({ perConversation: {}, totalBytes: 0 });
-            setError(undefined);
+        if (!store) {
+            if (!accountKey) {
+                setConversations([]);
+                setSizes({ perConversation: {}, totalBytes: 0 });
+                setOtherAccounts([]);
+                setError(undefined);
+            }
             return;
         }
-        if (!store) return;
         try {
-            setConversations(await store.repository.listConversations(accountKey));
-            setSizes(await store.repository.estimateSizes(accountKey));
+            if (accountKey) {
+                setConversations(await store.repository.listConversations(accountKey));
+                setSizes(await store.repository.estimateSizes(accountKey));
+            } else {
+                setConversations([]);
+                setSizes({ perConversation: {}, totalBytes: 0 });
+                setError(undefined);
+            }
+            setOtherAccounts((await store.repository.listAccounts()).filter(account => account.accountKey !== accountKey));
             if (typeof navigator !== 'undefined' && navigator.storage?.estimate) {
                 const estimate = await navigator.storage.estimate().catch(() => undefined);
                 if (estimate?.usage !== undefined && estimate.quota !== undefined) setBrowserUsage({ usage: estimate.usage, quota: estimate.quota });
@@ -293,6 +379,22 @@ export function AssistantStorageSection({
         }
         shell.notifyStorageChanged();
         await reload();
+    };
+
+    // Stops a running turn first (it would otherwise save into the deleted database), then drops the whole
+    // database and reopens the store: the old connection must not be used after a clear.
+    const deleteEverything = async () => {
+        setError(undefined);
+        try {
+            if (shell.conversationControls) await shell.conversationControls.deleteAll();
+            await deleteAssistantDatabase();
+        } catch {
+            setError('Could not delete Rucio bot data.');
+            return;
+        }
+        shell.notifyStorageChanged();
+        setStore(null);
+        setStoreEpoch(epoch => epoch + 1);
     };
 
     const freeMemory = async () => {
@@ -347,6 +449,10 @@ export function AssistantStorageSection({
                 }, 'Could not delete chats.')
             }
             onFreeMemory={() => void freeMemory()}
+            otherAccounts={otherAccounts}
+            // The open conversation belongs to the current account, so another account is deleted straight from the repository.
+            onDeleteAccount={key => void runDelete(async () => store?.repository.deleteAll(key), `Could not delete the chats of ${key}.`)}
+            onDeleteAllAccounts={() => void deleteEverything()}
         />
     );
 }

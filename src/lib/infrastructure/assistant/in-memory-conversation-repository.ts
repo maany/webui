@@ -54,6 +54,17 @@ export class InMemoryConversationRepository implements AssistantConversationRepo
         return jsonBytes(conversation) + messages.reduce((sum, message) => sum + jsonBytes(message), 0);
     }
 
+    async listAccounts(): Promise<Array<{ accountKey: string; conversations: number; bytes: number }>> {
+        const totals = new Map<string, { conversations: number; bytes: number }>();
+        for (const conversation of this.conversations.values()) {
+            const total = totals.get(conversation.accountKey) ?? { conversations: 0, bytes: 0 };
+            total.conversations += 1;
+            total.bytes += await this.conversationBytes(conversation);
+            totals.set(conversation.accountKey, total);
+        }
+        return Array.from(totals, ([accountKey, total]) => ({ accountKey, ...total })).sort((a, b) => a.accountKey.localeCompare(b.accountKey));
+    }
+
     async estimateSizes(accountKey: string): Promise<{ perConversation: Record<string, number>; totalBytes: number }> {
         const perConversation: Record<string, number> = {};
         let totalBytes = 0;

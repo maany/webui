@@ -131,4 +131,46 @@ describe('AssistantStorageView', () => {
             expect(input.value).toBe('30');
         });
     });
+
+    describe('other accounts', () => {
+        const others = [
+            { accountKey: 'bob@def', conversations: 2, bytes: 2048 },
+            { accountKey: 'carol@atlas', conversations: 1, bytes: 512 },
+        ];
+
+        it('is hidden when there are no other accounts', () => {
+            render(<AssistantStorageView {...props({ otherAccounts: [] })} />);
+            expect(screen.queryByText('Other accounts in this browser')).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /all accounts/ })).not.toBeInTheDocument();
+        });
+
+        it('lists each other account with its chat count and size', () => {
+            render(<AssistantStorageView {...props({ otherAccounts: others })} />);
+            expect(screen.getByText('Other accounts in this browser')).toBeInTheDocument();
+            expect(screen.getByText('bob@def')).toBeInTheDocument();
+            expect(screen.getByText('2 chats, 2.0 kB')).toBeInTheDocument();
+            expect(screen.getByText('1 chat, 512 B')).toBeInTheDocument();
+        });
+
+        it('asks before deleting one account and can be cancelled', () => {
+            const p = props({ otherAccounts: others, onDeleteAccount: jest.fn() });
+            render(<AssistantStorageView {...p} />);
+            fireEvent.click(screen.getByRole('button', { name: 'Delete chats of bob@def' }));
+            expect(p.onDeleteAccount).not.toHaveBeenCalled();
+            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+            expect(screen.getByRole('button', { name: 'Delete chats of bob@def' })).toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: 'Delete chats of bob@def' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Confirm delete of bob@def' }));
+            expect(p.onDeleteAccount).toHaveBeenCalledWith('bob@def');
+        });
+
+        it('asks before deleting the data of all accounts', () => {
+            const p = props({ otherAccounts: others, onDeleteAllAccounts: jest.fn() });
+            render(<AssistantStorageView {...p} />);
+            fireEvent.click(screen.getByRole('button', { name: 'Delete Rucio bot data for all accounts' }));
+            expect(p.onDeleteAllAccounts).not.toHaveBeenCalled();
+            fireEvent.click(screen.getByRole('button', { name: 'Delete everything' }));
+            expect(p.onDeleteAllAccounts).toHaveBeenCalledTimes(1);
+        });
+    });
 });

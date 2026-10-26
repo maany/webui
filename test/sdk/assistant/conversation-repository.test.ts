@@ -89,6 +89,24 @@ describe.each(repositories)('%s', (_name, open) => {
         expect(sizes.totalBytes).toBe(sizes.perConversation.c1);
     });
 
+    it('lists every account with its conversation count and size', async () => {
+        expect(await repository.listAccounts()).toEqual([]);
+        await repository.saveConversation(makeConversation('c1', 'root@def', '2026-10-20T00:00:00.000Z'));
+        await repository.saveConversation(makeConversation('c2', 'root@def', '2026-10-22T00:00:00.000Z'));
+        await repository.saveConversation(makeConversation('c3', 'jdoe@def', '2026-10-23T00:00:00.000Z'));
+        await repository.saveMessage(message('m1', 'c3', '2026-10-23T00:00:01.000Z', 'x'.repeat(2000)));
+        const accounts = await repository.listAccounts();
+        expect(accounts.map(a => [a.accountKey, a.conversations])).toEqual([
+            ['jdoe@def', 1],
+            ['root@def', 2],
+        ]);
+        const jdoe = await repository.estimateSizes('jdoe@def');
+        const root = await repository.estimateSizes('root@def');
+        expect(accounts[0].bytes).toBe(jdoe.totalBytes);
+        expect(accounts[1].bytes).toBe(root.totalBytes);
+        expect(accounts[0].bytes).toBeGreaterThan(2000);
+    });
+
     it('enforces retention by age and returns the deleted ids', async () => {
         await repository.saveConversation(makeConversation('old', 'root@def', '2026-08-01T00:00:00.000Z'));
         await repository.saveConversation(makeConversation('new', 'root@def', '2026-10-24T00:00:00.000Z'));
