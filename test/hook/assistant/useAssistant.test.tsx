@@ -631,4 +631,111 @@ describe('useAssistantController races', () => {
         await waitFor(() => expect(spy).toHaveBeenCalled());
         expect(spy.mock.calls[spy.mock.calls.length - 1][0].maxAgeDays).toBe(7);
     });
+
+    it('lets the next turn finish its approval while a superseded turn winds down', async () => {
+        let finishA: () => void = () => undefined;
+        const slowA: Script = async function* () {
+            yield { type: 'text-delta', text: 'A partial' };
+            await new Promise<void>(resolve => (finishA = resolve));
+            yield { type: 'finished', status: 'stopped' };
+        };
+        const { hook } = setup([slowA, approvalScript]);
+        let sendingA!: Promise<void>;
+        act(() => {
+            sendingA = hook.result.current.send('first');
+        });
+        await waitFor(() => expect(hook.result.current.messages[1]?.parts[0]).toEqual({ type: 'text', text: 'A partial' }));
+        act(() => {
+            hook.result.current.newConversation();
+        });
+        let sendingB!: Promise<void>;
+        act(() => {
+            sendingB = hook.result.current.send('delete rule r1');
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals).toHaveLength(1));
+        await act(async () => {
+            finishA();
+            await sendingA;
+        });
+        expect(hook.result.current.status).toBe('awaiting-approval');
+        await act(async () => {
+            hook.result.current.resolveApproval('call-1', 'approved', 'once');
+            await sendingB;
+        });
+        const result = hook.result.current;
+        expect(result.status).toBe('idle');
+        expect(result.messages[1].parts).toContainEqual(expect.objectContaining({ type: 'tool-call', toolCallId: 'call-1', status: 'done' }));
+        expect(result.messages[1].parts).toContainEqual({ type: 'text', text: 'Done.' });
+        expect(result.messages[1].usage).toBeUndefined();
+    });
+
+    it('does not retry an overflow when the turn is stopped after the overflow finish', async () => {
+        const overflowThenWait: Script = async function* (input) {
+            yield { type: 'finished', status: 'error', error: CONTEXT_OVERFLOW_ERROR };
+            await new Promise<void>(resolve => input.signal.addEventListener('abort', () => resolve()));
+        };
+        const { hook, created, summarize } = setup([textScript('a1'), textScript('a2'), overflowThenWait, textScript('never')]);
+        for (const question of ['q1', 'q2']) {
+            await act(async () => {
+                await hook.result.current.send(question);
+            });
+        }
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('q3');
+        });
+        await waitFor(() => expect(created).toHaveLength(3));
+        await act(async () => {
+            await new Promise(resolve => setTimeout(resolve, 10));
+            hook.result.current.stop();
+            await sending;
+        });
+        expect(created).toHaveLength(3);
+        expect(summarize).not.toHaveBeenCalled();
+    });
+
+    it('lets a send invalidate a pending open', async () => {
+        const { hook, repository } = setup([textScript('hello back')]);
+        await repository.saveConversation(makeConversation('y', 'root@def'));
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        const original = repository.getConversation.bind(repository);
+        jest.spyOn(repository, 'getConversation').mockImplementationOnce(async id => {
+            await gate;
+            return original(id);
+        });
+        let opening!: Promise<void>;
+        act(() => {
+            opening = hook.result.current.openConversation('y');
+        });
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        await act(async () => {
+            release();
+            await opening;
+        });
+        expect(hook.result.current.conversation?.id).not.toBe('y');
+        expect(hook.result.current.messages.map(message => message.role)).toEqual(['user', 'assistant']);
+    });
+
+    it('keeps writing a conversation whose delete failed', async () => {
+        const { hook, repository } = setup([textScript('one'), textScript('two')]);
+        await act(async () => {
+            await hook.result.current.send('first');
+        });
+        const id = hook.result.current.conversation!.id;
+        jest.spyOn(repository, 'deleteConversation').mockRejectedValueOnce(new Error('disk full'));
+        await act(async () => {
+            await hook.result.current.deleteConversation(id).catch(() => undefined);
+        });
+        await act(async () => {
+            await hook.result.current.openConversation(id);
+        });
+        await act(async () => {
+            await hook.result.current.send('second');
+        });
+        const stored = await repository.listMessages(id);
+        expect(stored.filter(message => message.role === 'assistant')).toHaveLength(2);
+    });
 });

@@ -140,6 +140,8 @@ interface TurnOptions {
     allowOverflowRetry: boolean;
     forceCompaction: boolean;
     assistantId?: string;
+    /** Generation of the original turn, so a retry never outlives a reset. */
+    generation?: number;
 }
 
 /**
@@ -167,6 +169,8 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     const pendingRef = useRef<PendingApproval[]>([]);
     const contextFractionRef = useRef<number | null>(null);
     const assistantRef = useRef<ChatMessage | null>(null);
+    /** Latest message of every running turn by id, so a superseded turn never reads the next turn's message. */
+    const turnMessagesRef = useRef(new Map<string, ChatMessage>());
     const abortRef = useRef<AbortController | null>(null);
     const runnerRef = useRef<AgentRunner | null>(null);
     /** Owner token of the turn (or send) in flight; set synchronously so two sends cannot both start. */
@@ -232,6 +236,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 getMessage: () => assistantRef.current,
                 setMessage: message => {
                     assistantRef.current = message;
+                    turnMessagesRef.current.set(message.id, message);
                     replaceMessage(message);
                 },
                 // Only reached while a turn is torn down: the turn is aborted first, so nothing resumes.
@@ -338,7 +343,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             options: TurnOptions,
             token: object,
         ): Promise<void> => {
-            const generation = generationRef.current;
+            const generation = options.generation ?? generationRef.current;
             const isCurrent = () => generation === generationRef.current;
             const d = depsRef.current;
             const startConversation = conversation;
@@ -394,6 +399,12 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 ...(options.assistantId ? { id: options.assistantId } : {}),
             };
             assistantRef.current = assistant;
+            turnMessagesRef.current.set(assistant.id, assistant);
+            const readMessage = () => turnMessagesRef.current.get(assistant.id) ?? assistant;
+            const storeMessage = (message: ChatMessage) => {
+                turnMessagesRef.current.set(assistant.id, message);
+                if (assistantRef.current?.id === assistant.id) assistantRef.current = message;
+            };
             if (isCurrent()) replaceMessage(assistant);
             d.bus.emit({
                 type: 'turn-started',
@@ -451,7 +462,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     userMessage,
                     signal: controller.signal,
                 })) {
-                    let message: ChatMessage = assistantRef.current ?? assistant;
+                    let message: ChatMessage = readMessage();
                     if (update.type === 'reasoning-delta' && reasoningStartedAt === undefined) reasoningStartedAt = Date.now();
                     if (update.type !== 'reasoning-delta' && reasoningStartedAt !== undefined) {
                         message = closeReasoning(message, Date.now() - reasoningStartedAt);
@@ -473,12 +484,12 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                             isCurrent()
                         ) {
                             overflow = true;
-                            assistantRef.current = message;
+                            storeMessage(message);
                             continue;
                         }
                     }
                     message = applyRunnerUpdate(message, update);
-                    assistantRef.current = message;
+                    storeMessage(message);
                     if (update.type === 'approval-required') {
                         const part = message.parts.find(item => item.type === 'tool-call' && item.toolCallId === update.toolCallId);
                         if (part && part.type === 'tool-call' && isCurrent()) {
@@ -513,12 +524,17 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             } catch (runError) {
                 finalStatus = controller.signal.aborted ? 'stopped' : 'error';
                 finalError = runError instanceof Error ? runError.message : String(runError);
-                const message = applyRunnerUpdate(assistantRef.current ?? assistant, { type: 'finished', status: finalStatus, error: finalError });
-                assistantRef.current = message;
+                const message = applyRunnerUpdate(readMessage(), { type: 'finished', status: finalStatus, error: finalError });
+                storeMessage(message);
                 if (isCurrent()) replaceMessage(message);
             }
 
-            runnerRef.current = null;
+            if (runnerRef.current === runner) runnerRef.current = null;
+            if (overflow && (controller.signal.aborted || !isCurrent())) {
+                // Stopped or replaced after the overflow: finish as an error instead of retrying.
+                overflow = false;
+                storeMessage(applyRunnerUpdate(readMessage(), { type: 'finished', status: 'error', error: finalError }));
+            }
             if (!overflow) release(token);
             if (abortRef.current === controller) abortRef.current = null;
             if (isCurrent()) setPending([]);
@@ -528,8 +544,9 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 costUSD: sawUsage ? computeCost(turnTokens, provider.pricing) : null,
                 durationMs: Date.now() - started,
             };
-            const finalMessage: ChatMessage = { ...(assistantRef.current ?? assistant), ...(sawUsage ? { usage: turnUsage } : {}) };
+            const finalMessage: ChatMessage = { ...readMessage(), ...(sawUsage ? { usage: turnUsage } : {}) };
             if (assistantRef.current?.id === finalMessage.id) assistantRef.current = null;
+            turnMessagesRef.current.delete(finalMessage.id);
 
             const emitFinished = (status: typeof finalStatus, error: string | undefined) =>
                 d.bus.emit({ type: 'turn-finished', turnId, status, usage: turnUsage, ...(error ? { error } : {}), at: Date.now() });
@@ -545,7 +562,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     startConversation,
                     userMessage,
                     provider,
-                    { allowOverflowRetry: false, forceCompaction: true, assistantId: finalMessage.id },
+                    { allowOverflowRetry: false, forceCompaction: true, assistantId: finalMessage.id, generation },
                     token,
                 );
                 return;
@@ -603,6 +620,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             if (!trimmed || busyRef.current) return;
             const token = {};
             busyRef.current = token;
+            openSeqRef.current += 1;
             try {
                 const d = depsRef.current;
                 const accountKey = d.accountKey;
@@ -725,6 +743,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     approver: accountKey,
                     at,
                 });
+                turnMessagesRef.current.set(assistantRef.current.id, assistantRef.current);
                 replaceMessage(assistantRef.current);
             }
             depsRef.current.bus.emit({
@@ -774,7 +793,12 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             deletedRef.current.add(id);
             if (conversationRef.current?.id === id) resetView();
             const { repository } = await depsRef.current.repository;
-            await repository.deleteConversation(id);
+            try {
+                await repository.deleteConversation(id);
+            } catch (deleteError) {
+                deletedRef.current.delete(id);
+                throw deleteError;
+            }
             await refreshConversations();
         },
         [refreshConversations, resetView],
