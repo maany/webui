@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { fakeText } from '@tanstack/ai/testing';
 import type { ToolPolicy } from '@/lib/core/entity/assistant/tool';
 import { createAgentRunner, type AgentRunnerDeps, type RunnerUpdate } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
+import { createSkillSource } from '@/lib/infrastructure/assistant/skill-source';
+import { createActivateSkillTool } from '@/lib/infrastructure/assistant/tools/activate-skill-tool';
 import { createSkillActivationTracker } from '@/lib/infrastructure/assistant/skill-activation';
 import { decorateRunnerDepsWithSkills } from '@/lib/infrastructure/assistant/skill-runner-deps';
 import type { RegisteredTool } from '@/lib/infrastructure/assistant/tool-types';
@@ -9,7 +11,10 @@ import { collectUpdates, makeTool, makeToolContextFactory, makeUserMessage } fro
 
 type FakeStep = Parameters<ReturnType<typeof fakeText>['setResponses']>[0][number];
 
-function setup(script: FakeStep[], options: { loaded?: () => RegisteredTool<any>[] | null; policies?: Record<string, ToolPolicy> } = {}) {
+function setup(
+    script: FakeStep[],
+    options: { loaded?: () => RegisteredTool<any>[] | null; policies?: Record<string, ToolPolicy>; realActivate?: boolean } = {},
+) {
     const tracker = createSkillActivationTracker();
     const executed: string[] = [];
     const fake = fakeText();
@@ -24,8 +29,15 @@ function setup(script: FakeStep[], options: { loaded?: () => RegisteredTool<any>
             settle();
         }
     });
+    const skills = createSkillSource(() => ({
+        shipped: [{ name: 'rse-only', description: 'RSE help.', body: 'Use list_rses.', source: 'shipped', allowedTools: ['list_rses'] }],
+        operator: [],
+        user: [],
+        enabled: {},
+    }));
+    const contextFor = makeToolContextFactory(controller.signal);
     const base: RegisteredTool<any>[] = [
-        activate,
+        options.realActivate ? createActivateSkillTool(tracker) : activate,
         makeTool('list_rses', 'read', z.object({}), async () => {
             executed.push('list_rses');
             return { rses: [] };
@@ -55,7 +67,7 @@ function setup(script: FakeStep[], options: { loaded?: () => RegisteredTool<any>
                 policyFor: name => policies[name] ?? 'deny',
                 systemPrompt: 'You are a test bot.',
                 emit: () => undefined,
-                makeToolContext: makeToolContextFactory(controller.signal),
+                makeToolContext: (toolCallId, turnId) => ({ ...contextFor(toolCallId, turnId), skills }),
                 maxSteps: 5,
             };
             return decorateRunnerDepsWithSkills(raw, { conversationId: 'conv-1', tracker });
@@ -99,7 +111,7 @@ describe('skill narrowing through the real runner', () => {
             {
                 toolCalls: [
                     { name: 'activate_skill', input: {} },
-                    { name: 'do_write', input: {} },
+                    { id: 'write-call', name: 'do_write', input: {} },
                 ],
             },
             { text: 'done' },
@@ -110,7 +122,12 @@ describe('skill narrowing through the real runner', () => {
         expect(updates.some(u => u.type === 'approval-required')).toBe(true);
         expect(s.executed).toEqual([]);
         const results = updates.filter(u => u.type === 'tool-result');
-        expect(results).toContainEqual(expect.objectContaining({ error: expect.objectContaining({ error: 'denied_by_policy' }) }));
+        expect(results).toContainEqual(
+            expect.objectContaining({
+                toolCallId: 'write-call',
+                error: expect.objectContaining({ error: 'denied_by_policy', message: expect.stringMatching(/not available while the skill/) }),
+            }),
+        );
         expect(last(updates)).toEqual({ type: 'finished', status: 'completed' });
     });
 
@@ -130,5 +147,33 @@ describe('skill narrowing through the real runner', () => {
         expect(last(updates)).toEqual({ type: 'finished', status: 'completed' });
         expect(offered[0]).toEqual(['activate_skill', 'do_write', 'list_rses', 'list_rules']);
         expect(offered[1]).toEqual(['activate_skill', 'list_rses']);
+    });
+
+    it('(d) denies an allowed-policy sibling outside the skill when the real activate_skill runs in the same step', async () => {
+        const s = setup(
+            [
+                {
+                    toolCalls: [
+                        { name: 'activate_skill', input: { name: 'rse-only' } },
+                        { id: 'rules-call', name: 'list_rules', input: {} },
+                    ],
+                },
+                { text: 'done' },
+            ],
+            { realActivate: true },
+        );
+        const updates = await collectUpdates(s.run());
+        expect(s.executed).toEqual([]);
+        const results = updates.filter(u => u.type === 'tool-result');
+        expect(results).toContainEqual(
+            expect.objectContaining({
+                toolCallId: 'rules-call',
+                error: expect.objectContaining({
+                    error: 'denied_by_policy',
+                    message: expect.stringMatching(/not available while the skill rse-only is active/),
+                }),
+            }),
+        );
+        expect(last(updates)).toEqual({ type: 'finished', status: 'completed' });
     });
 });

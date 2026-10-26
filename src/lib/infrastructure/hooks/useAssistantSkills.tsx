@@ -40,10 +40,7 @@ export function useAssistantSkills(bus: AssistantEventBus): UseAssistantSkillsRe
 
     React.useEffect(() => {
         const unsubscribe = bus.subscribe(event => skillActivations.onEvent(event));
-        return () => {
-            unsubscribe();
-            skillActivations.clear();
-        };
+        return unsubscribe;
     }, [bus]);
 
     const promptSections = React.useCallback(() => [renderSkillCatalog(enabledSkills(inputRef.current))], []);
