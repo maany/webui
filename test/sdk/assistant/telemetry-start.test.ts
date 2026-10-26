@@ -98,11 +98,39 @@ describe('startAssistantTelemetry', () => {
             secrets: () => [secret],
             exporters: [exporter],
         });
-        telemetry.handle({ ...(events[0] as Extract<AssistantEvent, { type: 'turn-started' }>), userText: `${'a'.repeat(7990)}${secret}tail` });
+        telemetry.handle({ ...(events[0] as Extract<AssistantEvent, { type: 'turn-started' }>), userText: `${'a'.repeat(7985)}${secret}tail` });
         telemetry.handle(events[3]);
         await telemetry.forceFlush();
         const everything = JSON.stringify(exporter.getFinishedSpans().map(s => [s.name, s.attributes]));
-        expect(everything).not.toContain(secret.slice(0, 12));
+        // Without scrub-before-truncate, 15 characters of the secret survive the cut.
+        expect(everything).not.toContain(secret.slice(0, 8));
+        expect(everything).toContain('[REDACTED]');
+        await telemetry.shutdown();
+    });
+
+    it('does not export a known secret that straddles the cut of a tool error message', async () => {
+        const secret = 'my-secret-token-value-123';
+        const exporter = new InMemorySpanExporter();
+        const telemetry = startAssistantTelemetry({
+            contentLevel: () => 'full',
+            identity: { userId: () => undefined },
+            secrets: () => [secret],
+            exporters: [exporter],
+        });
+        telemetry.handle(events[0]);
+        telemetry.handle(events[1]);
+        telemetry.handle({
+            type: 'tool-call-finished',
+            turnId: 'turn-1',
+            toolCallId: 'call-1',
+            durationMs: 10,
+            error: { error: 'forbidden', message: `${'a'.repeat(7980)}${secret}tail` },
+            at: 1110,
+        });
+        telemetry.handle(events[3]);
+        await telemetry.forceFlush();
+        const everything = JSON.stringify(exporter.getFinishedSpans().map(s => [s.name, s.attributes, s.status]));
+        expect(everything).not.toContain(secret.slice(0, 8));
         expect(everything).toContain('[REDACTED]');
         await telemetry.shutdown();
     });

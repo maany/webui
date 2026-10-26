@@ -95,6 +95,10 @@ export function collectKnownSecrets(settings: AssistantSettings): string[] {
             if (encoded !== form) {
                 all.add(encoded);
             }
+            const escaped = JSON.stringify(form).slice(1, -1);
+            if (escaped !== form) {
+                all.add(escaped);
+            }
         }
     }
     return [...all];

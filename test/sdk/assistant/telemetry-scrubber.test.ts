@@ -66,6 +66,18 @@ describe('scrubText', () => {
         ['escaped quotes', '\\"token\\": '.repeat(6000)],
         ['bearer percent', 'Bearer%20'.repeat(9000)],
         ['key underscores', 'api_key_'.repeat(10000)],
+        ['camel token', 'aToken='.repeat(11000)],
+        ['quoted value rule', 'password": "'.repeat(6000)],
+        ['quoted value unterminated', `{"password": "${'a b '.repeat(20000)}`],
+        ['scheme prefix', 'token: Bearer '.repeat(5500)],
+        ['cookie lines', 'cookie: a=b\n'.repeat(6000)],
+        ['cookie no newline', 'cookie:'.repeat(11000)],
+        ['value before name', '{"value":"'.repeat(8000)],
+        ['value before name long', `{"value":"${'a'.repeat(79000)}`],
+        ['pem unterminated repeated', '-----BEGIN PRIVATE KEY-----\n'.repeat(2800)],
+        ['pem long unterminated', `-----BEGIN RSA PRIVATE KEY-----${'a\n'.repeat(39000)}`],
+        ['pem begin spaces', `-----BEGIN ${' '.repeat(79000)}`],
+        ['pem begin repeated', '-----BEGIN A '.repeat(6000)],
     ])('finishes fast on a long adversarial string: %s', (_label, input) => {
         const started = Date.now();
         scrubText(input, ['localsecret123']);
@@ -97,6 +109,30 @@ describe('scrubText', () => {
     });
 
     it.each([
+        ['letters only bearer after key', 'authorization=bearer abcdefghijklmnop', 'authorization=[REDACTED]'],
+        ['letters only bearer in JSON', '{"Authorization":"Bearer abcdefghijklmnopqrst"}', '{"Authorization":"[REDACTED]"}'],
+        ['letters only token header', 'Authorization: Token abcdefghijklmnop', 'Authorization: [REDACTED]'],
+        ['letters only basic encoded', 'authorization=Basic%20abcdefghijklmnop', 'authorization=[REDACTED]'],
+        ['quoted phrase in JSON', '{"password": "correct horse battery staple"}', '{"password": "[REDACTED]"}'],
+        ['quoted phrase with comma', '{"password":"a, b; c"}', '{"password":"[REDACTED]"}'],
+        ['quoted phrase with equals', 'secret_key = "my long phrase"', 'secret_key = "[REDACTED]"'],
+        ['single quoted phrase', "secret_key: 'my long phrase'", "secret_key: '[REDACTED]'"],
+        ['escaped quoted phrase', '\\"password\\": \\"correct horse\\"', '\\"password\\": \\"[REDACTED]\\"'],
+        ['cookie line', 'Cookie: a=x; b=y\nnext: line', 'Cookie: [REDACTED]\nnext: line'],
+        ['set-cookie line', 'set-cookie: sid=x; Path=/; HttpOnly', 'set-cookie: [REDACTED]'],
+        ['value before name', '{"value":"abcd1234efgh","name":"authorization"}', '{"value":"[REDACTED]","name":"authorization"}'],
+        ['value before name api key', '{"value":"abcd1234efgh","name":"x-api-key"}', '{"value":"[REDACTED]","name":"x-api-key"}'],
+        ['value before name rucio', '{"value":"abc","name":"X-Rucio-Auth-Token"}', '{"value":"[REDACTED]","name":"X-Rucio-Auth-Token"}'],
+        ['PEM block', 'k -----BEGIN RSA PRIVATE KEY-----\nMIIabc\ndef==\n-----END RSA PRIVATE KEY----- end', 'k [REDACTED] end'],
+        ['PEM without end', 'k -----BEGIN PRIVATE KEY-----\nMIIabc', 'k [REDACTED]'],
+    ])('redacts %s', (_label, input, expected) => {
+        expect(scrubText(input)).toBe(expected);
+    });
+
+    it.each([
+        '{"inputTokens":12,"outputTokens":3,"cachedInputTokens":5,"maxTokens":100}',
+        '{"password_policy": "strong"}',
+        'cookies are tasty',
         'Basic authentication is disabled',
         'Token validation failed',
         'see Bearer authentication docs',
@@ -164,6 +200,22 @@ describe('ScrubbingSpanProcessor', () => {
         await provider.shutdown();
         return spans;
     };
+
+    it('turns a synchronous throw from the wrapped processor into a resolved flush and shutdown', async () => {
+        const throwing = {
+            onStart: () => undefined,
+            onEnd: () => undefined,
+            forceFlush: () => {
+                throw new Error('flush');
+            },
+            shutdown: () => {
+                throw new Error('shutdown');
+            },
+        };
+        const processor = new ScrubbingSpanProcessor(throwing, () => []);
+        await expect(processor.forceFlush()).resolves.toBeUndefined();
+        await expect(processor.shutdown()).resolves.toBeUndefined();
+    });
 
     it('drops the span when known secrets cannot be read (fail closed)', async () => {
         const spans = await contentSpan(

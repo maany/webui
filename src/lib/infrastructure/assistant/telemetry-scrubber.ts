@@ -1,5 +1,13 @@
 import type { Attributes, AttributeValue, Context } from '@opentelemetry/api';
 import type { ReadableSpan, Span, SpanProcessor } from '@opentelemetry/sdk-trace';
+import {
+    ATTR_GEN_AI_TOOL_CALL_ARGUMENTS,
+    ATTR_GEN_AI_TOOL_CALL_RESULT,
+    ATTR_LANGFUSE_OBSERVATION_INPUT,
+    ATTR_LANGFUSE_OBSERVATION_OUTPUT,
+    ATTR_LANGFUSE_TRACE_INPUT,
+    ATTR_LANGFUSE_TRACE_OUTPUT,
+} from '@/lib/infrastructure/assistant/telemetry-attributes';
 
 export const REDACTED = '[REDACTED]';
 
@@ -48,7 +56,8 @@ const CAMEL_KEY_NAMES = [
 // After the key name: optional (backslash-escaped) quote, `:` or `=`, optional (escaped) quote.
 const KEY_VALUE_SEPARATOR = `\\\\?["']?\\s*[:=]\\s*\\\\?["']?`;
 // The value stops at quotes, whitespace, delimiters and backslashes (JSON-escaped JSON).
-const KEY_VALUE = `(?!\\[REDACTED\\])[^"'\\s,;&}\\\\]+`;
+// An optional scheme (`Bearer abc`, `Token%20abc`) is part of the value, so letters-only credentials are covered.
+const KEY_VALUE = `(?:(?:Bearer|Basic|Token)(?:\\s+|%20))?(?!\\[REDACTED\\])[^"'\\s,;&}\\\\]+`;
 
 const SECRET_HEADER_NAMES = 'x-api-key|authorization|proxy-authorization|x-rucio-auth-token';
 
@@ -66,6 +75,20 @@ const SCRUB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
     // Authorization header values: `Bearer x`, `Basic x`, `Token x` (also `Bearer%20x`). The value must look like
     // a credential (a digit or one of + / = . _ ~ -) so prose such as "Basic authentication" is left alone.
     [/\b(Bearer|Basic|Token)(?:\s+|%20)(?=[A-Za-z0-9._~+/=-]*[0-9+/=._~-])[A-Za-z0-9._~+/=-]{8,}/gi, `$1 ${REDACTED}`],
+    // Header objects with the value first: {"value":"...","name":"authorization"}
+    [
+        new RegExp(
+            `(\\\\?"value\\\\?"\\s*:\\s*\\\\?")[^"\\\\]*(?=\\\\?"\\s*,\\s*\\\\?"name\\\\?"\\s*:\\s*\\\\?"(?:${SECRET_HEADER_NAMES})\\\\?")`,
+            'gi',
+        ),
+        `$1${REDACTED}`,
+    ],
+    // Private key blocks. Consumes to the END marker or, when missing, to the end of the text (one match, so linear).
+    [/-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?!-----END )[\s\S])*(?:-----END [A-Z ]*PRIVATE KEY-----)?/g, REDACTED],
+    // Cookie header lines carry several name=value pairs: redact to the end of the line.
+    [/((?<![A-Za-z0-9])(?:set-cookie|cookie)[ \t]*:[ \t]*)[^\r\n]+/gi, `$1${REDACTED}`],
+    // Quoted values may hold spaces and commas: "password": "correct horse", secret_key = "a phrase"
+    [new RegExp(`((?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES})\\\\?["']?\\s*[:=]\\s*\\\\?(["']))(?:(?!\\2)[^\\\\])+`, 'gi'), `$1${REDACTED}`],
     // key: value, key=value, "key": "value" for secret-looking key names (JSON, escaped JSON, headers, query strings)
     [new RegExp(`((?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES})${KEY_VALUE_SEPARATOR})${KEY_VALUE}`, 'gi'), `$1${REDACTED}`],
     [new RegExp(`((?<=[a-z0-9])(?:${CAMEL_KEY_NAMES})${KEY_VALUE_SEPARATOR})${KEY_VALUE}`, 'g'), `$1${REDACTED}`],
@@ -84,12 +107,13 @@ const SCRUB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
 
 /** Content attributes removed when content must not leave the browser (level lowered after capture). */
 const CONTENT_ATTRIBUTE_KEYS: readonly string[] = [
-    'langfuse.trace.input',
-    'langfuse.trace.output',
-    'langfuse.observation.input',
-    'langfuse.observation.output',
-    'gen_ai.tool.call.arguments',
-    'gen_ai.tool.call.result',
+    ATTR_LANGFUSE_TRACE_INPUT,
+    ATTR_LANGFUSE_TRACE_OUTPUT,
+    ATTR_LANGFUSE_OBSERVATION_INPUT,
+    ATTR_LANGFUSE_OBSERVATION_OUTPUT,
+    ATTR_GEN_AI_TOOL_CALL_ARGUMENTS,
+    ATTR_GEN_AI_TOOL_CALL_RESULT,
+    // ATTR_DB_QUERY_TEXT from @opentelemetry/semantic-conventions; that is a value import, which the scrubber must not have.
     'db.query.text',
 ];
 
@@ -201,10 +225,14 @@ export class ScrubbingSpanProcessor implements SpanProcessor {
     }
 
     forceFlush(): Promise<void> {
-        return this.next.forceFlush();
+        return Promise.resolve()
+            .then(() => this.next.forceFlush())
+            .catch(() => undefined);
     }
 
     shutdown(): Promise<void> {
-        return this.next.shutdown();
+        return Promise.resolve()
+            .then(() => this.next.shutdown())
+            .catch(() => undefined);
     }
 }

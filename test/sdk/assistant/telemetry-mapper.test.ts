@@ -449,11 +449,33 @@ describe('createTelemetryMapper', () => {
         it('scrubs content before truncating it', () => {
             const secret = 'my-secret-token-value-123';
             const { mapper, find } = build({ scrub: text => text.split(secret).join('[R]') });
-            mapper.handle({ ...(TURN[0] as Extract<AssistantEvent, { type: 'turn-started' }>), userText: `${'a'.repeat(7990)}${secret}tail` });
+            mapper.handle({ ...(TURN[0] as Extract<AssistantEvent, { type: 'turn-started' }>), userText: `${'a'.repeat(7985)}${secret}tail` });
             mapper.handle(TURN[7]);
             const input = String(find('invoke_agent Rucio bot')?.attributes['langfuse.trace.input']);
-            expect(input).not.toContain(secret.slice(0, 12));
+            // Without scrub-before-truncate, 15 characters of the secret survive the cut.
+            expect(input).not.toContain(secret.slice(0, 8));
             expect(input).toContain('[R]');
+        });
+
+        it('scrubs a tool error message before truncating it into the status', () => {
+            const secret = 'my-secret-token-value-123';
+            const { mapper, find } = build({ scrub: text => text.split(secret).join('[R]') });
+            mapper.handle(TURN[0]);
+            mapper.handle(toolStart('list_rules'));
+            mapper.handle({
+                type: 'tool-call-finished',
+                turnId: 'turn-1',
+                toolCallId: 'call-1',
+                durationMs: 5,
+                error: { error: 'forbidden', message: `${'a'.repeat(7980)}${secret}tail` },
+                at: 1600,
+            });
+            mapper.handle(TURN[7]);
+            const tool = find('execute_tool list_rules');
+            const exported = JSON.stringify([tool?.status, tool?.attributes]);
+            expect(exported).not.toContain(secret.slice(0, 8));
+            expect(exported).toContain('[R]');
+            expect(tool?.status.message?.startsWith('forbidden: ')).toBe(true);
         });
 
         it('exports nothing for a value when scrubbing throws', () => {

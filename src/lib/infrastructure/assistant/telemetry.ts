@@ -322,7 +322,8 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                 }
                 if (event.error) {
                     const code = safeErrorCode(event.error.error);
-                    markError(tool.span, code, isFull() ? `${code}: ${event.error.message}` : code);
+                    const detail = content(event.error.message);
+                    markError(tool.span, code, detail ? `${code}: ${detail}` : code);
                 }
                 tool.span.end(epochMillisToHrTime(event.at));
                 tools.delete(event.toolCallId);
@@ -521,7 +522,10 @@ export function startAssistantTelemetry(options: StartAssistantTelemetryOptions)
                 // Telemetry must never break a chat turn.
             }
         },
-        forceFlush: () => provider.forceFlush().catch(() => undefined),
+        forceFlush: () =>
+            Promise.resolve()
+                .then(() => provider.forceFlush())
+                .catch(() => undefined),
         async shutdown() {
             if (stopped) {
                 return;
@@ -532,7 +536,9 @@ export function startAssistantTelemetry(options: StartAssistantTelemetryOptions)
             } catch {
                 // Shutdown must always complete.
             }
-            await provider.shutdown().catch(() => undefined);
+            await Promise.resolve()
+                .then(() => provider.shutdown())
+                .catch(() => undefined);
         },
     };
 }

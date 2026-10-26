@@ -90,6 +90,16 @@ describe('collectKnownSecrets', () => {
         expect(secrets).toEqual(expect.arrayContaining(['Bearer tokenvalue123', 'tokenvalue123', encodeURIComponent('Bearer tokenvalue123')]));
         expect(secrets.filter(secret => secret === 'tokenvalue123')).toHaveLength(1);
     });
+
+    it('adds the JSON-escaped form of a secret that contains quotes or backslashes', () => {
+        const settings = {
+            providers: [{ id: '1', kind: 'openai', label: 'o', model: 'gpt', apiKey: 'ab"cd\\ef12345' }],
+            telemetry: { enabled: true, contentLevel: 'metadata', shareWithOperator: false },
+        } as unknown as AssistantSettings;
+        const secrets = collectKnownSecrets(settings);
+        expect(secrets).toContain('ab"cd\\ef12345');
+        expect(secrets).toContain(JSON.stringify('ab"cd\\ef12345').slice(1, -1));
+    });
 });
 
 describe('parseOtlpHeaders', () => {
