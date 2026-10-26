@@ -76,7 +76,7 @@ describe('AssistantSettingsView', () => {
             fireEvent.click(screen.getByRole('tab', { name }));
             text += document.body.textContent ?? '';
         });
-        expect(text).not.toMatch(/—/);
+        expect(text).not.toContain(String.fromCharCode(0x2014));
         // Let the storage section finish opening its repository.
         await act(async () => undefined);
     });

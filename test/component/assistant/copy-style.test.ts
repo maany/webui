@@ -12,8 +12,12 @@ function files(dir: string): string[] {
 
 describe('Rucio bot copy', () => {
     it('has no em dashes in assistant UI or prompt files', () => {
-        const roots = ['src/component-library/features/assistant', 'src/lib/infrastructure/assistant'];
-        const offenders = roots.flatMap(files).filter(file => readFileSync(file, 'utf8').includes(EM_DASH));
+        const roots = [
+            'src/component-library/features/assistant',
+            'src/component-library/features/assistant/settings',
+            'src/lib/infrastructure/assistant',
+        ];
+        const offenders = [...new Set(roots.flatMap(files))].filter(file => readFileSync(file, 'utf8').includes(EM_DASH));
         expect(offenders).toEqual([]);
     });
 });
