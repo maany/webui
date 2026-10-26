@@ -2,6 +2,9 @@ import { createFeatureTool } from '@/lib/infrastructure/assistant/feature-execut
 import type { RegisteredTool } from '@/lib/infrastructure/assistant/tool-types';
 import type { ToolSpec } from '@/lib/core/entity/assistant/tool';
 import { defineReadTool, didOf, text, withFilters, type ToolArgs } from './read-tool-helpers';
+import { DeclareBadReplicasSchema, type DeclareBadReplicasInput } from '@/lib/infrastructure/api-schemas/declare-bad-replicas';
+import { defineWriteTool } from '@/lib/infrastructure/assistant/write-tool';
+import { summarizeDeclareBadReplicas } from './write-summaries';
 
 export const replicaToolSpecs: ToolSpec<ToolArgs>[] = [
     defineReadTool({
@@ -49,3 +52,23 @@ export const replicaToolSpecs: ToolSpec<ToolArgs>[] = [
 ];
 
 export const replicaTools: RegisteredTool<ToolArgs>[] = replicaToolSpecs.map(spec => createFeatureTool(spec));
+
+// Write tools (phase 4). The route has no WebUI flag or admin guard, so assistant.bad_replicas is the only switch.
+
+export const declareBadReplicasTool = defineWriteTool<DeclareBadReplicasInput>({
+    name: 'declare_bad_replicas',
+    domain: 'replicas',
+    description:
+        'Declare file replicas BAD on one RSE so Rucio recovers them from other copies. High risk: a wrong declaration can lose the last copy. ' +
+        'Check the replicas first and give a clear reason. expiresAt is optional.',
+    input: DeclareBadReplicasSchema,
+    risk: 'high',
+    requires: { flags: ['assistant.bad_replicas'] },
+    executor: 'feature',
+    output: 'object',
+    route: { path: '/api/feature/declare-bad-replicas', method: 'POST' },
+    describeCall: summarizeDeclareBadReplicas,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const REPLICA_WRITE_TOOLS: RegisteredTool<any>[] = [declareBadReplicasTool];

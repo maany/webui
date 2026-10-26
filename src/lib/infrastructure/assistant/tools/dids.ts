@@ -2,6 +2,11 @@ import { createFeatureTool } from '@/lib/infrastructure/assistant/feature-execut
 import type { RegisteredTool } from '@/lib/infrastructure/assistant/tool-types';
 import type { ToolSpec } from '@/lib/core/entity/assistant/tool';
 import { defineReadTool, didOf, text, withFilters, type ToolArgs } from './read-tool-helpers';
+import { AddDidSchema, type AddDidInput } from '@/lib/infrastructure/api-schemas/add-did';
+import { AttachDidsSchema, type AttachDidsInput } from '@/lib/infrastructure/api-schemas/attach-dids';
+import { SetDidStatusSchema, type SetDidStatusInput } from '@/lib/infrastructure/api-schemas/set-did-status';
+import { defineWriteTool } from '@/lib/infrastructure/assistant/write-tool';
+import { summarizeAddDid, summarizeAttachDids, summarizeSetDidStatus } from './write-summaries';
 
 export const didToolSpecs: ToolSpec<ToolArgs>[] = [
     defineReadTool({
@@ -76,3 +81,48 @@ export const didToolSpecs: ToolSpec<ToolArgs>[] = [
 ];
 
 export const didTools: RegisteredTool<ToolArgs>[] = didToolSpecs.map(spec => createFeatureTool(spec));
+
+// Write tools (phase 4)
+
+export const addDidTool = defineWriteTool<AddDidInput>({
+    name: 'add_did',
+    domain: 'dids',
+    description:
+        'Create a new, empty dataset or container DID. type is Dataset or Container. The scope must exist and the account must be allowed to write to it.',
+    input: AddDidSchema,
+    risk: 'write',
+    requires: { flags: ['dids.mutate'] },
+    executor: 'feature',
+    output: 'object',
+    route: { path: '/api/feature/add-did', method: 'POST' },
+    describeCall: summarizeAddDid,
+});
+
+export const attachDidsTool = defineWriteTool<AttachDidsInput>({
+    name: 'attach_dids',
+    domain: 'dids',
+    description: 'Attach DIDs (files or datasets) to the dataset or container given by scope and name. The target must be open.',
+    input: AttachDidsSchema,
+    risk: 'write',
+    requires: { flags: ['dids.mutate'] },
+    executor: 'feature',
+    output: 'object',
+    route: { path: '/api/feature/attach-dids', method: 'POST' },
+    describeCall: summarizeAttachDids,
+});
+
+export const setDidStatusTool = defineWriteTool<SetDidStatusInput>({
+    name: 'set_did_status',
+    domain: 'dids',
+    description: 'Open or close a dataset or container. open false closes it, and a closed DID accepts no new content.',
+    input: SetDidStatusSchema,
+    risk: 'write',
+    requires: { flags: ['dids.mutate'] },
+    executor: 'feature',
+    output: 'object',
+    route: { path: '/api/feature/set-did-status', method: 'PUT' },
+    describeCall: summarizeSetDidStatus,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const DID_WRITE_TOOLS: RegisteredTool<any>[] = [addDidTool, attachDidsTool, setDidStatusTool];
