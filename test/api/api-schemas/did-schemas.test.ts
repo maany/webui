@@ -31,6 +31,12 @@ describe('DID schemas', () => {
         expect(parseQuery(ListDidsSchema, query('query=s:n*&type=dataset&filters=a=1&filters=b>=2')).data?.filters).toEqual(['a=1', 'b>=2']);
     });
 
+    it('ListDidsSchema rejects an empty filter entry', () => {
+        expect(parseQuery(ListDidsSchema, query('query=s:n*&type=dataset&filters=')).success).toBe(false);
+        expect(parseQuery(ListDidsSchema, query('query=s:n*&type=dataset&filters=a=1&filters=')).success).toBe(false);
+        expect(parseQuery(ListDidsSchema, query('query=s:n*&type=dataset&filters=a=1')).success).toBe(true);
+    });
+
     it('AddDidSchema only creates datasets and containers', () => {
         expect(AddDidSchema.safeParse({ scope: 's', name: 'n', type: 'Dataset' }).success).toBe(true);
         expect(AddDidSchema.safeParse({ scope: 's', name: 'n', type: 'File' }).success).toBe(false);
@@ -74,6 +80,14 @@ describe('DID routes use their schemas', () => {
         const response = await route.GET(get('list-dids', search));
         expect(response.status).toBe(400);
         await expect(response.json()).resolves.toEqual({ error: message });
+    });
+
+    it('list-dids returns 400 for an empty filter', async () => {
+        const { route, execute } = loadRoute<typeof import('@/app/api/feature/list-dids/route')>('@/app/api/feature/list-dids/route');
+        const response = await route.GET(get('list-dids', '?query=s:n*&type=dataset&filters='));
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({ error: 'Invalid parameter: filters' });
+        expect(execute).not.toHaveBeenCalled();
     });
 
     it.each([

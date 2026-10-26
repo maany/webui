@@ -8,7 +8,7 @@ import { nonEmptyString } from './common';
 export const ListDidsSchema = z.object({
     query: nonEmptyString,
     type: nonEmptyString,
-    filters: z.array(z.string()).optional(),
+    filters: z.array(nonEmptyString).optional(),
 });
 
 export type ListDidsInput = z.infer<typeof ListDidsSchema>;
