@@ -6,7 +6,8 @@ import { GetAccountInfoControllerParameters } from '@/lib/infrastructure/control
 import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { withAccountReadAccess } from '@/lib/infrastructure/adapters/with-admin';
 import { getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
-import { ACCOUNT_NAME_REGEX } from '@/lib/core/utils/account-validation';
+import { GetAccountInfoSchema } from '@/lib/infrastructure/api-schemas/get-account-info';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
@@ -22,11 +23,11 @@ async function getHandler(request: NextRequest) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        const requested = request.nextUrl.searchParams.get('account');
-        if (requested && !ACCOUNT_NAME_REGEX.test(requested)) {
+        const params = parseQuery(GetAccountInfoSchema, request.nextUrl.searchParams);
+        if (!params.success) {
             return NextResponse.json({ status: 'error', errorType: 'validation_error', message: 'Invalid account name' }, { status: 400 });
         }
-        const account = requested || sessionUser.rucioAccount;
+        const account = params.data.account || sessionUser.rucioAccount;
         const controller = appContainer.get<BaseController<GetAccountInfoControllerParameters, void>>(CONTROLLERS.GET_ACCOUNT_INFO);
 
         return executeAuthenticatedController(controller, { account });

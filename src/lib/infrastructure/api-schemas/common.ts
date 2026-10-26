@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { IDENTITY_TYPES } from '@/lib/core/entity/account';
+import { ACCOUNT_ATTRIBUTE_REGEX, ACCOUNT_NAME_REGEX } from '@/lib/core/utils/account-validation';
 
 export const nonEmptyString = z.string().min(1);
 
@@ -30,3 +32,34 @@ export const rseOrRseNameQuerySchema = z
         rseName: z.string().optional(),
     })
     .refine(query => Boolean(query.rse || query.rseName), { message: 'Missing required parameter: rse or rseName' });
+
+/** An account name. */
+export const accountNameField = z.string().regex(ACCOUNT_NAME_REGEX, 'Invalid account name');
+
+/** Query carrying an account as `account`. */
+export const accountQuerySchema = z.object({
+    account: accountNameField,
+});
+
+export const accountAttributeKeyField = z.string().regex(ACCOUNT_ATTRIBUTE_REGEX, 'Invalid attribute key');
+
+/** An account attribute: `account`, `key` and `value`. */
+export const accountAttributeShape = {
+    account: accountNameField,
+    key: accountAttributeKeyField,
+    value: z.string().regex(ACCOUNT_ATTRIBUTE_REGEX, 'Invalid attribute value'),
+};
+
+/** Identifies one identity of an account: `account`, `identity` and `authType`. */
+export const accountIdentityKeyShape = {
+    account: accountNameField,
+    identity: z.string().trim().min(1, 'Identity is required').max(4096),
+    authType: z.enum(IDENTITY_TYPES),
+};
+
+/** Identifies one account limit: `account`, `locality` and `rseExpression`. */
+export const accountLimitKeyShape = {
+    account: accountNameField,
+    locality: z.enum(['local', 'global']),
+    rseExpression: z.string().min(1, 'RSE expression is required').max(500),
+};
