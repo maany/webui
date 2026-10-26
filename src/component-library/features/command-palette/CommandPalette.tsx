@@ -59,6 +59,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChan
     const { data: session } = useSession();
     const isAdmin = session?.user?.role === Role.ADMIN;
     const accountsEnabled = useFeature('accounts');
+    const assistantEnabled = useFeature('assistant');
 
     // Build all sections with filtering
     const sections = useMemo<CommandSection[]>(() => {
@@ -108,7 +109,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChan
         }
 
         // Navigation Section
-        const navigationItems = getNavigationCommands(account, canViewApprovalQueue, isAdmin, accountsEnabled);
+        const navigationItems = getNavigationCommands(account, canViewApprovalQueue, isAdmin, accountsEnabled, assistantEnabled);
         allSections.push({
             id: 'navigation',
             title: 'Navigation',
@@ -150,7 +151,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChan
         }
 
         return allSections;
-    }, [searchQuery, account, canViewApprovalQueue, isAdmin, accountsEnabled]);
+    }, [searchQuery, account, canViewApprovalQueue, isAdmin, accountsEnabled, assistantEnabled]);
 
     // Calculate total items count for keyboard navigation
     const totalItems = useMemo(() => {

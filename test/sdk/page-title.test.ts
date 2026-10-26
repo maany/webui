@@ -17,4 +17,9 @@ describe('getPageTitle', () => {
     it('falls back to the base title for a bare /account path', () => {
         expect(getPageTitle('/account')).toBe('Account');
     });
+
+    it('names the Rucio bot settings page', () => {
+        expect(getPageTitle('/assistant/settings')).toBe('Rucio bot settings');
+        expect(getPageTitle('/assistant')).toBe('Rucio bot');
+    });
 });

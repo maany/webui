@@ -15,6 +15,7 @@ export function getPageTitle(pathname: string): string {
         dashboard: 'Dashboard',
         accounts: 'Accounts',
         account: 'Account',
+        assistant: 'Rucio bot',
         did: 'DIDs',
         rule: 'Rules',
         rse: 'RSEs',
@@ -28,6 +29,11 @@ export function getPageTitle(pathname: string): string {
     // Account detail pages are /account/<name>
     if (baseRoute === 'account' && segments.length > 1 && segments[1] !== '') {
         return `Account: ${decodeURIComponent(segments[1])}`;
+    }
+
+    // Rucio bot settings page is /assistant/settings
+    if (baseRoute === 'assistant' && segments[1] === 'settings') {
+        return 'Rucio bot settings';
     }
 
     // If it's a detail page (has more segments), try to extract name

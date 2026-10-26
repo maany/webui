@@ -4,6 +4,7 @@
  */
 
 import {
+    Cog6ToothIcon,
     HomeIcon,
     DocumentDuplicateIcon,
     ShieldCheckIcon,
@@ -38,8 +39,16 @@ import {
  *   suspicious-replicas and accounts entries (admin-only surfaces).
  * @param accountsEnabled - Whether the `accounts` feature flag is on. Gates the
  *   accounts and my-account entries.
+ * @param assistantEnabled - Whether the `assistant` feature flag is on. Gates the
+ *   Rucio bot settings entry.
  */
-export function getNavigationCommands(account?: string, canViewApprovalQueue?: boolean, isAdmin?: boolean, accountsEnabled?: boolean): CommandItem[] {
+export function getNavigationCommands(
+    account?: string,
+    canViewApprovalQueue?: boolean,
+    isAdmin?: boolean,
+    accountsEnabled?: boolean,
+    assistantEnabled?: boolean,
+): CommandItem[] {
     const commands: CommandItem[] = [
         {
             id: 'nav-dashboard',
@@ -135,6 +144,18 @@ export function getNavigationCommands(account?: string, canViewApprovalQueue?: b
             icon: ExclamationTriangleIcon,
             url: '/suspicious-replicas',
             keywords: ['suspicious', 'bad', 'replica', 'file', 'corrupted', 'declare', 'rse'],
+        });
+    }
+
+    if (assistantEnabled) {
+        commands.push({
+            id: 'nav-assistant-settings',
+            type: 'navigation',
+            title: 'Rucio bot settings',
+            description: 'Choose the model Rucio bot uses',
+            icon: Cog6ToothIcon,
+            url: '/assistant/settings',
+            keywords: ['assistant', 'bot', 'ai', 'llm', 'model', 'provider', 'settings', 'rucio bot'],
         });
     }
 
