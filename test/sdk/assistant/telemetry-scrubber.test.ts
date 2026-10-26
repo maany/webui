@@ -2,6 +2,26 @@ import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from '@open
 import { REDACTED, ScrubbingSpanProcessor, scrubAttributes, scrubText } from '@/lib/infrastructure/assistant/telemetry-scrubber';
 
 describe('scrubText', () => {
+    it('redacts a quoted value with escaped quotes completely', () => {
+        expect(scrubText('{"password":"a\\"b c d","next":"ok"}')).toBe('{"password":"[REDACTED]","next":"ok"}');
+        expect(scrubText('{"password":"a\\\\"}, "next":"ok"')).toBe('{"password":"[REDACTED]"}, "next":"ok"');
+    });
+
+    it('redacts cookie header values without eating the rest of a JSON attribute or prose', () => {
+        expect(scrubText('{"h":"Cookie: a=x; b=y","other":"keep me"}')).toBe('{"h":"Cookie: [REDACTED]","other":"keep me"}');
+        expect(scrubText('Set-Cookie: session=abc123; Path=/')).toBe('Set-Cookie: [REDACTED]');
+        expect(scrubText('accept the cookie banner')).toBe('accept the cookie banner');
+    });
+
+    it('redacts an authorization header value once', () => {
+        expect(scrubText('authorization: Bearer abc123def456ghi')).toBe('authorization: Bearer [REDACTED]');
+        expect(scrubText('proxy-authorization: Basic cGs6c2sxMjM0NQ==')).toBe('proxy-authorization: Basic [REDACTED]');
+    });
+
+    it('redacts PGP private key blocks', () => {
+        expect(scrubText('-----BEGIN PGP PRIVATE KEY BLOCK-----\nabc\n-----END PGP PRIVATE KEY BLOCK-----')).toBe('[REDACTED]');
+    });
+
     it.each([
         ['OpenAI key', 'key sk-abcdefghijklmnopqrstuvwx used', 'key [REDACTED] used'],
         ['OpenAI project key', 'sk-proj-AbCdEf0123456789_-xyz', '[REDACTED]'],
@@ -64,6 +84,11 @@ describe('scrubText', () => {
         ['AIza prefixes', 'AIza'.repeat(20000)],
         ['xai prefixes', 'xai-'.repeat(20000)],
         ['escaped quotes', '\\"token\\": '.repeat(6000)],
+        ['raw quoted value with escapes', `"password":"${'a\\"'.repeat(26000)}`],
+        ['repeated raw quoted openers', '"password":"'.repeat(6500)],
+        ['backslash run in a quoted value', `"password":"${'\\'.repeat(80000)}`],
+        ['cookie name=value lines', 'Cookie: a=b'.repeat(7000)],
+        ['pgp key starts', '-----BEGIN PGP PRIVATE KEY BLOCK-----'.repeat(2100)],
         ['bearer percent', 'Bearer%20'.repeat(9000)],
         ['key underscores', 'api_key_'.repeat(10000)],
         ['camel token', 'aToken='.repeat(11000)],
@@ -171,7 +196,7 @@ describe('ScrubbingSpanProcessor', () => {
         const [exported] = exporter.getFinishedSpans();
         expect(exported.name).toBe('call with [REDACTED]');
         expect(exported.attributes['gen_ai.tool.call.arguments']).toBe('{"password":"[REDACTED]","note":"[REDACTED]"}');
-        expect(exported.events[0].attributes).toEqual({ header: 'Authorization: [REDACTED] [REDACTED]' });
+        expect(exported.events[0].attributes).toEqual({ header: 'Authorization: Bearer [REDACTED]' });
         expect(exported.events[0].name).toBe('retry');
         expect(exported.status.message).toBe('failed with key [REDACTED]');
         expect(exported.spanContext().spanId).toBe(span.spanContext().spanId);

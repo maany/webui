@@ -57,7 +57,9 @@ const CAMEL_KEY_NAMES = [
 const KEY_VALUE_SEPARATOR = `\\\\?["']?\\s*[:=]\\s*\\\\?["']?`;
 // The value stops at quotes, whitespace, delimiters and backslashes (JSON-escaped JSON).
 // An optional scheme (`Bearer abc`, `Token%20abc`) is part of the value, so letters-only credentials are covered.
-const KEY_VALUE = `(?:(?:Bearer|Basic|Token)(?:\\s+|%20))?(?!\\[REDACTED\\])[^"'\\s,;&}\\\\]+`;
+const KEY_VALUE_SCHEME = `(?:(?:Bearer|Basic|Token)(?:\\s+|%20))?`;
+// The guard sits in front of the optional scheme, so an already redacted `Bearer [REDACTED]` is not redacted twice.
+const KEY_VALUE = `(?!${KEY_VALUE_SCHEME}\\[REDACTED\\])${KEY_VALUE_SCHEME}[^"'\\s,;&}\\\\]+`;
 
 const SECRET_HEADER_NAMES = 'x-api-key|authorization|proxy-authorization|x-rucio-auth-token';
 
@@ -84,9 +86,12 @@ const SCRUB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
         `$1${REDACTED}`,
     ],
     // Private key blocks. Consumes to the END marker or, when missing, to the end of the text (one match, so linear).
-    [/-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?!-----END )[\s\S])*(?:-----END [A-Z ]*PRIVATE KEY-----)?/g, REDACTED],
-    // Cookie header lines carry several name=value pairs: redact to the end of the line.
-    [/((?<![A-Za-z0-9])(?:set-cookie|cookie)[ \t]*:[ \t]*)[^\r\n]+/gi, `$1${REDACTED}`],
+    [/-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----END )[\s\S])*(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----)?/g, REDACTED],
+    // Cookie header lines carry several name=value pairs: redact to the end of the line, or to a quote or backslash
+    // inside a JSON string. Only when the value looks like `name=value`; anything else falls through to the key rule.
+    [/((?<![A-Za-z0-9])(?:set-cookie|cookie)[ \t]*:[ \t]*)(?=[^\s=;,"\\]+=)[^\r\n"\\]+/gi, `$1${REDACTED}`],
+    // Quoted values with a raw (unescaped) opening quote: consume escapes, so "a\"b c" is redacted to its closing quote.
+    [new RegExp(`((?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES})["']?\\s*[:=]\\s*(["']))(?:\\\\[\\s\\S]|(?!\\2)[^\\\\])+`, 'gi'), `$1${REDACTED}`],
     // Quoted values may hold spaces and commas: "password": "correct horse", secret_key = "a phrase"
     [new RegExp(`((?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES})\\\\?["']?\\s*[:=]\\s*\\\\?(["']))(?:(?!\\2)[^\\\\])+`, 'gi'), `$1${REDACTED}`],
     // key: value, key=value, "key": "value" for secret-looking key names (JSON, escaped JSON, headers, query strings)
