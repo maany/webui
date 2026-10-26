@@ -11,10 +11,12 @@ export interface ComposerProps {
     onSend(text: string, attachPageContext: boolean): void;
     onStop(): void;
     bottomInset?: number;
+    /** Lets the panel focus the textarea when it opens. */
+    inputRef?: React.Ref<HTMLTextAreaElement>;
 }
 
 /** Textarea, Send or Stop, and the page context chip. Enter sends, Shift+Enter adds a line. */
-export function Composer({ busy, pageContext, onSend, onStop, bottomInset = 0 }: ComposerProps) {
+export function Composer({ busy, pageContext, onSend, onStop, bottomInset = 0, inputRef }: ComposerProps) {
     const [text, setText] = useState('');
     const [attach, setAttach] = useState(true);
 
@@ -62,6 +64,7 @@ export function Composer({ busy, pageContext, onSend, onStop, bottomInset = 0 }:
                 </label>
                 <textarea
                     id="assistant-composer"
+                    ref={inputRef}
                     rows={2}
                     value={text}
                     placeholder="Ask Rucio bot"

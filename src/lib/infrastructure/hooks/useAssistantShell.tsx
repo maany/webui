@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useFeature } from '@/component-library/features/feature-flags/FeatureProvider';
 import type { AssistantPageActionRegistryPort } from '@/lib/core/port/secondary/assistant-page-action-registry-port';
 import { attachPageActionRegistry, useAttachedPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-bridge';
@@ -45,6 +45,8 @@ export interface AssistantShellValue {
 /** Below the Tailwind `md` breakpoint the panel is a full-screen sheet. */
 export const ASSISTANT_MOBILE_QUERY = '(max-width: 767px)';
 export const ASSISTANT_SHORTCUT_LABEL = 'Ctrl+Shift+K';
+/** Id of the app content wrapper (Layout) that goes inert behind the mobile sheet. */
+export const ASSISTANT_INERT_TARGET_ID = 'rucio-app-content';
 
 export function isAssistantShortcut(event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>): boolean {
     return (event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k';
@@ -90,15 +92,25 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
     const [conversationControls, setConversationControls] = useState<AssistantConversationControls | null>(null);
     const [storageVersion, setStorageVersion] = useState(0);
 
+    const panelStateRef = useRef<AssistantPanelState>('closed');
+    const openerRef = useRef<HTMLElement | null>(null);
+
+    // The element that had focus when the panel opened gets it back when the panel closes.
+    const rememberOpener = useCallback(() => {
+        const active = document.activeElement;
+        openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
+    }, []);
     const open = useCallback(() => {
+        if (panelStateRef.current === 'closed') rememberOpener();
         setHasOpened(true);
         setPanelState('open');
-    }, []);
+    }, [rememberOpener]);
     const close = useCallback(() => setPanelState('closed'), []);
     const toggle = useCallback(() => {
+        if (panelStateRef.current === 'closed') rememberOpener();
         setHasOpened(true);
         setPanelState(state => (state === 'open' ? 'closed' : 'open'));
-    }, []);
+    }, [rememberOpener]);
     const minimize = useCallback(() => {
         if (isMobileViewport()) setPanelState(state => (state === 'open' ? 'minimized' : state));
     }, []);
@@ -111,6 +123,15 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
         return () => setConversationControls(current => (current === controls ? null : current));
     }, []);
     const notifyStorageChanged = useCallback(() => setStorageVersion(version => version + 1), []);
+
+    useEffect(() => {
+        const before = panelStateRef.current;
+        panelStateRef.current = panelState;
+        if (panelState !== 'closed' || before === 'closed') return;
+        const opener = openerRef.current;
+        openerRef.current = null;
+        if (opener?.isConnected) opener.focus();
+    }, [panelState]);
 
     // Pages reach the registry through the bridge (phase 3), so they never import the assistant bundle.
     useEffect(() => (enabled ? attachPageActionRegistry(registry) : undefined), [enabled, registry]);

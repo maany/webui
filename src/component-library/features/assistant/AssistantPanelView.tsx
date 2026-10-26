@@ -55,6 +55,7 @@ function endsWithStepLimit(messages: ChatMessage[]): boolean {
 export function AssistantPanelView(props: AssistantPanelViewProps) {
     const { state, isMobile, width, onResize, messages, status } = props;
     const listEnd = useRef<HTMLDivElement>(null);
+    const composerRef = useRef<HTMLTextAreaElement>(null);
     const busy = status === 'streaming' || status === 'awaiting-approval';
 
     const nearBottom = useRef(true);
@@ -87,6 +88,11 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
         else if (status === 'error') setAnnouncement(''); // the error box is role=alert
         else if (before === 'streaming' || before === 'awaiting-approval') setAnnouncement('Rucio bot finished responding');
     }, [status]);
+
+    // Opening (or restoring from the bubble) puts the cursor in the composer.
+    useEffect(() => {
+        if (state === 'open') composerRef.current?.focus();
+    }, [state]);
 
     // Drop drag listeners when the panel unmounts or is minimized mid-drag.
     useEffect(() => () => stopResize.current?.(), [state]);
@@ -246,6 +252,7 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
                 onSend={props.onSend}
                 onStop={props.onStop}
                 bottomInset={isMobile ? props.keyboardInset : 0}
+                inputRef={composerRef}
             />
         </aside>
     );

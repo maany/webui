@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAssistant } from '@/lib/infrastructure/hooks/useAssistant';
-import { ASSISTANT_MOBILE_QUERY, useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
+import { ASSISTANT_INERT_TARGET_ID, ASSISTANT_MOBILE_QUERY, useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { useAssistantSettings } from '@/lib/infrastructure/hooks/useAssistantSettings';
 import { useVisualViewportInset } from '@/lib/infrastructure/hooks/useVisualViewportInset';
 import { loadPanelWidth, savePanelWidth } from '@/lib/infrastructure/assistant/panel-storage';
@@ -42,6 +42,15 @@ export function AssistantPanel() {
             root.style.removeProperty(OFFSET_PROPERTY);
         };
     }, [open, isMobile, width]);
+
+    // The full-screen sheet is modal in effect: the page behind it must not take focus or clicks.
+    const sheetOpen = open && isMobile;
+    useEffect(() => {
+        if (!sheetOpen) return;
+        const target = document.getElementById(ASSISTANT_INERT_TARGET_ID);
+        target?.setAttribute('inert', '');
+        return () => target?.removeAttribute('inert');
+    }, [sheetOpen]);
 
     if (shell.panelState === 'closed') return null;
 

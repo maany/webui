@@ -100,4 +100,29 @@ describe('Rucio bot shell', () => {
         });
         expect(deleteAssistantDatabase).toHaveBeenCalledTimes(1);
     });
+
+    it('returns focus to the element that opened the panel when it closes', () => {
+        renderShell(true);
+        const button = screen.getByRole('button', { name: 'Rucio bot (Ctrl+Shift+K)' });
+        button.focus();
+        fireEvent.click(button);
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('open');
+        // Focus moved into the panel, as the composer would take it.
+        (document.activeElement as HTMLElement | null)?.blur();
+        fireEvent.click(button);
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
+        expect(button).toHaveFocus();
+    });
+
+    it('does not steal focus back when the panel was opened with nothing focused', () => {
+        renderShell(true);
+        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+        const other = document.createElement('input');
+        document.body.appendChild(other);
+        other.focus();
+        fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+        expect(screen.getByTestId('panel-state')).toHaveTextContent('closed');
+        expect(other).toHaveFocus();
+        other.remove();
+    });
 });

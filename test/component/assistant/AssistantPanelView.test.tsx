@@ -295,3 +295,11 @@ describe('AssistantPanelView', () => {
         });
     });
 });
+
+describe('AssistantPanelView focus', () => {
+    it('focuses the composer when the panel opens and again when restored from the bubble', () => {
+        const { rerender } = render(<AssistantPanelView {...props({ state: 'minimized' })} />);
+        rerender(<AssistantPanelView {...props({ state: 'open' })} />);
+        expect(screen.getByRole('textbox', { name: 'Message Rucio bot' })).toHaveFocus();
+    });
+});
