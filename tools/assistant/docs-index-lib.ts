@@ -45,13 +45,24 @@ export function pageUrl(route: string): string {
     return route === '' ? `${DOCS_BASE_URL}/` : `${DOCS_BASE_URL}/${route}/`;
 }
 
-/** Strip inline markdown so a heading reads as plain text. */
+/** Removes `_emphasis_` and `__strong__` markers, but keeps underscores that are part of a word. */
+function stripUnderscoreEmphasis(text: string): string {
+    return text.replace(/(^|\W)__(?=\S)(.+?)(?<=\S)__(?=\W|$)/g, '$1$2').replace(/(^|\W)_(?=\S)(.+?)(?<=\S)_(?=\W|$)/g, '$1$2');
+}
+
+/** Removes `*emphasis*` and `**strong**` pairs; a lone `*` (a glob) stays. */
+function stripStarEmphasis(text: string): string {
+    return text.replace(/\*\*(?=\S)(.+?)(?<=\S)\*\*/g, '$1').replace(/(^|[^\w*])\*(?=\S)([^*]+?)(?<=\S)\*(?![\w*])/g, '$1$2');
+}
+
+/** Strip inline markdown so a heading reads as plain text. Underscores inside words are kept. */
 export function inlineText(markdown: string): string {
-    return markdown
-        .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-        .replace(/<[^>]+>/g, '')
-        .replace(/[*_`~]/g, '')
+    const withoutLinks = markdown.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+    const codeSpans: string[] = [];
+    const masked = withoutLinks.replace(/`([^`]*)`/g, (_m, code: string) => `\u0000${codeSpans.push(code) - 1}\u0000`);
+    const plain = stripUnderscoreEmphasis(stripStarEmphasis(masked.replace(/<[^>]+>/g, '').replace(/~/g, '')));
+    return plain
+        .replace(/\u0000(\d+)\u0000/g, (_m, n: string) => codeSpans[Number(n)])
         .replace(/\\(.)/g, '$1')
         .trim();
 }
@@ -63,37 +74,64 @@ export function headingAnchor(heading: string, used: Map<string, number>): { tex
     const text = inlineText(raw);
     let anchor =
         custom?.[1] ??
-        raw
-            .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-            .replace(/<[^>]+>/g, '')
+        text
             .replace(/&[a-z]+;|&#\d+;/gi, '')
-            .replace(/[*`~]/g, '')
-            .trim()
             .toLowerCase()
             .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, '')
             .replace(/ /g, '-');
     if (!custom) {
-        const seen = used.get(anchor);
-        used.set(anchor, (seen ?? -1) + 1);
-        if (seen !== undefined) anchor = `${anchor}-${seen + 1}`;
+        const original = anchor;
+        if (used.has(anchor)) {
+            let count = used.get(original) ?? 0;
+            while (used.has(anchor)) {
+                count++;
+                anchor = `${original}-${count}`;
+            }
+            used.set(original, count);
+        }
+        used.set(anchor, 0);
     }
     return { text, anchor };
 }
 
-/** Markdown or MDX to plain text for indexing: keeps code content, drops markup, MDX imports and JSX tags. */
-export function toPlainText(markdown: string): string {
-    return markdown
-        .split('\n')
-        .filter(line => !/^\s*(import|export)\s.+$/.test(line))
-        .filter(line => !/^\s*(```|~~~|:::)/.test(line))
-        .join('\n')
+const FENCE_RE = /^\s*(```|~~~)/;
+
+/** Applies prose-only markdown stripping to one line. Code spans keep their content verbatim. */
+function proseLine(line: string): string {
+    const codeSpans: string[] = [];
+    let out = line
         .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
         .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+        .replace(/`([^`]*)`/g, (_m, code: string) => `\u0000${codeSpans.push(code) - 1}\u0000`)
         .replace(/<\/?[A-Za-z][^>]*>/g, ' ')
-        .replace(/^#{1,6}\s+/gm, '')
-        .replace(/[*_`]/g, '')
-        .replace(/\|/g, ' ')
+        .replace(/^(\s*)#{1,6}\s+/, '$1');
+    if (/^\s*\|/.test(out)) out = out.replace(/\|/g, ' ');
+    out = stripUnderscoreEmphasis(stripStarEmphasis(out));
+    return out
+        .replace(/\u0000(\d+)\u0000/g, (_m, n: string) => codeSpans[Number(n)])
         .replace(/[ \t]+/g, ' ')
+        .trim();
+}
+
+/** Markdown or MDX to plain text for indexing: keeps code content verbatim, drops markup, MDX imports and JSX tags. */
+export function toPlainText(markdown: string): string {
+    const out: string[] = [];
+    let fence: string | null = null;
+    for (const line of markdown.split('\n')) {
+        const marker = FENCE_RE.exec(line)?.[1];
+        if (marker !== undefined && (fence === null || fence === marker)) {
+            fence = fence === null ? marker : null;
+            continue;
+        }
+        if (fence !== null) {
+            out.push(line);
+            continue;
+        }
+        if (/^\s*(import|export)\s.+$/.test(line) || /^\s*:::/.test(line) || /^\s*\|[\s:|-]+$/.test(line)) continue;
+        out.push(proseLine(line));
+    }
+    return out
+        .join('\n')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
 }
@@ -114,7 +152,7 @@ function splitSections(body: string): Section[] {
     const sections: Section[] = [{ lines: [] }];
     let fence: string | null = null;
     for (const line of body.split(/\r?\n/)) {
-        const fenceMatch = /^\s*(```|~~~)/.exec(line);
+        const fenceMatch = FENCE_RE.exec(line);
         if (fenceMatch) {
             fence = fence === null ? fenceMatch[1] : fence === fenceMatch[1] ? null : fence;
         }
@@ -143,14 +181,33 @@ function splitLong(text: string): string[] {
     return parts.flatMap(p => (p.length > MAX_CHUNK_CHARS * 2 ? [p.slice(0, MAX_CHUNK_CHARS * 2)] : [p]));
 }
 
+/** Removes HTML comments outside code fences. `prose` is the same text with fenced blocks removed (for the h1 lookup). */
+function stripCommentsOutsideFences(text: string): { body: string; prose: string } {
+    const segments: { fenced: boolean; lines: string[] }[] = [];
+    let fence: string | null = null;
+    for (const line of text.split(/\r?\n/)) {
+        const marker = FENCE_RE.exec(line)?.[1];
+        const isFenceLine = marker !== undefined && (fence === null || fence === marker);
+        if (isFenceLine) fence = fence === null ? marker : null;
+        const fenced = fence !== null || isFenceLine;
+        const last = segments[segments.length - 1];
+        if (last && last.fenced === fenced && !(isFenceLine && fence !== null)) last.lines.push(line);
+        else segments.push({ fenced, lines: [line] });
+    }
+    const strip = (lines: string[]) => lines.join('\n').replace(/<!--[\s\S]*?-->/g, '');
+    const parts = segments.map(seg => (seg.fenced ? seg.lines.join('\n') : strip(seg.lines)));
+    const prose = segments.filter(seg => !seg.fenced).map(seg => strip(seg.lines));
+    return { body: parts.join('\n'), prose: prose.join('\n') };
+}
+
 /** Chunks one docs page by h2/h3 headings (ignoring headings inside code fences). */
 export function chunkMarkdown(relPath: string, raw: string): ChunkDraft[] {
     const split = splitFrontmatter(raw);
     const frontmatter = split ? parseFrontmatterBlock(split.frontmatter) : {};
-    const body = (split ? split.body : raw).replace(/<!--[\s\S]*?-->/g, '');
+    const { body, prose } = stripCommentsOutsideFences(split ? split.body : raw);
     const route = docRoute(relPath, frontmatter);
     const url = pageUrl(route);
-    const h1 = /^#\s+(.+)$/m.exec(body);
+    const h1 = /^#\s+(.+)$/m.exec(prose);
     const pageTitle =
         frontmatterString(frontmatter, 'title') ?? (h1 ? inlineText(h1[1]) : undefined) ?? relPath.replace(/^.*\//, '').replace(/\.mdx?$/, '');
     const used = new Map<string, number>();

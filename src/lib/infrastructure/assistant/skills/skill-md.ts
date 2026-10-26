@@ -13,7 +13,7 @@ export interface SplitFrontmatter {
     body: string;
 }
 
-const FRONTMATTER_RE = /^\uFEFF?\s*---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n([\s\S]*))?$/;
+const FRONTMATTER_RE = /^\uFEFF?\s*---\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n([\s\S]*))?$/;
 
 export function splitFrontmatter(raw: string): SplitFrontmatter | null {
     const match = FRONTMATTER_RE.exec(raw);
@@ -27,13 +27,15 @@ function indentOf(line: string): number {
 
 function unquote(value: string): string {
     if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-        return value.slice(1, -1).replace(/\\"/g, '"').replace(/\\n/g, '\n');
+        return value.slice(1, -1).replace(/\\(["\\n])/g, (_m, c: string) => (c === 'n' ? '\n' : c));
     }
     if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
         return value.slice(1, -1).replace(/''/g, "'");
     }
     return value;
 }
+
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 function isChild(line: string | undefined): line is string {
     return line !== undefined && (line.trim() === '' || indentOf(line) > 0 || line.startsWith('- '));
@@ -57,6 +59,8 @@ export function parseFrontmatterBlock(block: string): Record<string, Frontmatter
         const key = line.slice(0, colon).trim();
         const value = line.slice(colon + 1).trim();
         i++;
+        const unsafe = UNSAFE_KEYS.has(key);
+        const target: Record<string, FrontmatterValue> = unsafe ? {} : out;
 
         if (/^[>|][+-]?$/.test(value)) {
             const collected: string[] = [];
@@ -67,7 +71,7 @@ export function parseFrontmatterBlock(block: string): Record<string, Frontmatter
             const nonEmpty = collected.filter(l => l.trim() !== '');
             const minIndent = nonEmpty.length ? Math.min(...nonEmpty.map(indentOf)) : 0;
             const stripped = collected.map(l => l.slice(minIndent));
-            out[key] = value.startsWith('>') ? stripped.join(' ').replace(/\s+/g, ' ').trim() : stripped.join('\n').trim();
+            target[key] = value.startsWith('>') ? stripped.join(' ').replace(/\s+/g, ' ').trim() : stripped.join('\n').trim();
             continue;
         }
 
@@ -80,15 +84,24 @@ export function parseFrontmatterBlock(block: string): Record<string, Frontmatter
                     items.push(unquote(child.slice(2).trim()));
                 } else if (child.indexOf(':') > 0) {
                     const childColon = child.indexOf(':');
-                    map[child.slice(0, childColon).trim()] = unquote(child.slice(childColon + 1).trim());
+                    const childKey = child.slice(0, childColon).trim();
+                    if (!UNSAFE_KEYS.has(childKey)) map[childKey] = unquote(child.slice(childColon + 1).trim());
                 }
                 i++;
             }
-            out[key] = items.length > 0 ? items : Object.keys(map).length > 0 ? map : '';
+            target[key] = items.length > 0 ? items : Object.keys(map).length > 0 ? map : '';
             continue;
         }
 
-        out[key] = unquote(value);
+        const quoted = value.startsWith('"') || value.startsWith("'");
+        let scalar = value;
+        if (!quoted) {
+            while (i < lines.length && lines[i].trim() !== '' && indentOf(lines[i]) > 0) {
+                scalar += ` ${lines[i].trim()}`;
+                i++;
+            }
+        }
+        target[key] = unquote(scalar);
     }
     return out;
 }
@@ -149,7 +162,7 @@ const CREDENTIAL_PATTERNS: RegExp[] = [
     /\bsk-(?:[A-Za-z]+-)*[A-Za-z0-9_-]{20,}/,
     /\bAKIA[0-9A-Z]{16}\b/,
     /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/,
-    /X-Rucio-Auth-Token:\s*\S+/i,
+    /X-Rucio-Auth-Token:[ \t]*[A-Za-z0-9._~+/=-]{8,}/i,
 ];
 
 /** True when the text carries a credential-shaped value: a private key, JWT, API key, AWS key id, bearer token or Rucio token header. */
@@ -161,7 +174,8 @@ export function parseSkillMarkdown(raw: string, options: ParseSkillOptions): Par
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    if (utf8Length(raw) > MAX_SKILL_BYTES) {
+    // UTF-16 length never exceeds the UTF-8 byte length, so this rejects oversized input before walking it.
+    if (raw.length > MAX_SKILL_BYTES || utf8Length(raw) > MAX_SKILL_BYTES) {
         return { ok: false, errors: [`SKILL.md is larger than ${MAX_SKILL_BYTES / 1024} KB`] };
     }
     if (containsCredential(raw)) {

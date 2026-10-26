@@ -169,3 +169,50 @@ describe('credential guard', () => {
         expect(parseSkillMarkdown(withBody(text), { source: 'user' }).ok).toBe(true);
     });
 });
+
+describe('frontmatter hardening', () => {
+    it('does not let __proto__, constructor or prototype keys touch prototypes', () => {
+        const parsed = parseFrontmatterBlock('__proto__:\n  polluted: yes\nconstructor: x\nprototype: y\nname: ok');
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+        expect(Object.keys(parsed)).toEqual(['name']);
+    });
+
+    it('folds indented continuation lines of a plain scalar', () => {
+        const block = 'description: First part of a long\n  wrapped description that\n  keeps going.\nname: a-skill';
+        expect(parseFrontmatterBlock(block)).toEqual({
+            description: 'First part of a long wrapped description that keeps going.',
+            name: 'a-skill',
+        });
+    });
+
+    it('unescapes a double backslash in double-quoted values', () => {
+        expect(parseFrontmatterBlock('path: "C:\\\\dir"')).toEqual({ path: 'C:\\dir' });
+    });
+
+    it('accepts empty frontmatter and names the missing fields', () => {
+        expect(splitFrontmatter('---\n---\nBody')).toEqual({ frontmatter: '', body: 'Body' });
+        const result = parseSkillMarkdown('---\n---\n', { source: 'user' });
+        expect(result).toEqual({
+            ok: false,
+            errors: ['name is required', 'description is required', 'the skill body after the frontmatter is empty'],
+        });
+    });
+
+    it('wraps a long description without truncating it in a full skill', () => {
+        const raw = '---\nname: a-skill\ndescription: Does a thing that\n  needs two lines.\n---\nBody';
+        const result = parseSkillMarkdown(raw, { source: 'user' });
+        expect(result.ok && result.skill.description).toBe('Does a thing that needs two lines.');
+    });
+});
+
+describe('X-Rucio-Auth-Token placeholders are not credentials', () => {
+    it.each([
+        'X-Rucio-Auth-Token: <token>',
+        'X-Rucio-Auth-Token: $TOKEN',
+        'X-Rucio-Auth-Token: `value`',
+        'X-Rucio-Auth-Token:\nnext line is long enough',
+        'send the X-Rucio-Auth-Token: header',
+    ])('passes %j', text => {
+        expect(containsCredential(text)).toBe(false);
+    });
+});

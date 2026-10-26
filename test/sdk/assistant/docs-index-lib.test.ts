@@ -189,3 +189,62 @@ describe('buildDocsIndex', () => {
         expect(top).toMatchObject({ title: 'Accounting and quota', url: 'u2', source: 'docs', excerpt: 'Quota...' });
     });
 });
+
+describe('identifiers and operators survive plain-text conversion', () => {
+    it('keeps underscores, pipes, globs, exports and placeholders', () => {
+        const md = [
+            'Use rse_expression with first_dataset and RUCIO_ENABLE_SSL.',
+            'Union is tier=1|tier=2 and scope:* matches all; **bold** and _it_ are emphasis.',
+            'Call `did_name` or `**x**` literally.',
+            '| a | b |',
+            '|---|---|',
+            '| c_d | e |',
+            '```bash',
+            'export RUCIO_ACCOUNT=root',
+            'rucio list-dids <did> --filter "tier=1|tier=2" scope:*',
+            'import foo_bar',
+            '```',
+        ].join('\n');
+        const text = toPlainText(md);
+        expect(text).toContain('Use rse_expression with first_dataset and RUCIO_ENABLE_SSL.');
+        expect(text).toContain('Union is tier=1|tier=2 and scope:* matches all; bold and it are emphasis.');
+        expect(text).toContain('Call did_name or **x** literally.');
+        expect(text).toContain('c_d');
+        expect(text).not.toContain('|---');
+        expect(text).not.toMatch(/^\s*\|/m);
+        expect(text).toContain('export RUCIO_ACCOUNT=root');
+        expect(text).toContain('rucio list-dids <did> --filter "tier=1|tier=2" scope:*');
+        expect(text).toContain('import foo_bar');
+        expect(text).not.toContain('```');
+    });
+
+    it('keeps underscores in heading titles and anchors', () => {
+        const used = new Map<string, number>();
+        expect(headingAnchor('`RUCIO_ENABLE_SSL`', used)).toEqual({ text: 'RUCIO_ENABLE_SSL', anchor: 'rucio_enable_ssl' });
+        expect(headingAnchor('The _emphasis_ and snake_case', new Map())).toEqual({
+            text: 'The emphasis and snake_case',
+            anchor: 'the-emphasis-and-snake_case',
+        });
+    });
+
+    it('keeps identifiers in chunk titles and text', () => {
+        const chunks = chunkMarkdown('a.md', '# Page\n\n## `RUCIO_ENABLE_SSL`\nSet rse_expression.');
+        expect(chunks[1].title).toBe('Page > RUCIO_ENABLE_SSL');
+        expect(chunks[1].text).toBe('Set rse_expression.');
+    });
+
+    it('does not strip comments or take the h1 title from inside code fences', () => {
+        const md = ['```md', '# Fake title', '<!-- keep -->', '```', '', '# Real title', '', 'Body <!-- gone --> text.'].join('\n');
+        const [first] = chunkMarkdown('x.md', md);
+        expect(first.title).toBe('Real title');
+        expect(first.text).toContain('<!-- keep -->');
+        expect(first.text).not.toContain('gone');
+    });
+});
+
+describe('headingAnchor repeated slugs', () => {
+    it('records suffixed slugs so later headings never collide', () => {
+        const used = new Map<string, number>();
+        expect(['Examples', 'Examples 1', 'Examples'].map(h => headingAnchor(h, used).anchor)).toEqual(['examples', 'examples-1', 'examples-2']);
+    });
+});
