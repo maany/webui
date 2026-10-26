@@ -28,23 +28,38 @@ interface MdNode {
     type: string;
     url?: string;
     alt?: string | null;
+    identifier?: string;
     children?: MdNode[];
     [key: string]: unknown;
 }
 
-function imagesToLinks(node: MdNode): void {
+function collectDefinitions(node: MdNode, into: Map<string, string>): void {
+    if (node.type === 'definition' && node.identifier && node.url) into.set(node.identifier, node.url);
+    node.children?.forEach(child => collectDefinitions(child, into));
+}
+
+function imagesToLinks(node: MdNode, definitions: Map<string, string>, insideLink: boolean): void {
     if (!node.children) return;
+    const inLink = insideLink || node.type === 'link' || node.type === 'linkReference';
     node.children = node.children.map(child => {
-        if (child.type === 'image') {
-            return { type: 'link', url: child.url ?? '', children: [{ type: 'text', value: child.alt || child.url || 'image' }] } as MdNode;
+        if (child.type === 'image' || child.type === 'imageReference') {
+            const url = child.type === 'image' ? child.url : child.identifier ? definitions.get(child.identifier) : undefined;
+            const label = child.alt || url || 'image';
+            // Never nest an anchor inside an anchor: inside a link the image is just its alt text.
+            if (inLink || !url) return { type: 'text', value: label } as MdNode;
+            return { type: 'link', url, children: [{ type: 'text', value: label }] } as MdNode;
         }
-        imagesToLinks(child);
+        imagesToLinks(child, definitions, inLink);
         return child;
     });
 }
 
 function remarkImagesToLinks() {
-    return (tree: MdNode) => imagesToLinks(tree);
+    return (tree: MdNode) => {
+        const definitions = new Map<string, string>();
+        collectDefinitions(tree, definitions);
+        imagesToLinks(tree, definitions, false);
+    };
 }
 
 const sanitizeSchema = { ...defaultSchema, tagNames: (defaultSchema.tagNames ?? []).filter(tag => tag !== 'img') };
@@ -53,7 +68,7 @@ const components: Components = {
     a({ href, children }) {
         if (isInAppHref(href)) {
             return (
-                <Link href={href} className="text-brand-600 dark:text-brand-400 underline">
+                <Link href={href} prefetch={false} className="text-brand-600 dark:text-brand-400 underline">
                     {children}
                 </Link>
             );

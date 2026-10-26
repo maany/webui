@@ -62,10 +62,20 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
     const previousStatus = useRef(status);
     const [announcement, setAnnouncement] = useState('');
 
+    const previousConversationId = useRef(props.conversation?.id);
+    const previousLastId = useRef(messages[messages.length - 1]?.id);
+
     useEffect(() => {
+        const last = messages[messages.length - 1];
+        // Opening a conversation or sending a message always jumps to the bottom.
+        if (props.conversation?.id !== previousConversationId.current || (last?.role === 'user' && last.id !== previousLastId.current)) {
+            nearBottom.current = true;
+        }
+        previousConversationId.current = props.conversation?.id;
+        previousLastId.current = last?.id;
         const node = listEnd.current;
         if (nearBottom.current && node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'end' });
-    }, [messages]);
+    }, [messages, props.conversation?.id]);
 
     // Announce turn milestones only, never streamed tokens.
     useEffect(() => {
@@ -74,7 +84,7 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
         if (before === status) return;
         if (status === 'streaming') setAnnouncement('Rucio bot is responding');
         else if (status === 'awaiting-approval') setAnnouncement('Rucio bot needs your approval');
-        else if (status === 'error') setAnnouncement('Rucio bot hit an error');
+        else if (status === 'error') setAnnouncement(''); // the error box is role=alert
         else if (before === 'streaming' || before === 'awaiting-approval') setAnnouncement('Rucio bot finished responding');
     }, [status]);
 

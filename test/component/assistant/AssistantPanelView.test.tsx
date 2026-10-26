@@ -241,7 +241,8 @@ describe('AssistantPanelView', () => {
         rerender(<AssistantPanelView {...props({ status: 'idle' })} />);
         expect(region).toHaveTextContent('Rucio bot finished responding');
         rerender(<AssistantPanelView {...props({ status: 'error', error: 'x' })} />);
-        expect(region).toHaveTextContent('Rucio bot hit an error');
+        expect(region).toHaveTextContent('');
+        expect(screen.getByRole('alert')).toHaveTextContent('x');
     });
 
     it('only auto-scrolls when the reader is near the bottom', () => {
@@ -261,5 +262,36 @@ describe('AssistantPanelView', () => {
         fireEvent.scroll(scroller);
         rerender(<AssistantPanelView {...props({ messages: [m('a'), m('b'), m('c')] })} />);
         expect(scrollIntoView).toHaveBeenCalled();
+    });
+
+    describe('scroll to bottom', () => {
+        const m = (id: string, role: 'user' | 'assistant' = 'assistant') => ({ ...assistantMessage([{ type: 'text', text: id }]), id, role });
+        function scrolledUp(messages: ChatMessage[], conversationId = 'c1') {
+            const scrollIntoView = jest.fn();
+            window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+            const conversation = makeConversation(conversationId, 'root@def');
+            const view = render(<AssistantPanelView {...props({ conversation, messages })} />);
+            const scroller = screen.getByTestId('assistant-scroll');
+            Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 });
+            Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 300 });
+            scroller.scrollTop = 100;
+            fireEvent.scroll(scroller);
+            scrollIntoView.mockClear();
+            return { ...view, scrollIntoView };
+        }
+
+        it('scrolls down when the user sends a message while scrolled up', () => {
+            const { rerender, scrollIntoView } = scrolledUp([m('a')]);
+            const conversation = makeConversation('c1', 'root@def');
+            rerender(<AssistantPanelView {...props({ conversation, messages: [m('a'), m('u', 'user')] })} />);
+            expect(scrollIntoView).toHaveBeenCalled();
+        });
+
+        it('scrolls down when another conversation is opened', () => {
+            const { rerender, scrollIntoView } = scrolledUp([m('a')]);
+            const other = makeConversation('c2', 'root@def');
+            rerender(<AssistantPanelView {...props({ conversation: other, messages: [m('b')] })} />);
+            expect(scrollIntoView).toHaveBeenCalled();
+        });
     });
 });

