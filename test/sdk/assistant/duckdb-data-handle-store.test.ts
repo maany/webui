@@ -457,4 +457,80 @@ describe('DuckDbDataHandleStore concurrency and lifecycle', () => {
         await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
         expect(listener).toHaveBeenCalledTimes(1);
     });
+
+    it('removes the old handle when a refresh is aborted after replacing the table', async () => {
+        const { engine, store } = setup();
+        await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        const controller = new AbortController();
+        const held = gate();
+        engine.insertGate = held.promise;
+        const refresh = store.ingestRows('rules', provenance, rowsOf([{ i: 1 }]), { rowCap: 10, name: 'rules_1', signal: controller.signal });
+        const refreshResult = expect(refresh).rejects.toMatchObject({ name: 'AbortError' });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        controller.abort();
+        engine.insertGate = undefined;
+        held.release();
+        await refreshResult;
+        expect(store.listHandles()).toEqual([]);
+        expect(engine.tables.has('rules_1')).toBe(false);
+    });
+
+    it('removes an existing saved handle when save_as fails after replacing its table', async () => {
+        const { engine, store } = setup();
+        await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        await store.query('SELECT * FROM rules_1', { maxRows: 1, saveAs: 'subset' });
+        const controller = new AbortController();
+        const realQuery = engine.query.bind(engine);
+        engine.query = async (sql, signal) => {
+            if (sql === 'SELECT count(*) AS n FROM "subset"') controller.abort();
+            return realQuery(sql, signal);
+        };
+        await expect(store.query('SELECT * FROM rules_1', { maxRows: 1, saveAs: 'subset', signal: controller.signal })).rejects.toMatchObject({
+            name: 'AbortError',
+        });
+        expect(store.listHandles().map(handle => handle.name)).toEqual(['rules_1']);
+        expect(engine.tables.has('subset')).toBe(false);
+    });
+
+    it('does not terminate the engine while an ingest is still reading a slow source', async () => {
+        jest.useFakeTimers();
+        try {
+            const { engine, store } = setup();
+            await store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+            const held = gate();
+            async function* slow() {
+                await held.promise;
+                yield { i: 1 };
+            }
+            const ingest = store.ingestRows('rses', provenance, slow(), { rowCap: 10 });
+            await jest.advanceTimersByTimeAsync(DEFAULT_IDLE_MS + 1000);
+            expect(engine.terminated).toBe(false);
+            held.release();
+            await expect(ingest).resolves.toMatchObject({ name: 'rses_1' });
+            expect(store.listHandles().map(handle => handle.name)).toEqual(['rules_1', 'rses_1']);
+            await jest.advanceTimersByTimeAsync(DEFAULT_IDLE_MS);
+            expect(engine.terminated).toBe(true);
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    it('rejects stale queued work without booting a fresh engine', async () => {
+        const { engine, factory, store } = setup();
+        const held = gate();
+        engine.insertGate = held.promise;
+        const first = store.ingestRows('rules', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        const firstResult = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const second = store.ingestRows('rses', provenance, rowsOf([{ i: 0 }]), { rowCap: 10 });
+        const secondResult = expect(second).rejects.toMatchObject({ name: 'AbortError' });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const terminating = store.terminate();
+        engine.insertGate = undefined;
+        held.release();
+        await terminating;
+        await firstResult;
+        await secondResult;
+        expect(factory).toHaveBeenCalledTimes(1);
+    });
 });
