@@ -111,6 +111,10 @@ const TOKEN_END = String.raw`(?![0-9A-Za-z_-]|\.[A-Za-z0-9_])`;
  * quantifiers, and each one starts from an anchor so only a few start positions are ever tried.
  */
 const SCRUB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+    // Rucio tokens whose last DN part holds spaces (`/CN=John Doe-<appid>-<hex>`): one bounded start after each DN
+    // attribute. Runs first, so no key or Bearer rule can cut the token at a space and drop the `/CN=` anchor.
+    // `|` ends the run so a DID in the next markdown table cell is kept.
+    [new RegExp(String.raw`(?<=/[A-Za-z]{1,16}=)[^\r\n"'<>=/|]{1,128}-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`, 'g'), REDACTED],
     // Header objects: {"name":"x-api-key","value":"..."} (raw JSON and JSON in JSON)
     [new RegExp(String.raw`("name"\s*:\s*"(?:${SECRET_HEADER_NAMES})"\s*,\s*"value"\s*:\s*")${RAW_QUOTED_VALUE}`, 'gi'), `$1${REDACTED}`],
     [
@@ -160,16 +164,14 @@ const SCRUB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
     // SITE-token-<hex> are kept. Only run starts are tried.
     [new RegExp(String.raw`${TOKEN_START}[A-Za-z0-9_]+-[^${TOKEN_DELIMITERS}\\]*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`, 'g'), REDACTED],
     // Tokens whose identity is an x509 DN or OIDC subject: the run holds a `/` or `=` before the tail. Query strings
-    // (`?scope=user.jdoe&name=...`) are not identities, so `?` and `&` end the run.
+    // (`?scope=user.jdoe&name=...`) are not identities, so `?` and `&` end the run; a JSON `\/` counts as a slash.
     [
         new RegExp(
-            String.raw`${TOKEN_START}[^${TOKEN_DELIMITERS}\\:/=?&]*[/=][^${TOKEN_DELIMITERS}\\?&]*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`,
+            String.raw`${TOKEN_START}[^${TOKEN_DELIMITERS}\\:/=?&]*(?:\\?/|=)(?:\\/|[^${TOKEN_DELIMITERS}\\?&])*-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`,
             'g',
         ),
         REDACTED,
     ],
-    // The last DN part may hold spaces (`CN=John Doe-<appid>-<hex>`): one bounded start after each DN attribute (`/CN=`).
-    [new RegExp(String.raw`(?<=/[A-Za-z]{1,16}=)[^\r\n"'<>=/]{1,128}-[A-Za-z0-9_.:]+-[0-9a-f]{32}${TOKEN_END}`, 'g'), REDACTED],
 ];
 
 /** Content attributes removed when content must not leave the browser (level lowered after capture). */

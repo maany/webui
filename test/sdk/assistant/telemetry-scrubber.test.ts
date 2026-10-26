@@ -2,6 +2,34 @@ import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from '@open
 import { REDACTED, ScrubbingSpanProcessor, scrubAttributes, scrubText } from '@/lib/infrastructure/assistant/telemetry-scrubber';
 
 describe('scrubText', () => {
+    describe('fix round 7', () => {
+        const HEX = '0123456789abcdef0123456789abcdef';
+        const DN_TOKEN = `jdoe-/C=DE/O=GermanGrid/OU=KIT/CN=John Doe-webui-${HEX}`;
+
+        it('redacts DN tokens with a spaced last part behind keys, headers and Token', () => {
+            for (const text of [
+                `X-Rucio-Auth-Token: ${DN_TOKEN}`,
+                `x-rucio-auth-token=${DN_TOKEN}`,
+                `?token=${DN_TOKEN}&x=1`,
+                `Authorization: ${DN_TOKEN}`,
+                `Token ${DN_TOKEN}`,
+                `{"content":"token: ${DN_TOKEN}"}`,
+                `robot-/DC=ch/DC=cern/CN=Robot: Rucio-webui-${HEX}`,
+            ]) {
+                expect(scrubText(text)).not.toContain(HEX);
+            }
+        });
+
+        it('redacts OIDC tokens in JSON that escapes slashes', () => {
+            expect(scrubText(String.raw`{"c":"jdoe-SUB=abc-123, ISS=https:\/\/iam.example\/-webui-${HEX}"}`)).not.toContain(HEX);
+        });
+
+        it('keeps a DID in the next markdown table cell after a DN', () => {
+            const row = `| /DC=ch/CN=John Doe | user.jdoe:run-v2-${HEX} |`;
+            expect(scrubText(row)).toBe(row);
+        });
+    });
+
     describe('fix round 6', () => {
         const HEX = '0123456789abcdef0123456789abcdef';
 
@@ -248,6 +276,8 @@ describe('scrubText', () => {
         ['AIza prefixes', 'AIza'.repeat(20000)],
         ['xai prefixes', 'xai-'.repeat(20000)],
         ['escaped quotes', '\\"token\\": '.repeat(6000)],
+        ['escaped slash oidc runs', ' a\\/-'.repeat(16000)],
+        ['dn space rule first', '/CN=a b-x-'.repeat(8000)],
         ['escaped newline token starts', '\\na-'.repeat(20000)],
         ['escaped tab dn starts', '\\ta/b-'.repeat(13000)],
         ['dn attribute starts', '/CN=a b-'.repeat(10000)],
