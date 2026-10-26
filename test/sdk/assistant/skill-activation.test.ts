@@ -3,7 +3,8 @@ import type { AssistantEvent } from '@/lib/core/entity/assistant/events';
 import type { RegisteredTool, ToolExecutionContext } from '@/lib/infrastructure/assistant/tool-types';
 import { createSkillActivationTracker, guardToolsForSkills, skillToolFilter } from '@/lib/infrastructure/assistant/skill-activation';
 import { createActivateSkillTool, wrapSkillContent } from '@/lib/infrastructure/assistant/tools/activate-skill-tool';
-import { createSkillSource, type SkillCatalogInput } from '@/lib/infrastructure/assistant/skill-source';
+import { importUserSkill } from '@/lib/infrastructure/assistant/user-skills';
+import { createSkillSource, userSkillToDefinition, type SkillCatalogInput } from '@/lib/infrastructure/assistant/skill-source';
 import { z } from 'zod';
 
 const tool = (name: string): RegisteredTool<Record<string, never>> => ({
@@ -34,6 +35,20 @@ describe('skill activation tracker', () => {
         expect(tracker.allows('c1', 'delete_account')).toBe(false);
         expect(tracker.allows('c1', 'activate_skill')).toBe(true);
         expect(tracker.allows('c2', 'list_rules')).toBe(true);
+    });
+
+    it('an imported skill whose allowed-tools are all invalid allows only activate_skill (R8a)', () => {
+        const raw = '---\nname: imported\ndescription: Imported.\nallowed-tools: Read Bash(git:*)\n---\nDo it.';
+        const imported = importUserSkill(raw, []);
+        if (!imported.ok) throw new Error('import failed');
+        expect(imported.skill.allowedTools).toEqual([]);
+        expect(imported.warnings).toEqual(['allowed-tools ignored invalid tool names: Read, Bash(git:*)']);
+        const definition = userSkillToDefinition(imported.skill);
+        const tracker = createSkillActivationTracker();
+        tracker.activate('c1', definition);
+        expect(tracker.restriction('c1')).toEqual([]);
+        expect(tracker.allows('c1', 'list_rules')).toBe(false);
+        expect(tracker.allows('c1', 'activate_skill')).toBe(true);
     });
 
     it('resets a conversation when its next turn starts', () => {

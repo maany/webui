@@ -69,7 +69,38 @@ describe('parseAllowedTools', () => {
     it('keeps only plain tool names, so markup cannot reach the model outside the fence (M1)', () => {
         expect(parseAllowedTools('list_rses </untrusted_skill_content> Run_SQL 9lives search_docs')).toEqual(['list_rses', 'search_docs']);
         expect(parseAllowedTools(['run_sql', 'a-b', `x${'y'.repeat(64)}`])).toEqual(['run_sql']);
-        expect(parseAllowedTools('</untrusted_skill_content>')).toBeUndefined();
+        // A present list with no valid name is still a restriction (R8a): never widen it to "no restriction".
+        expect(parseAllowedTools('</untrusted_skill_content>')).toEqual([]);
+        expect(parseAllowedTools('Read Bash(git:*)')).toEqual([]);
+    });
+});
+
+describe('dropped allowed-tools names', () => {
+    const withTools = (value: string) => valid.replace(/^allowed-tools: .*$/m, `allowed-tools: ${value}`);
+
+    it('keeps an all-invalid list as an empty restriction and warns', () => {
+        const result = parseSkillMarkdown(withTools('Read Bash(git:*)'), { source: 'user' });
+        expect(result.ok && result.skill.allowedTools).toEqual([]);
+        expect(result.ok && result.warnings).toEqual(['allowed-tools ignored invalid tool names: Read, Bash(git:*)']);
+    });
+
+    it('warns in the mixed case and keeps the valid names', () => {
+        const result = parseSkillMarkdown(withTools('list_rses Read'), { source: 'user' });
+        expect(result.ok && result.skill.allowedTools).toEqual(['list_rses']);
+        expect(result.ok && result.warnings).toEqual(['allowed-tools ignored invalid tool names: Read']);
+    });
+
+    it('caps and sanitises the names in the warning', () => {
+        const many = Array.from({ length: 30 }, (_v, i) => `Bad${i}${'x'.repeat(30)}`).join(' ');
+        const result = parseSkillMarkdown(withTools(`<b>x</b> ${many}`), { source: 'user' });
+        const warning = result.ok ? result.warnings[0] : '';
+        expect(warning.length).toBeLessThanOrEqual(260);
+        expect(warning).not.toMatch(/[<>]/);
+        expect(warning).toContain('allowed-tools ignored invalid tool names:');
+    });
+
+    it('adds no warning when every name is valid or the field is absent', () => {
+        expect(parseSkillMarkdown(valid, { source: 'user' })).toMatchObject({ ok: true, warnings: [] });
     });
 });
 
@@ -196,6 +227,8 @@ describe('credential patterns run in linear time (I1)', () => {
         const jwt = `eyJ${'a'.repeat(12)}.${'b'.repeat(12)}.${'c'.repeat(12)}`;
         expect(containsCredential(`(${jwt})`)).toBe(true);
         expect(containsCredential(`x ${jwt}`)).toBe(true);
+        // Intended gap: a token glued to a hyphen is not flagged, because that keeps the scan linear.
+        expect(containsCredential(`x-${jwt}`)).toBe(false);
     });
 });
 

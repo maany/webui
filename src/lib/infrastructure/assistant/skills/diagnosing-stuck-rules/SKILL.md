@@ -49,7 +49,7 @@ The WebUI API does not return Rucio's rule error text, so reason from lock state
 1. `list_rules` with the state filter `Stuck` (add an account filter if the user asked about one account).
 2. `run_sql` on the handle, for example
    `SELECT rse_expression, count(*) AS rules, sum(locks_stuck_cnt) AS stuck_locks FROM <handle> GROUP BY rse_expression ORDER BY stuck_locks DESC`
-3. A rule's RSE expression is not an RSE name. To break down by RSE, list lock states for the few worst rules, or resolve each distinct expression with `list_rses` and `run_sql`: save each result with `save_as`, add the expression as a literal column (`SELECT 'tier=1' AS rse_expression, name AS rse FROM rses_2`), combine them with `UNION ALL` and join the rules on `rse_expression`. Ask before resolving more than about 10 expressions.
+3. A rule's RSE expression is not an RSE name. To break down by RSE, list lock states for the few worst rules, or resolve each distinct expression with `list_rses` and `run_sql`: add the expression as a literal column for each (`SELECT 'tier=1' AS rse_expression, name AS rse FROM rses_2`), combine those queries with `UNION ALL` in one `run_sql` call with `save_as`, and join the rules to that mapping on `rse_expression`. Ask before resolving more than about 10 expressions.
 
 ## What the user can do
 

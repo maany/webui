@@ -144,8 +144,8 @@ export function utf8Length(text: string): number {
 export const TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
 
 /** `allowed-tools` is a space separated string in the spec. Lists and commas are accepted too. */
-export function parseAllowedTools(value: FrontmatterValue | undefined): string[] | undefined {
-    if (value === undefined || value === '') return undefined;
+export function parseAllowedToolsDetailed(value: FrontmatterValue | undefined): { tools: string[] | undefined; dropped: string[] } {
+    if (value === undefined || value === '') return { tools: undefined, dropped: [] };
     const tokens = Array.isArray(value)
         ? value
         : typeof value === 'string'
@@ -154,9 +154,31 @@ export function parseAllowedTools(value: FrontmatterValue | undefined): string[]
               .split(/[\s,]+/)
               .map(t => t.replace(/^['"]|['"]$/g, ''))
         : [];
+    const trimmed = tokens.map(t => t.trim()).filter(t => t !== '');
     // Only plain tool names survive: the list is shown to the model outside the untrusted fence.
-    const tools = tokens.map(t => t.trim()).filter(t => TOOL_NAME_RE.test(t));
-    return tools.length > 0 ? Array.from(new Set(tools)) : undefined;
+    const tools = Array.from(new Set(trimmed.filter(t => TOOL_NAME_RE.test(t))));
+    const dropped = Array.from(new Set(trimmed.filter(t => !TOOL_NAME_RE.test(t))));
+    // A present, non-empty list is a restriction even when no name is valid (R8a): never widen it to undefined.
+    return { tools: trimmed.length > 0 ? tools : undefined, dropped };
+}
+
+export function parseAllowedTools(value: FrontmatterValue | undefined): string[] | undefined {
+    return parseAllowedToolsDetailed(value).tools;
+}
+
+const MAX_DROPPED_WARNING_CHARS = 200;
+
+/** One user-facing warning naming the first few dropped tokens, with markup characters and controls removed. */
+function droppedToolsWarning(dropped: string[]): string {
+    // eslint-disable-next-line no-control-regex
+    const safe = dropped.map(t => t.replace(/[<>&"'`\u0000-\u001f\u007f]/g, '').slice(0, 40)).filter(t => t !== '');
+    let list = '';
+    for (const name of safe.slice(0, 5)) {
+        if ((list ? `${list}, ${name}` : name).length > MAX_DROPPED_WARNING_CHARS) break;
+        list = list ? `${list}, ${name}` : name;
+    }
+    const more = safe.length > 0 && list.split(', ').length < safe.length ? ', ...' : '';
+    return `allowed-tools ignored invalid tool names: ${list}${more}`;
 }
 
 /** Credential-shaped values (not mere words) that must never be stored in a skill. */
@@ -225,7 +247,8 @@ export function parseSkillMarkdown(raw: string, options: ParseSkillOptions): Par
 
     if (errors.length > 0) return { ok: false, errors };
 
-    const allowedTools = parseAllowedTools(data['allowed-tools']);
+    const { tools: allowedTools, dropped } = parseAllowedToolsDetailed(data['allowed-tools']);
+    if (dropped.length > 0) warnings.push(droppedToolsWarning(dropped));
     const skill: SkillDefinition = { name, description, body, source: options.source };
     if (allowedTools) skill.allowedTools = allowedTools;
     return { ok: true, skill, warnings };
