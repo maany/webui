@@ -331,10 +331,12 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
         const d = deps();
         const durations = new Map<string, number>();
         const toolNames = new Map<string, string>();
-        const toolArgs = new Map<string, unknown>();
         const toolArgsText = new Map<string, string>();
         const pendingApprovals = new Set<string>();
         let lastFinishReason: string | null | undefined;
+        // Model calls made this turn. Each approval resume starts a fresh chat(), so the limit is enforced here.
+        let modelCalls = 0;
+        let stepLimitHit = false;
         let runError: { message: string; code?: string } | undefined;
         let sessionExpired = false;
         let callStartedAt = Date.now();
@@ -361,6 +363,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
         const drive = async () => {
             let client: ChatClient | null = null;
             let onAbort: (() => void) | null = null;
+            let mine: ((toolCallId: string, approved: boolean) => void) | null = null;
             try {
                 const adapter = await (options.createAdapter ?? defaultCreateAdapter)(d.provider, {
                     onSessionExpired: () => {
@@ -380,19 +383,33 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                             abortController: linkedAbortController(abortSignal),
                             tools: built.serverTools,
                             middleware,
-                            agentLoopStrategy: maxIterations(d.maxSteps),
+                            agentLoopStrategy: maxIterations(Math.max(d.maxSteps - modelCalls, 0)),
                         }) as AsyncIterable<StreamChunk>,
                 );
 
                 const resolveInterrupt = (toolCallId: string, approved: boolean, rejection: ToolError = REJECTED_BY_USER) => {
-                    if (!client) return;
+                    if (!client) return false;
                     const interrupts = client.getInterrupts() as ReadonlyArray<unknown> as ReadonlyArray<ApprovalInterruptLike>;
                     const interrupt = interrupts.find(item => item.kind === 'tool-approval' && item.toolCallId === toolCallId);
-                    if (!interrupt) return;
+                    if (!interrupt) return false;
                     pendingApprovals.delete(toolCallId);
+                    if (modelCalls >= d.maxSteps) {
+                        // No budget for the model call that would follow: leave the tool unrun and end the turn.
+                        stepLimitHit = true;
+                        pendingApprovals.clear();
+                        notify();
+                        return true;
+                    }
                     if (approved) interrupt.resolveInterrupt(true);
                     else interrupt.resolveInterrupt(false, { payload: rejection });
                     notify();
+                    return true;
+                };
+
+                // An interrupt is registered with the client slightly after RUN_FINISHED, so retry briefly.
+                const autoResolve = (toolCallId: string, approved: boolean, rejection?: ToolError, attempt = 0) => {
+                    if (resolveInterrupt(toolCallId, approved, rejection) || attempt >= 50 || input.signal.aborted) return;
+                    setTimeout(() => autoResolve(toolCallId, approved, rejection, attempt + 1), 0);
                 };
 
                 const onChunk = (chunk: StreamChunk) => {
@@ -420,7 +437,6 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                             const toolName = toolNames.get(chunk.toolCallId) ?? 'unknown';
                             const args = chunk.input !== undefined ? chunk.input : parseToolContent(toolArgsText.get(chunk.toolCallId) || '{}');
                             const policy = built.builtPolicy.get(toolName) ?? d.policyFor(toolName);
-                            toolArgs.set(chunk.toolCallId, args);
                             channel.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName, args, policy });
                             d.emit({
                                 type: 'tool-call-started',
@@ -465,15 +481,17 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                             }
                             callText = '';
                             lastFinishReason = chunk.finishReason;
+                            modelCalls += 1;
                             if (chunk.outcome?.type === 'interrupt') {
                                 for (const interrupt of chunk.outcome.interrupts) {
                                     const toolCallId = interrupt.toolCallId;
                                     if (!toolCallId) continue;
                                     const toolName = toolNames.get(toolCallId) ?? '';
-                                    const live = d.policyFor(toolName);
+                                    const live = toolName ? d.policyFor(toolName) : 'deny';
                                     pendingApprovals.add(toolCallId);
-                                    if (live === 'allow') queueMicrotask(() => resolveInterrupt(toolCallId, true));
-                                    else if (live === 'deny') queueMicrotask(() => resolveInterrupt(toolCallId, false, deniedByPolicy(toolName)));
+                                    if (live === 'allow') queueMicrotask(() => autoResolve(toolCallId, true));
+                                    else if (live === 'deny')
+                                        queueMicrotask(() => autoResolve(toolCallId, false, deniedByPolicy(toolName || 'unknown')));
                                     else channel.push({ type: 'approval-required', toolCallId });
                                 }
                             }
@@ -501,7 +519,8 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                     },
                 });
                 const activeClient = client;
-                resolveActive = (toolCallId, approved) => resolveInterrupt(toolCallId, approved);
+                mine = (toolCallId: string, approved: boolean) => void resolveInterrupt(toolCallId, approved);
+                resolveActive = mine;
                 onAbort = () => {
                     activeClient.stop();
                     notify();
@@ -528,7 +547,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                             ? CONTEXT_OVERFLOW_ERROR
                             : runError.message,
                     });
-                else if (lastFinishReason === 'tool_calls') channel.push({ type: 'finished', status: 'step-limit' });
+                else if (stepLimitHit || lastFinishReason === 'tool_calls') channel.push({ type: 'finished', status: 'step-limit' });
                 else channel.push({ type: 'finished', status: 'completed' });
             } catch (error) {
                 channel.push(
@@ -538,7 +557,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                 );
             } finally {
                 if (onAbort) input.signal.removeEventListener('abort', onAbort);
-                resolveActive = null;
+                if (resolveActive === mine) resolveActive = null;
                 client?.dispose();
                 channel.close();
             }

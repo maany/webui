@@ -80,8 +80,8 @@ function setup(
         }),
         { createAdapter: () => fake },
     );
-    const run = (history: ChatMessage[] = []) =>
-        runner.run({ conversationId: 'conv-1', turnId: 'turn-1', history, userMessage: makeUserMessage('hello'), signal: controller.signal });
+    const run = (history: ChatMessage[] = [], signal: AbortSignal = controller.signal) =>
+        runner.run({ conversationId: 'conv-1', turnId: 'turn-1', history, userMessage: makeUserMessage('hello'), signal });
     return { runner, run, controller, executed, events, fake, policies };
 }
 
@@ -208,7 +208,7 @@ describe('createAgentRunner', () => {
     });
 
     it('finishes with step-limit when the model keeps calling tools', async () => {
-        const { run } = setup(
+        const { run, fake } = setup(
             [
                 { toolCalls: [{ name: 'read_echo', input: { text: '1' } }] },
                 { toolCalls: [{ name: 'read_echo', input: { text: '2' } }] },
@@ -218,6 +218,48 @@ describe('createAgentRunner', () => {
         );
         const updates = await collectUpdates(run());
         expect(finished(updates)).toEqual({ type: 'finished', status: 'step-limit' });
+        expect(fake.state.callCount).toBe(2);
+    });
+
+    it('keeps the step limit across approval resumes when the policy flips to allow', async () => {
+        const { run, executed, policies, fake } = setup(
+            [
+                { toolCalls: [{ name: 'do_write', input: { id: '1' } }] },
+                { toolCalls: [{ name: 'do_write', input: { id: '2' } }] },
+                { toolCalls: [{ name: 'do_write', input: { id: '3' } }] },
+                { toolCalls: [{ name: 'do_write', input: { id: '4' } }] },
+                { text: 'never reached' },
+            ],
+            { maxSteps: 2 },
+        );
+        const updates = await collectUpdates(run(), update => {
+            if (update.type === 'tool-call') policies.do_write = 'allow';
+        });
+        expect(finished(updates)).toEqual({ type: 'finished', status: 'step-limit' });
+        expect(fake.state.callCount).toBe(2);
+        expect(executed).toEqual(['do_write:1']);
+    });
+
+    it('does not let a late-finishing stopped run break the approvals of the next run', async () => {
+        const { run, runner, executed, controller } = setup([
+            { toolCalls: [{ name: 'slow_read', input: {} }] },
+            { toolCalls: [{ name: 'do_write', input: { id: 'b' } }] },
+            { text: 'second done' },
+        ]);
+        const first = collectUpdates(run(), update => {
+            if (update.type === 'tool-call') setTimeout(() => controller.abort(), 20);
+        });
+        await new Promise<void>(resolve => {
+            controller.signal.addEventListener('abort', () => resolve());
+            setTimeout(resolve, 500);
+        });
+        const second = collectUpdates(run([], new AbortController().signal), update => {
+            if (update.type === 'approval-required') setTimeout(() => runner.resolveApproval(update.toolCallId, true), 10);
+        });
+        const [firstUpdates, secondUpdates] = await Promise.all([first, second]);
+        expect(finished(firstUpdates)).toEqual({ type: 'finished', status: 'stopped' });
+        expect(executed).toEqual(['do_write:b']);
+        expect(finished(secondUpdates)).toEqual({ type: 'finished', status: 'completed' });
     });
 
     it('finishes with error when the provider fails', async () => {
