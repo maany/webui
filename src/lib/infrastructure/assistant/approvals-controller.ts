@@ -26,6 +26,7 @@ export function createApprovalsController(deps: ApprovalsControllerDeps): Approv
             const ids = message.parts.flatMap(part => (part.type === 'tool-call' && part.status === 'awaiting-approval' ? [part.toolCallId] : []));
             if (ids.length === 0) return [];
             const at = new Date().toISOString();
+            const events: AssistantEvent[] = [];
             message = {
                 ...message,
                 parts: message.parts.map(part =>
@@ -34,7 +35,7 @@ export function createApprovalsController(deps: ApprovalsControllerDeps): Approv
             };
             for (const toolCallId of ids) {
                 message = addApprovalPart(message, { toolCallId, decision: 'expired', scope: 'once', approver: deps.approver(), at });
-                deps.emit({
+                events.push({
                     type: 'tool-approval',
                     turnId: deps.turnId(),
                     toolCallId,
@@ -44,8 +45,16 @@ export function createApprovalsController(deps: ApprovalsControllerDeps): Approv
                     at: Date.now(),
                 });
             }
+            // State first: a throwing event sink must never leave the runner waiting on an approval that is gone.
             deps.setMessage(message);
             for (const toolCallId of ids) deps.resolveRunner(toolCallId, false);
+            for (const event of events) {
+                try {
+                    deps.emit(event);
+                } catch {
+                    // Observers are best effort.
+                }
+            }
             return ids;
         },
     };

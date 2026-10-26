@@ -2,7 +2,11 @@ import { z } from 'zod';
 import type { ChatMessage } from '@/lib/core/entity/assistant/conversation';
 import { DEFAULT_ASSISTANT_CONFIG, type AssistantConfig } from '@/lib/core/entity/assistant/assistant-config';
 import { createApprovalsController } from '@/lib/infrastructure/assistant/approvals-controller';
-import { attachPageActionRegistry, getAttachedPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-bridge';
+import {
+    attachPageActionRegistry,
+    getAttachedPageActionRegistry,
+    subscribeToPageActionRegistry,
+} from '@/lib/infrastructure/assistant/page-action-bridge';
 import { createPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-registry';
 import { createPolicyFor } from '@/lib/infrastructure/assistant/policy-for';
 import { registerTools, resetToolRegistryForTests } from '@/lib/infrastructure/assistant/tool-registry';
@@ -11,6 +15,10 @@ import { registerSignOutHook, runSignOutHooks } from '@/lib/infrastructure/auth/
 import { makeTool } from 'test/fixtures/assistant-fixtures';
 
 describe('page action registry', () => {
+    afterEach(() => {
+        jest.useRealTimers();
+    });
+
     const schema = z.object({ dids: z.array(z.string()).min(1), copies: z.coerce.number().int().min(1) });
 
     it('lists actions with a JSON schema and passes parsed args to apply', async () => {
@@ -42,7 +50,6 @@ describe('page action registry', () => {
         const timedOut = registry.waitForActions(100);
         jest.advanceTimersByTime(100);
         await expect(timedOut).resolves.toHaveLength(1);
-        jest.useRealTimers();
     });
 
     it('caps describe() at 500 characters and survives a throwing describer', () => {
@@ -61,6 +68,40 @@ describe('page action registry', () => {
         expect(getAttachedPageActionRegistry()).toBe(registry);
         detach();
         expect(getAttachedPageActionRegistry()).toBeNull();
+    });
+
+    it('ignores a stale detach once a newer registry is attached', () => {
+        const first = createPageActionRegistry();
+        const second = createPageActionRegistry();
+        const detachFirst = attachPageActionRegistry(first);
+        const detachSecond = attachPageActionRegistry(second);
+        detachFirst();
+        expect(getAttachedPageActionRegistry()).toBe(second);
+        detachSecond();
+        expect(getAttachedPageActionRegistry()).toBeNull();
+    });
+
+    it('notifies subscribers on attach and detach until they unsubscribe', () => {
+        const listener = jest.fn();
+        const unsubscribe = subscribeToPageActionRegistry(listener);
+        const detach = attachPageActionRegistry(createPageActionRegistry());
+        expect(listener).toHaveBeenCalledTimes(1);
+        detach();
+        expect(listener).toHaveBeenCalledTimes(2);
+        unsubscribe();
+        attachPageActionRegistry(null);
+        expect(listener).toHaveBeenCalledTimes(2);
+    });
+
+    it('attach(null) clears the registry and its detach is a no-op', () => {
+        const registry = createPageActionRegistry();
+        attachPageActionRegistry(registry);
+        const detachNull = attachPageActionRegistry(null);
+        expect(getAttachedPageActionRegistry()).toBeNull();
+        const detach = attachPageActionRegistry(registry);
+        detachNull();
+        expect(getAttachedPageActionRegistry()).toBe(registry);
+        detach();
     });
 });
 
@@ -84,6 +125,31 @@ describe('createPolicyFor', () => {
         expect(policyFor('do_write')).toBe('ask');
         expect(policyFor('read_x')).toBe('allow');
         expect(policyFor('unknown_tool')).toBe('deny');
+    });
+
+    it('reacts to a live conversation-allow change', () => {
+        const allow = new Set<string>();
+        const policyFor = createPolicyFor(
+            () => ({ ...DEFAULT_ASSISTANT_CONFIG, writePolicyCap: 'allow' }),
+            () => ({ toolPolicies: {} }),
+            () => allow,
+        );
+        expect(policyFor('do_write')).toBe('ask');
+        allow.add('do_write');
+        expect(policyFor('do_write')).toBe('allow');
+        allow.delete('do_write');
+        expect(policyFor('do_write')).toBe('ask');
+    });
+
+    it('never resolves a high-risk tool to allow', () => {
+        registerTools([makeTool('do_high', 'high', z.object({}), async () => ({}))]);
+        const policyFor = createPolicyFor(
+            () => ({ ...DEFAULT_ASSISTANT_CONFIG, writePolicyCap: 'allow', highRiskPolicyCap: 'allow' }),
+            () => ({ toolPolicies: { do_high: 'allow' as const } }),
+            () => new Set(['do_high']),
+        );
+        expect(policyFor('do_high')).not.toBe('allow');
+        expect(policyFor('do_high')).toBe('ask');
     });
 });
 
@@ -114,6 +180,106 @@ describe('createApprovalsController', () => {
         expect(resolveRunner).toHaveBeenCalledWith('t1', false);
         expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'tool-approval', decision: 'expired', turnId: 'turn-1' }));
         expect(controller.expireOpen()).toEqual([]);
+    });
+
+    function awaiting(...ids: string[]): ChatMessage['parts'] {
+        return ids.map(toolCallId => ({
+            type: 'tool-call' as const,
+            toolCallId,
+            toolName: 'do_write',
+            args: {},
+            policy: 'ask' as const,
+            status: 'awaiting-approval' as const,
+        }));
+    }
+
+    it('expires only the waiting calls when several are open with mixed statuses', () => {
+        let message: ChatMessage = {
+            id: 'a1',
+            conversationId: 'c1',
+            role: 'assistant',
+            createdAt: 'x',
+            parts: [
+                ...awaiting('t1'),
+                { type: 'tool-call', toolCallId: 't2', toolName: 'read_x', args: {}, policy: 'allow', status: 'running' },
+                ...awaiting('t3'),
+                {
+                    type: 'tool-call',
+                    toolCallId: 't4',
+                    toolName: 'read_x',
+                    args: {},
+                    policy: 'allow',
+                    status: 'completed',
+                } as ChatMessage['parts'][number],
+            ],
+        };
+        const resolveRunner = jest.fn();
+        const controller = createApprovalsController({
+            getMessage: () => message,
+            setMessage: next => {
+                message = next;
+            },
+            resolveRunner,
+            approver: () => 'root@def',
+            turnId: () => 'turn-1',
+            emit: jest.fn(),
+        });
+        expect(controller.expireOpen()).toEqual(['t1', 't3']);
+        const statuses = message.parts.flatMap(part => (part.type === 'tool-call' ? [[part.toolCallId, part.status]] : []));
+        expect(statuses).toEqual([
+            ['t1', 'expired'],
+            ['t2', 'running'],
+            ['t3', 'expired'],
+            ['t4', 'completed'],
+        ]);
+        expect(message.parts.filter(part => part.type === 'approval')).toHaveLength(2);
+        expect(resolveRunner.mock.calls).toEqual([
+            ['t1', false],
+            ['t3', false],
+        ]);
+    });
+
+    it('stores the message and resolves the runner even when an event sink throws', () => {
+        let message: ChatMessage = { id: 'a1', conversationId: 'c1', role: 'assistant', createdAt: 'x', parts: awaiting('t1', 't2') };
+        const resolveRunner = jest.fn();
+        const controller = createApprovalsController({
+            getMessage: () => message,
+            setMessage: next => {
+                message = next;
+            },
+            resolveRunner,
+            approver: () => 'root@def',
+            turnId: () => 'turn-1',
+            emit: () => {
+                throw new Error('sink down');
+            },
+        });
+        expect(controller.expireOpen()).toEqual(['t1', 't2']);
+        expect(message.parts.filter(part => part.type === 'tool-call').every(part => part.type === 'tool-call' && part.status === 'expired')).toBe(
+            true,
+        );
+        expect(resolveRunner.mock.calls).toEqual([
+            ['t1', false],
+            ['t2', false],
+        ]);
+    });
+
+    it('records the message and resolves the runner before any event is emitted', () => {
+        let message: ChatMessage = { id: 'a1', conversationId: 'c1', role: 'assistant', createdAt: 'x', parts: awaiting('t1') };
+        const order: string[] = [];
+        const controller = createApprovalsController({
+            getMessage: () => message,
+            setMessage: next => {
+                order.push('set');
+                message = next;
+            },
+            resolveRunner: () => order.push('resolve'),
+            approver: () => 'root@def',
+            turnId: () => 'turn-1',
+            emit: () => order.push('emit'),
+        });
+        controller.expireOpen();
+        expect(order).toEqual(['set', 'resolve', 'emit']);
     });
 });
 
