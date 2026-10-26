@@ -144,7 +144,7 @@ describe('createPolicyFor', () => {
     it('never resolves a high-risk tool to allow', () => {
         registerTools([makeTool('do_high', 'high', z.object({}), async () => ({}))]);
         const policyFor = createPolicyFor(
-            () => ({ ...DEFAULT_ASSISTANT_CONFIG, writePolicyCap: 'allow', highRiskPolicyCap: 'allow' }),
+            () => ({ ...DEFAULT_ASSISTANT_CONFIG, writePolicyCap: 'allow', highRiskPolicyCap: 'ask' }),
             () => ({ toolPolicies: { do_high: 'allow' as const } }),
             () => new Set(['do_high']),
         );
@@ -209,8 +209,8 @@ describe('createApprovalsController', () => {
                     toolName: 'read_x',
                     args: {},
                     policy: 'allow',
-                    status: 'completed',
-                } as ChatMessage['parts'][number],
+                    status: 'done',
+                },
             ],
         };
         const resolveRunner = jest.fn();
@@ -230,7 +230,7 @@ describe('createApprovalsController', () => {
             ['t1', 'expired'],
             ['t2', 'running'],
             ['t3', 'expired'],
-            ['t4', 'completed'],
+            ['t4', 'done'],
         ]);
         expect(message.parts.filter(part => part.type === 'approval')).toHaveLength(2);
         expect(resolveRunner.mock.calls).toEqual([
