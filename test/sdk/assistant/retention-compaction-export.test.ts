@@ -33,6 +33,27 @@ describe('selectConversationsToEvict', () => {
         expect(ids).toEqual(['a']);
     });
 
+    it('never evicts protected conversations but counts their bytes', () => {
+        const ids = selectConversationsToEvict(
+            [
+                { id: 'open', updatedAt: '2026-10-01T00:00:00.000Z', bytes: 3 * MB },
+                { id: 'b', updatedAt: '2026-10-21T00:00:00.000Z', bytes: 2 * MB },
+                { id: 'c', updatedAt: '2026-10-22T00:00:00.000Z', bytes: 2 * MB },
+            ],
+            { maxAgeDays: 30, maxTotalMB: 4, clearOnLogout: false },
+            now,
+            ['open'],
+        );
+        expect(ids).toEqual(['b', 'c']);
+        const aged = selectConversationsToEvict(
+            [{ id: 'open', updatedAt: '2026-08-01T00:00:00.000Z', bytes: 1 }],
+            { maxAgeDays: 30, maxTotalMB: 50, clearOnLogout: false },
+            now,
+            ['open'],
+        );
+        expect(aged).toEqual([]);
+    });
+
     it('counts UTF-8 bytes', () => {
         expect(utf8Length('aé€😀')).toBe(1 + 2 + 3 + 4);
         expect(jsonBytes({ a: 'é' })).toBe(utf8Length('{"a":"é"}'));

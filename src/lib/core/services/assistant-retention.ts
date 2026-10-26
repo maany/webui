@@ -34,14 +34,21 @@ export function jsonBytes(value: unknown): number {
 
 /**
  * Conversations to delete: everything older than maxAgeDays, then the oldest
- * remaining ones until the total fits in maxTotalMB. A limit of 0 disables it.
+ * remaining ones until the total fits in maxTotalMB. Protected ids (the open
+ * conversation) are never evicted but still count toward the total. A limit of 0 disables it.
  */
-export function selectConversationsToEvict(candidates: RetentionCandidate[], policy: RetentionSettings, now: Date): string[] {
+export function selectConversationsToEvict(
+    candidates: RetentionCandidate[],
+    policy: RetentionSettings,
+    now: Date,
+    protectedIds: readonly string[] = [],
+): string[] {
     const evicted = new Set<string>();
+    const isProtected = new Set(protectedIds);
     if (policy.maxAgeDays > 0) {
         const cutoff = now.getTime() - policy.maxAgeDays * DAY_MS;
         for (const candidate of candidates) {
-            if (Date.parse(candidate.updatedAt) < cutoff) evicted.add(candidate.id);
+            if (!isProtected.has(candidate.id) && Date.parse(candidate.updatedAt) < cutoff) evicted.add(candidate.id);
         }
     }
     if (policy.maxTotalMB > 0) {
@@ -50,6 +57,7 @@ export function selectConversationsToEvict(candidates: RetentionCandidate[], pol
         let total = remaining.reduce((sum, candidate) => sum + candidate.bytes, 0);
         for (const candidate of remaining) {
             if (total <= limit) break;
+            if (isProtected.has(candidate.id)) continue;
             evicted.add(candidate.id);
             total -= candidate.bytes;
         }

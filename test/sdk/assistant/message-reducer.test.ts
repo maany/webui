@@ -66,6 +66,19 @@ describe('applyRunnerUpdate', () => {
             { type: 'notice', level: 'error', text: 'bad key' },
         ]);
     });
+    it('upserts a repeated tool-call update instead of duplicating the part', () => {
+        let message = applyRunnerUpdate(empty(), { type: 'tool-call', toolCallId: 't1', toolName: 'x', args: {}, policy: 'ask' });
+        message = applyRunnerUpdate(message, { type: 'tool-call', toolCallId: 't1', toolName: 'x', args: { id: 2 }, policy: 'ask' });
+        expect(message.parts).toHaveLength(1);
+        expect(message.parts[0]).toMatchObject({ toolCallId: 't1', args: { id: 2 } });
+    });
+
+    it('does not move a finished tool call back to awaiting-approval', () => {
+        let message = applyRunnerUpdate(empty(), { type: 'tool-call', toolCallId: 't1', toolName: 'x', args: {}, policy: 'allow' });
+        message = applyRunnerUpdate(message, { type: 'tool-result', toolCallId: 't1', result: 1, durationMs: 1 });
+        message = applyRunnerUpdate(message, { type: 'approval-required', toolCallId: 't1' });
+        expect(message.parts[0]).toMatchObject({ status: 'done' });
+    });
 });
 
 describe('helpers', () => {

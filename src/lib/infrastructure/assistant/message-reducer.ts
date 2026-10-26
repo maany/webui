@@ -75,10 +75,18 @@ export function applyRunnerUpdate(message: ChatMessage, update: RunnerUpdate): C
                 policy: update.policy,
                 status: 'running',
             };
+            if (message.parts.some(existing => existing.type === 'tool-call' && existing.toolCallId === update.toolCallId)) {
+                return updateToolPart(message, update.toolCallId, existing => ({
+                    ...existing,
+                    toolName: update.toolName,
+                    args: update.args,
+                    policy: update.policy,
+                }));
+            }
             return { ...message, parts: [...message.parts, part] };
         }
         case 'approval-required':
-            return updateToolPart(message, update.toolCallId, part => ({ ...part, status: 'awaiting-approval' }));
+            return updateToolPart(message, update.toolCallId, part => (part.status === 'running' ? { ...part, status: 'awaiting-approval' } : part));
         case 'tool-result':
             return updateToolPart(message, update.toolCallId, part => ({
                 ...part,
