@@ -38,6 +38,30 @@ export interface BuiltTools {
     builtPolicy: Map<string, ToolPolicy>;
 }
 
+const INVALID_ARGS_MARKER = Symbol.for('rucio-assistant.invalid-args');
+
+interface InvalidArgsMarker {
+    [INVALID_ARGS_MARKER]: string;
+}
+
+function isInvalidArgsMarker(value: unknown): value is InvalidArgsMarker {
+    return typeof value === 'object' && value !== null && INVALID_ARGS_MARKER in value;
+}
+
+function invalidArgs(marker: InvalidArgsMarker): ToolError {
+    return { error: 'invalid_args', message: marker[INVALID_ARGS_MARKER] };
+}
+
+/**
+ * TanStack skips every middleware hook when argument validation fails on a
+ * tool that needs approval, so the model would get its raw error text. The
+ * schema handed to TanStack therefore never fails: bad arguments become a
+ * marker that the policy guard and the execute wrapper turn into invalid_args.
+ */
+function lenientInput(schema: z.ZodType): z.ZodType {
+    return schema.catch((ctx: { error: z.ZodError }) => ({ [INVALID_ARGS_MARKER]: `Invalid arguments: ${ctx.error.message}` } as never));
+}
+
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
@@ -54,10 +78,20 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
         const execute = async (args: unknown, tanstackContext?: { toolCallId?: string }): Promise<unknown> => {
             const toolCallId = tanstackContext?.toolCallId ?? `call_${Date.now()}`;
             const started = Date.now();
+            if (isInvalidArgsMarker(args)) {
+                const invalid = invalidArgs(args);
+                options.onResult(toolCallId, invalid, invalid, 0);
+                return invalid;
+            }
             if (options.policyFor(tool.spec.name) === 'deny') {
                 const denied = deniedByPolicy(tool.spec.name);
                 options.onResult(toolCallId, denied, denied, 0);
                 return denied;
+            }
+            if (policy !== 'ask' && options.policyFor(tool.spec.name) === 'ask') {
+                const tightened: ToolError = { error: 'denied_by_policy', message: 'This action now needs approval. Ask again to request it.' };
+                options.onResult(toolCallId, tightened, tightened, 0);
+                return tightened;
             }
             const ctx = options.makeToolContext(toolCallId);
             let result: unknown;
@@ -77,7 +111,7 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
             const definition = toolDefinition({
                 name: tool.spec.name,
                 description: tool.spec.description,
-                inputSchema: tool.spec.input,
+                inputSchema: lenientInput(tool.spec.input),
                 needsApproval: true,
                 approvalSchema: { reject: ApprovalRejectSchema },
             });
@@ -87,7 +121,7 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
             const definition = toolDefinition({
                 name: tool.spec.name,
                 description: tool.spec.description,
-                inputSchema: tool.spec.input,
+                inputSchema: lenientInput(tool.spec.input),
             });
             serverTools.push(definition.server(execute as never) as unknown as AnyTool);
         }
@@ -114,24 +148,27 @@ export function createToolFilterMiddleware(
 
 /**
  * Enforces `deny` at call time and maps TanStack's own tool failures
- * (argument validation, unparsable JSON, aborts) to the ToolError shape.
+ * (unparsable JSON, truncated calls, aborts) to the ToolError shape.
  */
 export function createPolicyMiddleware(policyFor: (toolName: string) => ToolPolicy, onResult: ToolResultObserver): ChatMiddleware {
     return {
         name: 'rucio-assistant-policy',
         onGuardToolCall: (_ctx, hook) => {
+            if (isInvalidArgsMarker(hook.args)) {
+                const invalid = invalidArgs(hook.args);
+                onResult(hook.toolCallId, invalid, invalid, 0);
+                return { type: 'skip', result: invalid };
+            }
             if (policyFor(hook.toolName) !== 'deny') return undefined;
             const denied = deniedByPolicy(hook.toolName);
             onResult(hook.toolCallId, denied, denied, 0);
             return { type: 'skip', result: denied };
         },
-        onAfterToolCall: (_ctx, info) => {
+        onAfterToolCall: (ctx, info) => {
             if (info.ok) return undefined;
-            const raw = info.result as { error?: unknown } | undefined;
-            const message = typeof raw?.error === 'string' ? raw.error : errorMessage(info.error);
-            const mapped: ToolError = /abort/i.test(message)
+            const mapped: ToolError = ctx.signal?.aborted
                 ? { error: 'aborted', message: 'The tool call was stopped.' }
-                : { error: 'invalid_args', message };
+                : { error: 'invalid_args', message: errorMessage(info.error) };
             onResult(info.toolCallId, mapped, mapped, info.duration);
             return { type: 'replaceResult', result: mapped };
         },

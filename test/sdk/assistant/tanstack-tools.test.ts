@@ -56,6 +56,45 @@ describe('buildTanstackTools', () => {
     });
 });
 
+describe('argument validation', () => {
+    type Schema = { '~standard': { validate(value: unknown): Promise<{ value?: unknown }> | { value?: unknown } } };
+
+    it('turns bad arguments of an ask tool into one invalid_args result without running it', async () => {
+        const { built, byName, results, execute } = build({ read_a: 'allow', write_b: 'ask', denied_c: 'deny' });
+        const tool = byName('write_b') as unknown as { inputSchema: Schema };
+        const parsed = (await tool.inputSchema['~standard'].validate({ id: 42 })).value;
+        const onResult = jest.fn();
+        const middleware = createPolicyMiddleware(() => 'ask', onResult);
+        const hook = { toolName: 'write_b', toolCallId: 'call-11', toolCall: {} as never, tool: undefined, args: parsed };
+        expect(await middleware.onGuardToolCall?.({} as never, hook)).toEqual({
+            type: 'skip',
+            result: expect.objectContaining({ error: 'invalid_args' }),
+        });
+        expect(onResult).toHaveBeenCalledTimes(1);
+        await expect(byName('write_b').execute(parsed, { toolCallId: 'call-11' })).resolves.toMatchObject({ error: 'invalid_args' });
+        expect(execute).not.toHaveBeenCalled();
+        expect(built.approvalClientTools).toHaveLength(1);
+        expect(results).toHaveLength(1);
+    });
+
+    it('passes valid arguments through unchanged', async () => {
+        const { byName } = build({ read_a: 'allow', write_b: 'ask', denied_c: 'deny' });
+        const tool = byName('write_b') as unknown as { inputSchema: Schema };
+        expect((await tool.inputSchema['~standard'].validate({ id: 'x' })).value).toEqual({ id: 'x' });
+    });
+
+    it('refuses a tool built as allow whose policy tightened to ask', async () => {
+        const policies: Record<string, ToolPolicy> = { read_a: 'allow', write_b: 'ask', denied_c: 'deny' };
+        const { byName, execute } = build(policies);
+        policies.read_a = 'ask';
+        await expect(byName('read_a').execute({}, { toolCallId: 'call-12' })).resolves.toMatchObject({
+            error: 'denied_by_policy',
+            message: 'This action now needs approval. Ask again to request it.',
+        });
+        expect(execute).not.toHaveBeenCalled();
+    });
+});
+
 describe('createPolicyMiddleware', () => {
     const hook = (toolName: string) => ({ toolName, toolCallId: 'call-9', toolCall: {} as never, tool: undefined, args: {} });
 
@@ -79,7 +118,7 @@ describe('createPolicyMiddleware', () => {
             toolCallId: 'call-10',
             ok: false,
             duration: 0,
-            result: { error: 'Input validation failed for tool read_a' },
+            error: new Error('Input validation failed for tool read_a'),
         });
         expect(decision).toEqual({ type: 'replaceResult', result: { error: 'invalid_args', message: 'Input validation failed for tool read_a' } });
         expect(
