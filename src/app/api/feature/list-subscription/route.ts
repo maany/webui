@@ -4,13 +4,15 @@ import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { ListSubscriptionsControllerParameters } from '@/lib/infrastructure/controller/list-subscriptions-controller';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
+import { ListSubscriptionSchema } from '@/lib/infrastructure/api-schemas/list-subscription';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/list-subscription
- * Query params: account (optional), name (optional)
+ * Query params: account (required; the session account's subscriptions are listed)
  * Returns a list of subscriptions
  */
 async function getHandler(request: NextRequest) {
@@ -25,10 +27,9 @@ async function getHandler(request: NextRequest) {
             return NextResponse.json({ error: 'Invalid Session. No Rucio Account found' }, { status: 400 });
         }
 
-        const params = parseQueryParams(request);
-        const account = params.account as string;
+        const params = parseQuery(ListSubscriptionSchema, new URL(request.url).searchParams);
 
-        if (!account) {
+        if (!params.success) {
             return NextResponse.json({ error: 'Missing required parameter: account' }, { status: 400 });
         }
 

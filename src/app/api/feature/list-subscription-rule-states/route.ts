@@ -7,10 +7,12 @@ import { ListSubscriptionRuleStatesControllerParameters } from '@/lib/infrastruc
 import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
+import { ListSubscriptionRuleStatesSchema } from '@/lib/infrastructure/api-schemas/list-subscription-rule-states';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/list-subscription-rule-states
- * Query params: account (optional - defaults to authenticated user's account), name
+ * Query params: account (optional - defaults to authenticated user's account)
  * Returns rule states for subscriptions of the specified account
  */
 async function getHandler(request: NextRequest) {
@@ -21,10 +23,13 @@ async function getHandler(request: NextRequest) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        // Check for account query parameter first, fall back to session user's account
-        const { searchParams } = new URL(request.url);
-        const accountParam = searchParams.get('account');
-        const account = accountParam || sessionUser.rucioAccount;
+        const params = parseQuery(ListSubscriptionRuleStatesSchema, new URL(request.url).searchParams);
+        if (!params.success) {
+            return NextResponse.json({ error: 'Invalid parameter: account' }, { status: 400 });
+        }
+
+        // Use the account query parameter first, fall back to session user's account
+        const account = params.data.account || sessionUser.rucioAccount;
 
         if (!account) {
             return NextResponse.json({ error: 'Could not determine account name. Are you logged in?' }, { status: 400 });
