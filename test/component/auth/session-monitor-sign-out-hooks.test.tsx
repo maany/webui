@@ -56,3 +56,35 @@ describe('SessionMonitorProvider sign-out hooks', () => {
         expect(order).toEqual(['hooks', 'signOut', 'navigate']);
     });
 });
+
+describe('SessionMonitorProvider automatic sign-out hooks', () => {
+    it('runs the hooks with a 1000 ms timeout before signOut when the token is already expired', async () => {
+        const order: string[] = [];
+        (useSession as jest.Mock).mockReturnValue({
+            data: {
+                user: { rucioAuthTokenExpires: new Date(Date.now() - 60_000).toISOString(), rucioAuthType: 'userpass' },
+            },
+            status: 'authenticated',
+            update: jest.fn(),
+        });
+        (usePathname as jest.Mock).mockReturnValue('/dashboard');
+        (runSignOutHooks as jest.Mock).mockReset().mockImplementation(async () => {
+            order.push('hooks');
+        });
+        (signOut as jest.Mock).mockReset().mockImplementation(async () => {
+            order.push('signOut');
+        });
+        (navigateTo as jest.Mock).mockReset().mockImplementation(() => {
+            order.push('navigate');
+        });
+        await act(async () => {
+            render(
+                <SessionMonitorProvider>
+                    <div />
+                </SessionMonitorProvider>,
+            );
+        });
+        expect(runSignOutHooks).toHaveBeenCalledWith(1000);
+        expect(order.slice(0, 3)).toEqual(['hooks', 'signOut', 'navigate']);
+    });
+});

@@ -8,6 +8,9 @@ import { navigateTo } from './navigate';
 import { runSignOutHooks } from './sign-out-hooks';
 import { ReauthModal } from '@/component-library/features/auth/ReauthModal';
 
+// Automatic sign-outs must not leave the user waiting on a slow hook.
+const AUTO_SIGN_OUT_HOOK_TIMEOUT_MS = 1000;
+
 /**
  * How many milliseconds before token expiry to trigger a refresh attempt.
  */
@@ -134,6 +137,7 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
                     // capture identity (e.g. no session.user), fall back to the
                     // signOut-and-redirect path.
                     if (captureUserpassReauth()) return;
+                    await runSignOutHooks(AUTO_SIGN_OUT_HOOK_TIMEOUT_MS);
                     signOut({ redirect: false });
                     return;
                 }
@@ -152,6 +156,7 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
                     // 'unauthenticated'. Without this, NextAuth's own JWT maxAge
                     // keeps the session alive regardless of rucioAuthTokenExpires,
                     // and the unauthenticated watcher would never fire.
+                    await runSignOutHooks(AUTO_SIGN_OUT_HOOK_TIMEOUT_MS);
                     signOut({ redirect: false });
                     return;
                 }
@@ -181,10 +186,12 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
                         // of redirecting. Falls back to redirect if identity capture
                         // fails (e.g. partial session shape).
                         if (captureUserpassReauth()) return;
-                        signOut({ redirect: false }).then(() => {
-                            const callbackUrl = encodeURIComponent(pathname ?? '/');
-                            navigateTo(`/auth/login?expired=true&callbackUrl=${callbackUrl}`);
-                        });
+                        runSignOutHooks(AUTO_SIGN_OUT_HOOK_TIMEOUT_MS)
+                            .then(() => signOut({ redirect: false }))
+                            .then(() => {
+                                const callbackUrl = encodeURIComponent(pathname ?? '/');
+                                navigateTo(`/auth/login?expired=true&callbackUrl=${callbackUrl}`);
+                            });
                     } else {
                         // x509 / oidc: attempt an immediate refresh (delay ≈ 0).
                         scheduleRefreshTimer(expiresAt, authType);
@@ -219,10 +226,12 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
         // Use window.location.href (full page load) so the browser sends the
         // new request only after the Set-Cookie: delete from signOut has been
         // committed to the cookie jar; router.push can race against it.
-        signOut({ redirect: false }).then(() => {
-            const callbackUrl = encodeURIComponent(pathname ?? '/');
-            navigateTo(`/auth/login?expired=true&callbackUrl=${callbackUrl}`);
-        });
+        runSignOutHooks(AUTO_SIGN_OUT_HOOK_TIMEOUT_MS)
+            .then(() => signOut({ redirect: false }))
+            .then(() => {
+                const callbackUrl = encodeURIComponent(pathname ?? '/');
+                navigateTo(`/auth/login?expired=true&callbackUrl=${callbackUrl}`);
+            });
     }, [status, pathname]);
 
     // ── Cleanup on unmount ─────────────────────────────────────────────────
@@ -248,10 +257,12 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
     const handleExpiredCancel = useCallback(() => {
         const captured = expiredReauth;
         setExpiredReauth(null);
-        signOut({ redirect: false }).then(() => {
-            const callbackUrl = encodeURIComponent(pathname ?? '/');
-            navigateTo(`/auth/login?expired=true&callbackUrl=${callbackUrl}`);
-        });
+        runSignOutHooks(AUTO_SIGN_OUT_HOOK_TIMEOUT_MS)
+            .then(() => signOut({ redirect: false }))
+            .then(() => {
+                const callbackUrl = encodeURIComponent(pathname ?? '/');
+                navigateTo(`/auth/login?expired=true&callbackUrl=${callbackUrl}`);
+            });
         // Reference `captured` so the linter doesn't complain about shadowed
         // unused var; nothing else needs it once we've kicked off signOut.
         void captured;
