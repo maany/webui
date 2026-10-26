@@ -38,28 +38,41 @@ export interface BuiltTools {
     builtPolicy: Map<string, ToolPolicy>;
 }
 
-const INVALID_ARGS_MARKER = Symbol.for('rucio-assistant.invalid-args');
+const INVALID_ARGS_KEY = '__rucio_invalid_args';
 
 interface InvalidArgsMarker {
-    [INVALID_ARGS_MARKER]: string;
+    [INVALID_ARGS_KEY]: { message: string; received: unknown };
 }
 
 function isInvalidArgsMarker(value: unknown): value is InvalidArgsMarker {
-    return typeof value === 'object' && value !== null && INVALID_ARGS_MARKER in value;
+    return typeof value === 'object' && value !== null && INVALID_ARGS_KEY in value;
 }
 
 function invalidArgs(marker: InvalidArgsMarker): ToolError {
-    return { error: 'invalid_args', message: marker[INVALID_ARGS_MARKER] };
+    return { error: 'invalid_args', message: marker[INVALID_ARGS_KEY].message };
 }
 
 /**
- * TanStack skips every middleware hook when argument validation fails on a
- * tool that needs approval, so the model would get its raw error text. The
- * schema handed to TanStack therefore never fails: bad arguments become a
- * marker that the policy guard and the execute wrapper turn into invalid_args.
+ * TanStack runs no middleware hook when argument validation fails on a tool
+ * that needs approval, so the model would get its raw error text. For those
+ * tools only, hand TanStack a schema whose JSON Schema conversion is the
+ * original, but whose validation never fails: bad arguments become a marker
+ * (carrying what the model sent, so the approval prompt can show it) that the
+ * policy guard and the execute wrapper turn into invalid_args.
  */
-function lenientInput(schema: z.ZodType): z.ZodType {
-    return schema.catch((ctx: { error: z.ZodError }) => ({ [INVALID_ARGS_MARKER]: `Invalid arguments: ${ctx.error.message}` } as never));
+function approvalInput(schema: z.ZodType): z.ZodType {
+    const standard = schema['~standard'];
+    const lenient = {
+        ...standard,
+        jsonSchema: standard.jsonSchema,
+        validate: async (value: unknown) => {
+            const result = await standard.validate(value);
+            if (!result.issues) return result;
+            const message = `Invalid arguments: ${result.issues.map(issue => issue.message).join('; ')}`;
+            return { value: { [INVALID_ARGS_KEY]: { message, received: value } } };
+        },
+    };
+    return Object.create(schema, { '~standard': { value: lenient } }) as z.ZodType;
 }
 
 function errorMessage(error: unknown): string {
@@ -78,15 +91,15 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
         const execute = async (args: unknown, tanstackContext?: { toolCallId?: string }): Promise<unknown> => {
             const toolCallId = tanstackContext?.toolCallId ?? `call_${Date.now()}`;
             const started = Date.now();
-            if (isInvalidArgsMarker(args)) {
-                const invalid = invalidArgs(args);
-                options.onResult(toolCallId, invalid, invalid, 0);
-                return invalid;
-            }
             if (options.policyFor(tool.spec.name) === 'deny') {
                 const denied = deniedByPolicy(tool.spec.name);
                 options.onResult(toolCallId, denied, denied, 0);
                 return denied;
+            }
+            if (isInvalidArgsMarker(args)) {
+                const invalid = invalidArgs(args);
+                options.onResult(toolCallId, invalid, invalid, 0);
+                return invalid;
             }
             if (policy !== 'ask' && options.policyFor(tool.spec.name) === 'ask') {
                 const tightened: ToolError = { error: 'denied_by_policy', message: 'This action now needs approval. Ask again to request it.' };
@@ -111,7 +124,7 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
             const definition = toolDefinition({
                 name: tool.spec.name,
                 description: tool.spec.description,
-                inputSchema: lenientInput(tool.spec.input),
+                inputSchema: approvalInput(tool.spec.input),
                 needsApproval: true,
                 approvalSchema: { reject: ApprovalRejectSchema },
             });
@@ -121,7 +134,7 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
             const definition = toolDefinition({
                 name: tool.spec.name,
                 description: tool.spec.description,
-                inputSchema: lenientInput(tool.spec.input),
+                inputSchema: tool.spec.input,
             });
             serverTools.push(definition.server(execute as never) as unknown as AnyTool);
         }
@@ -154,15 +167,17 @@ export function createPolicyMiddleware(policyFor: (toolName: string) => ToolPoli
     return {
         name: 'rucio-assistant-policy',
         onGuardToolCall: (_ctx, hook) => {
+            if (policyFor(hook.toolName) === 'deny') {
+                const denied = deniedByPolicy(hook.toolName);
+                onResult(hook.toolCallId, denied, denied, 0);
+                return { type: 'skip', result: denied };
+            }
             if (isInvalidArgsMarker(hook.args)) {
                 const invalid = invalidArgs(hook.args);
                 onResult(hook.toolCallId, invalid, invalid, 0);
                 return { type: 'skip', result: invalid };
             }
-            if (policyFor(hook.toolName) !== 'deny') return undefined;
-            const denied = deniedByPolicy(hook.toolName);
-            onResult(hook.toolCallId, denied, denied, 0);
-            return { type: 'skip', result: denied };
+            return undefined;
         },
         onAfterToolCall: (ctx, info) => {
             if (info.ok) return undefined;

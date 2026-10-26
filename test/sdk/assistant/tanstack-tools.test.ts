@@ -1,3 +1,4 @@
+import { convertSchemaToJsonSchema } from '@tanstack/ai';
 import { z } from 'zod';
 import type { ToolPolicy } from '@/lib/core/entity/assistant/tool';
 import { buildTanstackTools, createPolicyMiddleware } from '@/lib/infrastructure/assistant/tanstack-tools';
@@ -18,7 +19,7 @@ function build(policies: Record<string, ToolPolicy>, execute = jest.fn(async () 
         onResult: (toolCallId, result) => results.push([toolCallId, result]),
     });
     const byName = (name: string) => built.serverTools.find(tool => tool.name === name) as unknown as ExecutableTool;
-    return { built, byName, results, execute, controller };
+    return { built, byName, results, execute, controller, tools };
 }
 
 describe('buildTanstackTools', () => {
@@ -75,6 +76,42 @@ describe('argument validation', () => {
         expect(execute).not.toHaveBeenCalled();
         expect(built.approvalClientTools).toHaveLength(1);
         expect(results).toHaveLength(1);
+    });
+
+    it('keeps every tool schema convertible to the same JSON Schema as the original', () => {
+        const { byName, tools } = build({ read_a: 'allow', write_b: 'ask', denied_c: 'deny' });
+        for (const tool of tools) {
+            const built = byName(tool.spec.name) as unknown as { inputSchema: never };
+            expect(convertSchemaToJsonSchema(built.inputSchema)).toEqual(convertSchemaToJsonSchema(tool.spec.input as never));
+        }
+    });
+
+    it('hands non-ask tools the original schema so TanStack repairs their arguments as before', () => {
+        const { byName, tools } = build({ read_a: 'allow', write_b: 'ask', denied_c: 'deny' });
+        expect((byName('read_a') as unknown as { inputSchema: unknown }).inputSchema).toBe(tools[0].spec.input);
+    });
+
+    it('exposes the raw arguments on the marker for the approval prompt', async () => {
+        const { byName } = build({ read_a: 'allow', write_b: 'ask', denied_c: 'deny' });
+        const tool = byName('write_b') as unknown as { inputSchema: Schema };
+        const parsed = (await tool.inputSchema['~standard'].validate({ id: 42 })).value;
+        expect(JSON.stringify(parsed)).toContain('"received":{"id":42}');
+    });
+
+    it('lets deny win over invalid arguments', async () => {
+        const policies: Record<string, ToolPolicy> = { read_a: 'allow', write_b: 'ask', denied_c: 'deny' };
+        const { byName, execute } = build(policies);
+        policies.write_b = 'deny';
+        const tool = byName('write_b') as unknown as { inputSchema: Schema };
+        const parsed = (await tool.inputSchema['~standard'].validate({ id: 42 })).value;
+        await expect(byName('write_b').execute(parsed, { toolCallId: 'call-13' })).resolves.toMatchObject({ error: 'denied_by_policy' });
+        const middleware = createPolicyMiddleware(() => 'deny', jest.fn());
+        const hook = { toolName: 'write_b', toolCallId: 'call-13', toolCall: {} as never, tool: undefined, args: parsed };
+        expect(await middleware.onGuardToolCall?.({} as never, hook)).toEqual({
+            type: 'skip',
+            result: expect.objectContaining({ error: 'denied_by_policy' }),
+        });
+        expect(execute).not.toHaveBeenCalled();
     });
 
     it('passes valid arguments through unchanged', async () => {
