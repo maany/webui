@@ -39,8 +39,11 @@ describe('searchToolSpecs', () => {
     });
 
     it('filters by domain', () => {
-        const hits = searchToolSpecs(SPECS, 'list', { domain: 'rules' });
-        expect(hits.every(hit => hit.domain === 'rules')).toBe(true);
+        const unfiltered = searchToolSpecs(SPECS, 'usage');
+        expect(unfiltered.some(hit => hit.domain !== 'rses')).toBe(true);
+        const hits = searchToolSpecs(SPECS, 'usage', { domain: 'rses' });
+        expect(hits.length).toBeGreaterThan(0);
+        expect(hits.every(hit => hit.domain === 'rses')).toBe(true);
     });
 
     it('falls back to every tool of the domain when nothing matches', () => {
@@ -59,5 +62,21 @@ describe('searchToolSpecs', () => {
         expect(hits).toHaveLength(3);
         const scores = hits.map(hit => hit.score);
         expect([...scores].sort((a, b) => b - a)).toEqual(scores);
+        const tied = searchToolSpecs(SPECS, 'account');
+        expect(tied[0].score).toBe(tied[1].score);
+        expect(tied.map(hit => hit.name)).toEqual(['get_account_quotas', 'list_account_identities']);
+    });
+
+    it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])('does not throw for the inherited property name %s', query => {
+        expect(() => searchToolSpecs(SPECS, query)).not.toThrow();
+        expect(searchToolSpecs(SPECS, `${query} quota`)[0].name).toBe('get_account_quotas');
+    });
+
+    it('clamps odd limits', () => {
+        expect(searchToolSpecs(SPECS, 'rule', { limit: -1 })).toEqual([]);
+        expect(searchToolSpecs(SPECS, 'rule', { limit: 0 })).toEqual([]);
+        expect(searchToolSpecs(SPECS, 'rule', { limit: Number.NaN }).length).toBeGreaterThan(0);
+        expect(searchToolSpecs(SPECS, 'rule', { limit: 2.9 })).toHaveLength(2);
+        expect(searchToolSpecs(SPECS, 'rule', { limit: 100 }).length).toBeLessThanOrEqual(SPECS.length);
     });
 });

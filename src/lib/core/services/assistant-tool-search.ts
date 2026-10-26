@@ -84,6 +84,10 @@ export function stem(word: string): string {
     return lower;
 }
 
+function compareNames(a: string, b: string): number {
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function words(text: string): string[] {
     return text
         .toLowerCase()
@@ -103,14 +107,15 @@ function score(spec: SearchableToolSpec, terms: string[]): number {
         return points * factor;
     };
     return terms.reduce((total, term) => {
-        const related = RELATED[term] ?? [];
+        const related = Object.hasOwn(RELATED, term) ? RELATED[term] : [];
         return total + weigh(term, 1) + related.reduce((sum, other) => sum + weigh(other, 0.5), 0);
     }, 0);
 }
 
 /** Ranks tool specs against a keyword query. Pure and deterministic: ties sort by name. */
 export function searchToolSpecs(specs: SearchableToolSpec[], query: string, options: ToolSearchOptions = {}): ToolSearchHit[] {
-    const limit = options.limit ?? DEFAULT_TOOL_SEARCH_LIMIT;
+    const requested = options.limit ?? DEFAULT_TOOL_SEARCH_LIMIT;
+    const limit = Number.isFinite(requested) ? Math.max(0, Math.floor(requested)) : DEFAULT_TOOL_SEARCH_LIMIT;
     const candidates = options.domain ? specs.filter(spec => spec.domain === options.domain) : specs;
     const terms = Array.from(
         new Set(
@@ -123,13 +128,13 @@ export function searchToolSpecs(specs: SearchableToolSpec[], query: string, opti
     const hits = candidates
         .map(spec => ({ name: spec.name, domain: spec.domain, description: spec.description, score: terms.length > 0 ? score(spec, terms) : 0 }))
         .filter(hit => hit.score > 0)
-        .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+        .sort((a, b) => b.score - a.score || compareNames(a.name, b.name))
         .slice(0, limit);
 
     if (hits.length === 0 && options.domain) {
         return candidates
             .map(spec => ({ name: spec.name, domain: spec.domain, description: spec.description, score: 0 }))
-            .sort((a, b) => a.name.localeCompare(b.name))
+            .sort((a, b) => compareNames(a.name, b.name))
             .slice(0, limit);
     }
     return hits;
