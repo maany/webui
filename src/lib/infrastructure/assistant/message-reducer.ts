@@ -24,13 +24,21 @@ export function createAssistantMessage(conversationId: string): ChatMessage {
     return { id: createId(), conversationId, role: 'assistant', parts: [], createdAt: monotonicIso() };
 }
 
+/** Hard ceiling: even an exempted data result above this is trimmed. */
+const MAX_BOUNDED_RESULT_CHARS = 64_000;
+
 /** Rows-tool and SQL results are already bounded (3 sample rows, maxRows) and carry handle names the transcript needs. */
 function isBoundedDataResult(result: unknown): boolean {
     if (typeof result !== 'object' || result === null || Array.isArray(result)) return false;
     const r = result as Record<string, unknown>;
-    const isRows = typeof r.handle === 'string' && typeof r.rowCount === 'number' && Array.isArray(r.columns);
+    const isRows = typeof r.handle === 'string' && typeof r.rowCount === 'number' && Array.isArray(r.columns) && Array.isArray(r.sample);
     const isSql = Array.isArray(r.columns) && Array.isArray(r.rows) && typeof r.totalRows === 'number';
-    return isRows || isSql;
+    if (!isRows && !isSql) return false;
+    try {
+        return (JSON.stringify(result) ?? '').length <= MAX_BOUNDED_RESULT_CHARS;
+    } catch {
+        return false;
+    }
 }
 
 /** Keeps stored results small; large results become a preview string. */

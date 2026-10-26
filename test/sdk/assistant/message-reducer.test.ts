@@ -87,6 +87,35 @@ describe('helpers', () => {
         expect(trimToolResult({ big: 'x'.repeat(200) }, 50)).toEqual({ preview: expect.any(String), trimmed: true });
     });
 
+    it('trims a rows-like result that has no sample array', () => {
+        let message = applyRunnerUpdate(empty(), { type: 'tool-call', toolCallId: 't1', toolName: 'x', args: {}, policy: 'allow' });
+        message = applyRunnerUpdate(message, {
+            type: 'tool-result',
+            toolCallId: 't1',
+            result: { handle: 'h_1', rowCount: 1, columns: ['a'], big: 'x'.repeat(30_000) },
+            durationMs: 1,
+        });
+        expect(message.parts[0]).toMatchObject({ result: { trimmed: true } });
+    });
+
+    it('trims an exempted sql result above the 64 KB ceiling', () => {
+        let message = applyRunnerUpdate(empty(), { type: 'tool-call', toolCallId: 't1', toolName: 'run_sql', args: {}, policy: 'allow' });
+        message = applyRunnerUpdate(message, {
+            type: 'tool-result',
+            toolCallId: 't1',
+            result: { columns: ['a'], rows: [{ a: 'x'.repeat(100_000) }], totalRows: 1 },
+            durationMs: 1,
+        });
+        expect(message.parts[0]).toMatchObject({ result: { trimmed: true } });
+    });
+
+    it('keeps a bounded sql result between 20 KB and 64 KB', () => {
+        const result = { columns: ['a'], rows: [{ a: 'x'.repeat(30_000) }], totalRows: 1 };
+        let message = applyRunnerUpdate(empty(), { type: 'tool-call', toolCallId: 't1', toolName: 'run_sql', args: {}, policy: 'allow' });
+        message = applyRunnerUpdate(message, { type: 'tool-result', toolCallId: 't1', result, durationMs: 1 });
+        expect(message.parts[0]).toMatchObject({ result });
+    });
+
     it('sets the reasoning duration once', () => {
         const message = closeReasoning({ ...empty(), parts: [{ type: 'reasoning', text: 'r' }] }, 4000);
         expect(message.parts[0]).toEqual({ type: 'reasoning', text: 'r', durationMs: 4000 });

@@ -2,7 +2,8 @@ import type { QueryClient } from '@tanstack/react-query';
 import type { Role } from '@/lib/core/entity/auth-models';
 import type { AssistantEvent } from '@/lib/core/entity/assistant/events';
 import type { FeatureFlagMap } from '@/lib/core/entity/feature-config';
-import type { ToolError, ToolSpec } from '@/lib/core/entity/assistant/tool';
+import type { DataHandleProvenance } from '@/lib/core/entity/assistant/data-handle';
+import type { ToolError, ToolPolicy, ToolSpec } from '@/lib/core/entity/assistant/tool';
 import type { AssistantDataHandleStorePort } from '@/lib/core/port/secondary/assistant-data-handle-store-port';
 import type { AssistantPageActionRegistryPort } from '@/lib/core/port/secondary/assistant-page-action-registry-port';
 import type { AssistantSkillSourcePort } from '@/lib/core/port/secondary/assistant-skill-source-port';
@@ -26,6 +27,14 @@ export interface ToolExecutionContext {
     minimizePanel?: () => void;
     /** Skill source (phase 5). */
     skills?: AssistantSkillSourcePort;
+    /** find_tools: add tools to the conversation's active set. */
+    activateTools?(names: string[]): void;
+    /** find_tools and refresh_handle: live toolVisibility check (flags, role, permissions ready). */
+    isToolVisible?(name: string): boolean;
+    /** refresh_handle: live effective policy of a tool; missing means read tools default to allow. */
+    toolPolicy?(name: string): ToolPolicy;
+    /** run_sql and refresh_handle: handle provenance rebuilt from the transcript. */
+    handleRecords?(): (DataHandleProvenance & { name: string })[];
 }
 
 export interface RegisteredTool<I = unknown> {

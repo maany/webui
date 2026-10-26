@@ -1,6 +1,7 @@
 import type { ToolSpec } from '@/lib/core/entity/assistant/tool';
 import { registerTools } from '@/lib/infrastructure/assistant/tool-registry';
 import { accountToolSpecs, accountTools } from './accounts';
+import { CORE_DATA_TOOLS } from './core-tools';
 import { didToolSpecs, didTools } from './dids';
 import type { ToolArgs } from './read-tool-helpers';
 import { replicaToolSpecs, replicaTools } from './replicas';
@@ -22,4 +23,4 @@ export const READ_TOOL_SPECS: ToolSpec<ToolArgs>[] = [
 
 // Registered once, when this module is first imported (AssistantProvider imports it). Later phases add their
 // domain arrays to this call (phase 7: requestTools) or their own register call below it (phase 3: registerPageTools).
-registerTools([...didTools, ...ruleTools, ...rseTools, ...accountTools, ...replicaTools, ...subscriptionTools]);
+registerTools([...CORE_DATA_TOOLS, ...didTools, ...ruleTools, ...rseTools, ...accountTools, ...replicaTools, ...subscriptionTools]);

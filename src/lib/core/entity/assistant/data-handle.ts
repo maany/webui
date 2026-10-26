@@ -37,6 +37,8 @@ export interface SqlResult {
     rows: Record<string, unknown>[]; // at most maxRows
     totalRows: number;
     savedAs?: string;
+    /** Set when rows were dropped from the end so the result fits the model budget; rows.length equals it. */
+    rowsShown?: number;
 }
 
 /** Persisted copy of a SqlResult: rows are never stored (spec 9.4). */

@@ -84,6 +84,12 @@ describe('read tool registry', () => {
         for (const route of WRITE_ROUTES) for (const spec of specsFor(route)) expect(spec.risk).not.toBe('read');
     });
 
+    it('registers the core data tools as always on', () => {
+        for (const name of ['find_tools', 'run_sql', 'refresh_handle']) {
+            expect(allTools().find(tool => tool.spec.name === name)?.spec.alwaysOn).toBe(true);
+        }
+    });
+
     it('keeps em dashes out of descriptions and call summaries', () => {
         for (const spec of READ_TOOL_SPECS) {
             expect(spec.description).not.toContain(EM_DASH);
