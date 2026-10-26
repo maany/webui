@@ -187,6 +187,23 @@ describe('helpers', () => {
         expect(repaired.parts.filter(part => part.type === 'approval')).toEqual([expect.objectContaining({ decision: 'approved' })]);
     });
 
+    it('closes an approved running call with the may-have-landed wording when the turn ends (m6)', () => {
+        const message: ChatMessage = {
+            ...empty(),
+            parts: [
+                { type: 'tool-call', toolCallId: 't1', toolName: 'do_write', args: {}, policy: 'ask', status: 'running' },
+                { type: 'approval', toolCallId: 't1', decision: 'approved', scope: 'once', approver: 'root@def', at: 'now' },
+                { type: 'tool-call', toolCallId: 't2', toolName: 'read', args: {}, policy: 'allow', status: 'running' },
+            ],
+        };
+        const finished = applyRunnerUpdate(message, { type: 'finished', status: 'stopped' });
+        expect(finished.parts[0]).toMatchObject({
+            status: 'error',
+            error: { error: 'aborted', message: expect.stringContaining('may have been applied') },
+        });
+        expect(finished.parts[2]).toMatchObject({ status: 'error', error: { message: expect.stringContaining('stopped before') } });
+    });
+
     it('appends approval parts', () => {
         const message = addApprovalPart(empty(), { toolCallId: 't1', decision: 'approved', scope: 'once', approver: 'root@def', at: 'now' });
         expect(message.parts).toEqual([{ type: 'approval', toolCallId: 't1', decision: 'approved', scope: 'once', approver: 'root@def', at: 'now' }]);

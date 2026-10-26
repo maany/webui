@@ -826,63 +826,112 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 assistantRef.current = decided;
                 turnMessagesRef.current.set(decided.id, decided);
                 replaceMessage(decided);
-                const current = conversationRef.current;
-                let allowUpdate: Conversation | undefined;
-                if (approved && effectiveScope === 'conversation' && current && !current.conversationAllow.includes(pending.toolName)) {
-                    allowUpdate = { ...current, conversationAllow: [...current.conversationAllow, pending.toolName] };
-                    setConversation(allowUpdate);
-                }
-                try {
-                    d.bus.emit({
-                        type: 'tool-approval',
-                        turnId: turnIdRef.current,
-                        toolCallId,
-                        decision,
-                        scope: effectiveScope,
-                        approver: accountKey,
-                        at: Date.now(),
-                    });
-                } catch {
-                    // Observers are best effort.
-                }
+                const emitDecision = (finalDecision: 'approved' | 'rejected') => {
+                    try {
+                        d.bus.emit({
+                            type: 'tool-approval',
+                            turnId: turnIdRef.current,
+                            toolCallId,
+                            decision: finalDecision,
+                            scope: finalDecision === 'approved' ? effectiveScope : 'once',
+                            approver: accountKey,
+                            at: Date.now(),
+                        });
+                    } catch {
+                        // Observers are best effort.
+                    }
+                };
+                // A rejection grants nothing, so it is reported at once; an approval only after it was persisted and is live.
+                if (!approved) emitDecision('rejected');
 
-                // Persist the decision before the runner may act on it.
-                let saved = true;
-                try {
-                    const { repository } = await d.repository;
-                    if (!deletedRef.current.has(decided.conversationId) && !deletedMessagesRef.current.has(decided.id)) {
-                        await repository.saveMessage(decided);
-                        if (allowUpdate) {
-                            const stored = await repository.getConversation(allowUpdate.id);
-                            if (stored && !deletedRef.current.has(stored.id)) {
-                                await repository.saveConversation({ ...stored, conversationAllow: allowUpdate.conversationAllow });
-                            }
+                const isLive = () =>
+                    abortRef.current === controller &&
+                    !controller.signal.aborted &&
+                    runnerRef.current === runner &&
+                    generationRef.current === generation;
+                // The conversation grant exists only between a successful save and the resume; every other exit takes it back.
+                const toolName = pending.toolName;
+                const conversationId = decided.conversationId;
+                let grantedInMemory = false;
+                let grantStored = false;
+                const revokeGrant = async (repository?: AssistantConversationRepositoryPort) => {
+                    const open = conversationRef.current;
+                    if (grantedInMemory && open?.id === conversationId) {
+                        setConversation({ ...open, conversationAllow: open.conversationAllow.filter(name => name !== toolName) });
+                    }
+                    grantedInMemory = false;
+                    if (grantStored && repository) {
+                        try {
+                            const stored = await repository.getConversation(conversationId);
+                            if (stored)
+                                await repository.saveConversation({
+                                    ...stored,
+                                    conversationAllow: stored.conversationAllow.filter(name => name !== toolName),
+                                });
+                        } catch {
+                            // Best effort: the in-memory grant is already gone.
                         }
+                    }
+                    grantStored = false;
+                };
+
+                // Persist the decision before the runner may act on it. A skipped save counts as not saved.
+                let saved = false;
+                let repository: AssistantConversationRepositoryPort | undefined;
+                try {
+                    repository = (await d.repository).repository;
+                    if (!deletedRef.current.has(conversationId) && !deletedMessagesRef.current.has(decided.id)) {
+                        await repository.saveMessage(decided);
+                        saved = true;
                     }
                 } catch {
                     saved = false;
                 }
 
                 // Resume only if this very turn is still live; otherwise teardown already handled it and the call never runs.
-                if (
-                    abortRef.current !== controller ||
-                    controller.signal.aborted ||
-                    runnerRef.current !== runner ||
-                    generationRef.current !== generation
-                ) {
+                if (!isLive()) return;
+                if (saved && approved && effectiveScope === 'conversation') {
+                    const open = conversationRef.current;
+                    if (!open || open.id !== conversationId) {
+                        saved = false;
+                    } else if (!open.conversationAllow.includes(toolName)) {
+                        const granted: Conversation = { ...open, conversationAllow: [...open.conversationAllow, toolName] };
+                        setConversation(granted);
+                        grantedInMemory = true;
+                        try {
+                            const stored = repository ? await repository.getConversation(conversationId) : undefined;
+                            if (!stored || !repository || deletedRef.current.has(conversationId)) throw new Error('conversation not stored');
+                            await repository.saveConversation({ ...stored, conversationAllow: granted.conversationAllow });
+                            grantStored = true;
+                        } catch {
+                            saved = false;
+                        }
+                    }
+                }
+                // The state after the awaits must still be exactly what this decision wrote.
+                const latest = turnMessagesRef.current.get(decided.id);
+                const stillOurs =
+                    latest !== undefined &&
+                    latest.parts.some(
+                        part => part.type === 'tool-call' && part.toolCallId === toolCallId && part.status === (approved ? 'running' : 'denied'),
+                    ) &&
+                    latest.parts.some(part => part.type === 'approval' && part.toolCallId === toolCallId && part.decision === decision);
+                if (!isLive() || (saved && !stillOurs)) {
+                    await revokeGrant(repository);
                     return;
                 }
                 if (!saved) {
-                    // Fail closed: an approval that could not be recorded never runs the action.
+                    // Fail closed: an approval that could not be recorded never runs the action and keeps no grant.
+                    await revokeGrant(repository);
                     const unrecorded: ToolError = {
                         error: 'rejected_by_user',
                         message: 'The approval could not be recorded, so the action did not run. Try again.',
                     };
                     unrecordedRef.current.set(toolCallId, unrecorded);
-                    const latest = turnMessagesRef.current.get(decided.id) ?? decided;
+                    const base = turnMessagesRef.current.get(decided.id) ?? decided;
                     const failed: ChatMessage = {
-                        ...latest,
-                        parts: latest.parts.map(part =>
+                        ...base,
+                        parts: base.parts.map(part =>
                             part.type === 'tool-call' && part.toolCallId === toolCallId
                                 ? { ...part, status: 'denied' as const, error: unrecorded }
                                 : part,
@@ -891,9 +940,11 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     if (assistantRef.current?.id === failed.id) assistantRef.current = failed;
                     turnMessagesRef.current.set(failed.id, failed);
                     replaceMessage(failed);
+                    if (approved) emitDecision('rejected');
                     runner.resolveApproval(toolCallId, false);
                     return;
                 }
+                if (approved) emitDecision('approved');
                 runner.resolveApproval(toolCallId, approved);
             } finally {
                 decidingRef.current.delete(toolCallId);

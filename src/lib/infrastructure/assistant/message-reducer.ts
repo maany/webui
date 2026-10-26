@@ -122,6 +122,11 @@ export function applyRunnerUpdate(message: ChatMessage, update: RunnerUpdate): C
 /** Notice text added when the step limit ends a turn; the panel shows Continue after it. */
 export const STEP_LIMIT_NOTICE = 'Step limit reached. Press Continue to let Rucio bot keep working.';
 
+const APPROVED_OUTCOME_UNKNOWN: ToolError = {
+    error: 'aborted',
+    message: 'Approved, but the page closed before the result arrived. The change may have been applied, so check its state before retrying.',
+};
+
 const ABORTED: ToolError = { error: 'aborted', message: 'The turn was stopped before this tool finished.' };
 
 /** Closes open tool calls and adds the end-of-turn notice. */
@@ -130,9 +135,12 @@ export function finalizeAssistantMessage(
     status: 'completed' | 'stopped' | 'error' | 'step-limit',
     error?: string,
 ): ChatMessage {
+    const wasApproved = (toolCallId: string) =>
+        message.parts.some(part => part.type === 'approval' && part.toolCallId === toolCallId && part.decision === 'approved');
     const parts: MessagePart[] = message.parts.map(part =>
         part.type === 'tool-call' && (part.status === 'running' || part.status === 'awaiting-approval')
-            ? { ...part, status: 'error', error: ABORTED }
+            ? // An approved write still in flight may have landed, so it never reads as plainly stopped.
+              { ...part, status: 'error', error: part.status === 'running' && wasApproved(part.toolCallId) ? APPROVED_OUTCOME_UNKNOWN : ABORTED }
             : part,
     );
     if (status === 'step-limit') parts.push({ type: 'notice', level: 'warning', text: STEP_LIMIT_NOTICE });
@@ -162,11 +170,6 @@ export function addApprovalPart(
 ): ChatMessage {
     return { ...message, parts: [...message.parts, { type: 'approval', ...approval }] };
 }
-
-const APPROVED_OUTCOME_UNKNOWN: ToolError = {
-    error: 'aborted',
-    message: 'Approved, but the page closed before the result arrived. The change may have been applied, so check its state before retrying.',
-};
 
 /**
  * Used when a stored conversation is reopened: a tool call that was still waiting for approval becomes expired

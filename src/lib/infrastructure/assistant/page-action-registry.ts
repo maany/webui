@@ -62,6 +62,11 @@ export function createPageActionRegistry(): AssistantPageActionRegistryPort {
                 const notFound: ToolError = { error: 'not_found', message: `This page has no action named ${name}.` };
                 throw notFound;
             }
+            // Defense in depth: the page_action tool checks too, but the registry never applies a changing action.
+            if ((action.risk ?? 'read') !== 'read') {
+                const denied: ToolError = { error: 'denied_by_policy', message: 'This page action changes data and cannot run from Rucio bot yet.' };
+                throw denied;
+            }
             const parsed = action.schema.safeParse(args);
             if (!parsed.success) {
                 const invalid: ToolError = { error: 'invalid_args', message: z.prettifyError(parsed.error) };

@@ -44,6 +44,14 @@ describe('page action registry', () => {
         ]);
     });
 
+    it('refuses to invoke an action that is not read only, without applying it (m5)', async () => {
+        const registry = createPageActionRegistry();
+        const apply = jest.fn(async () => 'ok');
+        registry.register({ name: 'b.write', description: 'B', schema, apply, risk: 'write' });
+        await expect(registry.invoke('b.write', { dids: [] })).rejects.toMatchObject({ error: 'denied_by_policy' });
+        expect(apply).not.toHaveBeenCalled();
+    });
+
     it('throws ToolError shapes for unknown actions and bad args', async () => {
         const registry = createPageActionRegistry();
         registry.register({ name: 'rules.filter', description: 'Filter', schema, apply: async () => 'ok' });

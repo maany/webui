@@ -17,6 +17,7 @@ import { computeCost, type TokenUsage } from '@/lib/core/entity/assistant/usage'
 import { CONTEXT_OVERFLOW_ERROR, SESSION_EXPIRED_ERROR } from './runner-errors';
 import { formatUserTurn } from './system-prompt';
 import { maskSensitiveArgs } from './approvals';
+import { getTool } from './tool-registry';
 import { REJECTED_BY_USER, buildTanstackTools, createPolicyMiddleware, createToolFilterMiddleware, deniedByPolicy } from './tanstack-tools';
 import { isToolError, type RegisteredTool, type ToolExecutionContext } from './tool-types';
 
@@ -379,8 +380,11 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
         // Reads deps() again so tools loaded mid-turn by find_tools are offered on the next model call.
         let liveClient: ChatClient | null = null;
         const pinnedAsk = new Map(built.builtPolicy);
+        // Tools of the latest rebuild, so masking sees mid-turn tools without calling deps() again per tool call.
+        let latestTools = d.tools;
         const buildTools = () => {
             const fresh = deps();
+            latestTools = fresh.tools;
             const rebuilt = buildTanstackTools(fresh.tools, {
                 policyFor: name => fresh.policyFor(name),
                 makeToolContext: toolCallId => fresh.makeToolContext(toolCallId, input.turnId),
@@ -479,7 +483,10 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                             const args = chunk.input !== undefined ? chunk.input : parseToolContent(toolArgsText.get(chunk.toolCallId) || '{}');
                             const policy = built.builtPolicy.get(toolName) ?? d.policyFor(toolName);
                             // Execution keeps TanStack's own args; what is stored, shown and emitted never carries sensitive values.
-                            const sensitiveArgs = deps().tools.find(tool => tool.spec.name === toolName)?.spec.sensitiveArgs ?? [];
+                            const spec =
+                                [latestTools, d.tools].map(list => list.find(tool => tool.spec.name === toolName)).find(Boolean)?.spec ??
+                                getTool(toolName)?.spec;
+                            const sensitiveArgs = spec?.sensitiveArgs ?? [];
                             const shownArgs = maskSensitiveArgs(args, sensitiveArgs);
                             channel.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName, args: shownArgs, policy });
                             d.emit({

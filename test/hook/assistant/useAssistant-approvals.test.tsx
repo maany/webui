@@ -70,12 +70,16 @@ function setup(options: { toolName?: string; risk?: 'write' | 'high' } = {}) {
     const bus = createAssistantEventBus();
     const events: AssistantEvent[] = [];
     bus.subscribe(event => events.push(event));
+    let liveAllow: () => ReadonlySet<string> = () => new Set();
     const deps = (accountKey: string): AssistantControllerDeps => ({
         accountKey,
         repository: Promise.resolve({ repository, persistent: true }),
         resolveProvider: () => PROVIDER,
         visibleTools: () => [tool],
-        makePolicyFor: () => () => 'ask',
+        makePolicyFor: getAllow => {
+            liveAllow = getAllow;
+            return name => (getAllow().has(name) ? 'allow' : 'ask');
+        },
         toolContextExtras: () => ({}),
         pageContext: () => undefined,
         retention: () => ({ maxAgeDays: 30, maxTotalMB: 50, clearOnLogout: false }),
@@ -90,7 +94,18 @@ function setup(options: { toolName?: string; risk?: 'write' | 'high' } = {}) {
     const hook = renderHook(({ accountKey }: { accountKey: string }) => useAssistantController(deps(accountKey)), {
         initialProps: { accountKey: 'root@def' },
     });
-    return { hook, repository, resolveSpy, log, events, saveMessage, saveConversation, originalSaveMessage };
+    return {
+        hook,
+        repository,
+        resolveSpy,
+        log,
+        events,
+        allow: () => liveAllow(),
+        originalSaveConversation,
+        saveMessage,
+        saveConversation,
+        originalSaveMessage,
+    };
 }
 
 async function storedAssistantMessage(repository: InMemoryConversationRepository) {
@@ -115,6 +130,104 @@ afterEach(() => {
 });
 
 describe('useAssistantController approvals (phase 4 hardening)', () => {
+    it('keeps no conversation grant when the decision save fails (I1)', async () => {
+        const { hook, repository, resolveSpy, allow, originalSaveMessage } = setup();
+        const { sending } = await startTurn(hook);
+        let failed = false;
+        jest.spyOn(repository, 'saveMessage').mockImplementation(async message => {
+            if (!failed && message.parts.some(part => part.type === 'approval')) {
+                failed = true;
+                throw new Error('quota exceeded');
+            }
+            await originalSaveMessage(message);
+        });
+        await act(async () => {
+            await hook.result.current.resolveApproval('call-1', 'approved', 'conversation');
+            await sending;
+        });
+        expect(resolveSpy).not.toHaveBeenCalledWith('call-1', true);
+        expect(hook.result.current.conversation?.conversationAllow).toEqual([]);
+        expect(allow().has('do_write')).toBe(false);
+        const [stored] = await repository.listConversations('root@def');
+        expect(stored.conversationAllow).toEqual([]);
+    });
+
+    it('keeps no conversation grant when only the conversation save fails (I1)', async () => {
+        const { hook, repository, resolveSpy, allow, originalSaveConversation } = setup();
+        const { sending } = await startTurn(hook);
+        let failed = false;
+        jest.spyOn(repository, 'saveConversation').mockImplementation(async conversation => {
+            if (!failed && conversation.conversationAllow.length > 0) {
+                failed = true;
+                throw new Error('quota exceeded');
+            }
+            await originalSaveConversation(conversation);
+        });
+        await act(async () => {
+            await hook.result.current.resolveApproval('call-1', 'approved', 'conversation');
+            await sending;
+        });
+        expect(resolveSpy).not.toHaveBeenCalledWith('call-1', true);
+        expect(hook.result.current.conversation?.conversationAllow).toEqual([]);
+        expect(allow().has('do_write')).toBe(false);
+    });
+
+    it('grants the conversation scope only once the runner resumes (I1)', async () => {
+        const { hook, allow, log } = setup();
+        const { sending } = await startTurn(hook);
+        expect(allow().has('do_write')).toBe(false);
+        await act(async () => {
+            await hook.result.current.resolveApproval('call-1', 'approved', 'conversation');
+            await sending;
+        });
+        expect(allow().has('do_write')).toBe(true);
+        expect(log.indexOf('saved-conversation:do_write')).toBeLessThan(log.indexOf('runner.resolveApproval:true'));
+    });
+
+    it('emits an approval event only after the decision is persisted and live (m7)', async () => {
+        const { hook, repository, events, originalSaveMessage } = setup();
+        const { sending } = await startTurn(hook);
+        let release: () => void = () => undefined;
+        let held = false;
+        jest.spyOn(repository, 'saveMessage').mockImplementation(async message => {
+            if (!held && message.parts.some(part => part.type === 'approval')) {
+                held = true;
+                await new Promise<void>(resolve => (release = resolve));
+            }
+            await originalSaveMessage(message);
+        });
+        let deciding!: Promise<void>;
+        act(() => {
+            deciding = hook.result.current.resolveApproval('call-1', 'approved', 'once') as Promise<void>;
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals).toEqual([]));
+        expect(events.some(event => event.type === 'tool-approval')).toBe(false);
+        await act(async () => {
+            release();
+            await deciding;
+            await sending;
+        });
+        expect(events.filter(event => event.type === 'tool-approval')).toEqual([expect.objectContaining({ decision: 'approved' })]);
+    });
+
+    it('emits rejected, not approved, when the save failed (m7)', async () => {
+        const { hook, repository, events, originalSaveMessage } = setup();
+        const { sending } = await startTurn(hook);
+        let failed = false;
+        jest.spyOn(repository, 'saveMessage').mockImplementation(async message => {
+            if (!failed && message.parts.some(part => part.type === 'approval')) {
+                failed = true;
+                throw new Error('quota exceeded');
+            }
+            await originalSaveMessage(message);
+        });
+        await act(async () => {
+            await hook.result.current.resolveApproval('call-1', 'approved', 'once');
+            await sending;
+        });
+        expect(events.filter(event => event.type === 'tool-approval')).toEqual([expect.objectContaining({ decision: 'rejected' })]);
+    });
+
     it('ignores an Approve that arrives after Stop and never resumes the runner (Review Focus 5, P2)', async () => {
         const { hook, repository, resolveSpy } = setup();
         const { sending } = await startTurn(hook);
