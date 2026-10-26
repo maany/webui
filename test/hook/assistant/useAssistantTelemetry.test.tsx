@@ -126,7 +126,7 @@ describe('useAssistantTelemetry', () => {
     });
 
     it('stops exporting to the operator when the user opts out', async () => {
-        const { rerender } = renderHook((props: UseAssistantTelemetryInput) => useAssistantTelemetry(props), {
+        const { result, rerender } = renderHook((props: UseAssistantTelemetryInput) => useAssistantTelemetry(props), {
             initialProps: {
                 config: telemetryConfig({ operatorSink: true }),
                 settings: settingsWith({ enabled: false, shareWithOperator: true }),
@@ -142,6 +142,9 @@ describe('useAssistantTelemetry', () => {
         expect(shutdown).toHaveBeenCalledTimes(1);
         await new Promise(resolve => setTimeout(resolve, 0));
         expect(startAssistantTelemetry).toHaveBeenCalledTimes(1);
+        act(() => result.current(started));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(handle).not.toHaveBeenCalled();
     });
 
     it('reads content level and secrets live without restarting', async () => {
@@ -175,12 +178,16 @@ describe('useAssistantTelemetry', () => {
     });
 
     it('stops exporting when the operator disallows user sinks', async () => {
-        const { rerender } = renderHook((props: UseAssistantTelemetryInput) => useAssistantTelemetry(props), {
+        const { result, rerender } = renderHook((props: UseAssistantTelemetryInput) => useAssistantTelemetry(props), {
             initialProps: { config: telemetryConfig(), settings: settingsWith(), accountKey: 'root@def' },
         });
         await waitFor(() => expect(startAssistantTelemetry).toHaveBeenCalledTimes(1));
         rerender({ config: telemetryConfig({ allowUserSinks: false }), settings: settingsWith(), accountKey: 'root@def' });
         expect(shutdown).toHaveBeenCalledTimes(1);
+        act(() => result.current(started));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(handle).not.toHaveBeenCalled();
+        expect(startAssistantTelemetry).toHaveBeenCalledTimes(1);
     });
 
     it('reads sensitive argument names from the tool registry', async () => {
@@ -235,7 +242,7 @@ describe('useAssistantTelemetry', () => {
             expect(shutdown).toHaveBeenCalledTimes(1);
         });
 
-        it('starts only the latest target when the sink changes before the chunk resolves, and replays queued events in order to it', async () => {
+        it('starts only the latest target when the sink changes before the chunk resolves, replaying only events queued for it', async () => {
             const { result, rerender } = renderHook((props: UseAssistantTelemetryInput) => useAssistantTelemetry(props), {
                 initialProps: { config: telemetryConfig(), settings: settingsWith(), accountKey: 'root@def' },
             });
@@ -250,8 +257,27 @@ describe('useAssistantTelemetry', () => {
             await new Promise(resolve => setTimeout(resolve, 0));
             expect(startAssistantTelemetry).toHaveBeenCalledTimes(1);
             expect(lastOptions().userSink?.url).toBe('https://otel.example.org/v1/traces');
-            expect(handle.mock.calls.map(call => (call[0] as { at: number }).at)).toEqual([1, 2]);
+            // The queue belongs to its sink set: events queued for the earlier sink are not replayed to the new one.
+            expect(handle.mock.calls.map(call => (call[0] as { at: number }).at)).toEqual([2]);
             expect(shutdown).not.toHaveBeenCalled();
+        });
+
+        it('never replays events queued before the user opted in to the operator sink', async () => {
+            const { result, rerender } = renderHook((props: UseAssistantTelemetryInput) => useAssistantTelemetry(props), {
+                initialProps: { config: telemetryConfig({ operatorSink: true }), settings: settingsWith(), accountKey: 'root@def' },
+            });
+            act(() => result.current(startedAt(1)));
+            rerender({
+                config: telemetryConfig({ operatorSink: true }),
+                settings: settingsWith({ shareWithOperator: true }),
+                accountKey: 'root@def',
+            });
+            act(() => result.current(startedAt(2)));
+            await waitFor(() => expect(startAssistantTelemetry).toHaveBeenCalled());
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(startAssistantTelemetry).toHaveBeenCalledTimes(1);
+            expect(lastOptions().operatorSink).toBeDefined();
+            expect(handle.mock.calls.map(call => (call[0] as { at: number }).at)).toEqual([2]);
         });
 
         it('drops queued events when the sink is removed before the chunk resolves', async () => {
@@ -266,7 +292,7 @@ describe('useAssistantTelemetry', () => {
             expect(handle).not.toHaveBeenCalled();
         });
 
-        it('keeps events sent between a restart shutdown and the new start', async () => {
+        it('queues events sent after a restart until the new instance starts', async () => {
             const { result, rerender } = renderHook((props: UseAssistantTelemetryInput) => useAssistantTelemetry(props), {
                 initialProps: { config: telemetryConfig(), settings: settingsWith(), accountKey: 'root@def' },
             });

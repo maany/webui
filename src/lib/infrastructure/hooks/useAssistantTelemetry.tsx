@@ -80,8 +80,9 @@ export function useAssistantTelemetry({ config, settings, accountKey }: UseAssis
             return;
         }
         let cancelled = false;
-        // Kept across a restart so events sent between shutdown and the new start are not lost.
-        pendingRef.current ??= [];
+        // A fresh queue per sink set: events produced before a sink was added (for example before the
+        // user opted in to the operator sink) must never be replayed to it.
+        pendingRef.current = [];
         const current = targetsRef.current ?? {};
         import('@/lib/infrastructure/assistant/telemetry')
             .then(({ startAssistantTelemetry }) => {
