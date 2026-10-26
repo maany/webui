@@ -1,23 +1,15 @@
 import 'reflect-metadata';
 import { NextRequest, NextResponse } from 'next/server';
-import { z } from 'zod';
 import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { ListRulesPendingApprovalControllerParameters } from '@/lib/infrastructure/controller/list-rules-pending-approval-controller';
 import { ListRulesPendingApprovalRequest } from '@/lib/core/usecase-models/list-rules-pending-approval-usecase-models';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
-
-const FiltersSchema = z.object({
-    scope: z.string().optional(),
-    name: z.string().optional(),
-    updated_after: z.iso.datetime().optional(),
-    updated_before: z.iso.datetime().optional(),
-    account: z.string().optional(),
-    activity: z.string().optional(),
-});
+import { ListRulesPendingApprovalSchema } from '@/lib/infrastructure/api-schemas/list-rules-pending-approval';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/list-rules-pending-approval
@@ -32,9 +24,7 @@ async function getHandler(request: NextRequest) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        const params = parseQueryParams(request);
-
-        const validationResult = FiltersSchema.safeParse(params);
+        const validationResult = parseQuery(ListRulesPendingApprovalSchema, new URL(request.url).searchParams);
         if (!validationResult.success) {
             return NextResponse.json(
                 {

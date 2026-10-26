@@ -1,6 +1,5 @@
 import 'reflect-metadata';
 import { NextRequest, NextResponse } from 'next/server';
-import { z } from 'zod';
 import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
@@ -8,20 +7,7 @@ import { UpdateRuleControllerParameters } from '@/lib/infrastructure/controller/
 import { UpdateRuleRequest } from '@/lib/core/usecase-models/update-rule-usecase-models';
 import { executeAuthenticatedController, parseRequestBody } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
-
-const UpdateRuleSchema = z.object({
-    ruleId: z.string().min(1),
-    options: z
-        .object({
-            lifetime: z.number().nullable().optional(),
-            approve: z.boolean().optional(),
-            comment: z.string().optional(),
-            priority: z.number().optional(),
-        })
-        .refine(obj => Object.keys(obj).length > 0, {
-            message: 'At least one update option must be provided',
-        }),
-});
+import { UpdateRuleSchema } from '@/lib/infrastructure/api-schemas/update-rule';
 
 /**
  * PUT /api/feature/update-rule

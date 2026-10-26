@@ -1,6 +1,5 @@
 import 'reflect-metadata';
 import { NextRequest, NextResponse } from 'next/server';
-import { z } from 'zod';
 import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
@@ -9,27 +8,7 @@ import { CreateRuleRequest } from '@/lib/core/usecase-models/create-rule-usecase
 import { executeAuthenticatedController, parseRequestBody } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
-
-const CreateRuleSchema = z.object({
-    dids: z
-        .array(
-            z.object({
-                scope: z.string().min(1),
-                name: z.string().min(1),
-            }),
-        )
-        .nonempty(),
-    copies: z.number().min(1),
-    rse_expression: z.string().min(1),
-    grouping: z.enum(['ALL', 'DATASET', 'NONE']).optional(),
-    lifetime_days: z.number().int().positive().optional(),
-    notify: z.boolean().optional(),
-    comments: z.string().optional(),
-    ask_approval: z.boolean().optional(),
-    asynchronous: z.boolean().optional(),
-    sample: z.boolean().optional(),
-    sample_file_count: z.number().int().positive().optional(),
-});
+import { CreateRuleSchema } from '@/lib/infrastructure/api-schemas/create-rule';
 
 /**
  * POST /api/feature/create-rule
