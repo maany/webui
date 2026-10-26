@@ -28,6 +28,8 @@ function setup(
     const fake = fakeText({ tokensPerSecond: options.tokensPerSecond });
     fake.setResponses(script);
     const controller = new AbortController();
+    let markSlowToolStarted: () => void = () => undefined;
+    const slowToolStarted = new Promise<void>(resolve => (markSlowToolStarted = resolve));
     const tools: RegisteredTool<any>[] = [
         makeTool('read_echo', 'read', z.object({ text: z.string() }), async args => {
             executed.push(`read_echo:${args.text}`);
@@ -39,6 +41,7 @@ function setup(
             z.object({}),
             (_args, ctx) =>
                 new Promise((resolve, reject) => {
+                    markSlowToolStarted();
                     const timer = setTimeout(() => resolve({ ok: true }), options.slowToolMs ?? 5_000);
                     ctx.signal.addEventListener('abort', () => {
                         clearTimeout(timer);
@@ -82,7 +85,7 @@ function setup(
     );
     const run = (history: ChatMessage[] = [], signal: AbortSignal = controller.signal) =>
         runner.run({ conversationId: 'conv-1', turnId: 'turn-1', history, userMessage: makeUserMessage('hello'), signal });
-    return { runner, run, controller, executed, events, fake, policies };
+    return { runner, run, controller, executed, events, fake, policies, slowToolStarted };
 }
 
 const finished = (updates: RunnerUpdate[]) => updates[updates.length - 1];
@@ -191,8 +194,9 @@ describe('createAgentRunner', () => {
     });
 
     it('aborts an in-flight tool on stop', async () => {
-        const { run, controller } = setup([{ toolCalls: [{ name: 'slow_read', input: {} }] }, { text: 'never' }]);
-        setTimeout(() => controller.abort(), 80);
+        const { run, controller, slowToolStarted } = setup([{ toolCalls: [{ name: 'slow_read', input: {} }] }, { text: 'never' }]);
+        // Stop only once the tool is really running, so load cannot reorder the abort and the stream.
+        void slowToolStarted.then(() => controller.abort());
         const updates = await collectUpdates(run());
         expect(updates.find(update => update.type === 'tool-result')).toMatchObject({ error: { error: 'aborted' } });
         expect(finished(updates)).toEqual({ type: 'finished', status: 'stopped' });
