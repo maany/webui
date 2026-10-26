@@ -6,7 +6,7 @@ import { HiOutlineCog, HiPlus, HiSparkles, HiX } from 'react-icons/hi';
 import type { ChatMessage, Conversation } from '@/lib/core/entity/assistant/conversation';
 import type { PageContext } from '@/lib/core/entity/assistant/page-context';
 import { STEP_LIMIT_NOTICE } from '@/lib/infrastructure/assistant/message-reducer';
-import { clampPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from '@/lib/infrastructure/assistant/panel-storage';
+import { clampPanelWidth, panelMaxWidth, PANEL_MIN_WIDTH } from '@/lib/infrastructure/assistant/panel-storage';
 import { cn } from '@/component-library/utils';
 import { AssistantMessage } from './AssistantMessage';
 import { Composer } from './Composer';
@@ -150,7 +150,7 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
                     aria-orientation="vertical"
                     aria-label="Resize Rucio bot panel"
                     aria-valuemin={PANEL_MIN_WIDTH}
-                    aria-valuemax={PANEL_MAX_WIDTH}
+                    aria-valuemax={panelMaxWidth(window.innerWidth)}
                     aria-valuenow={width}
                     // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
                     tabIndex={0}

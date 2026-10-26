@@ -13,18 +13,24 @@ function isBrowser(): boolean {
     return typeof window !== 'undefined';
 }
 
-export function clampPanelWidth(width: number, viewportWidth?: number): number {
-    const max = viewportWidth ? Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, viewportWidth - 240)) : PANEL_MAX_WIDTH;
-    return Math.round(Math.min(max, Math.max(PANEL_MIN_WIDTH, width)));
+/** Widest the docked panel may be: 45% of the viewport, within the absolute bounds. */
+export function panelMaxWidth(viewportWidth?: number): number {
+    if (!viewportWidth) return PANEL_MAX_WIDTH;
+    return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, Math.floor(0.45 * viewportWidth)));
 }
 
-export function loadPanelWidth(): number {
+export function clampPanelWidth(width: number, viewportWidth?: number): number {
+    return Math.round(Math.min(panelMaxWidth(viewportWidth), Math.max(PANEL_MIN_WIDTH, width)));
+}
+
+/** The stored width, clamped to the viewport when one is given. */
+export function loadPanelWidth(viewportWidth?: number): number {
     if (!isBrowser()) return PANEL_DEFAULT_WIDTH;
     try {
         const stored = localStorage.getItem(STORAGE_KEY);
-        if (!stored) return PANEL_DEFAULT_WIDTH;
+        if (!stored) return clampPanelWidth(PANEL_DEFAULT_WIDTH, viewportWidth);
         const parsed = PanelStateSchema.safeParse(JSON.parse(stored));
-        return parsed.success ? clampPanelWidth(parsed.data.width) : PANEL_DEFAULT_WIDTH;
+        return clampPanelWidth(parsed.success ? parsed.data.width : PANEL_DEFAULT_WIDTH, viewportWidth);
     } catch {
         return PANEL_DEFAULT_WIDTH;
     }

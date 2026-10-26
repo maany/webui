@@ -5,7 +5,7 @@ import { useAssistant } from '@/lib/infrastructure/hooks/useAssistant';
 import { ASSISTANT_INERT_TARGET_ID, ASSISTANT_MOBILE_QUERY, useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { useAssistantSettings } from '@/lib/infrastructure/hooks/useAssistantSettings';
 import { useVisualViewportInset } from '@/lib/infrastructure/hooks/useVisualViewportInset';
-import { loadPanelWidth, savePanelWidth } from '@/lib/infrastructure/assistant/panel-storage';
+import { clampPanelWidth, loadPanelWidth, savePanelWidth } from '@/lib/infrastructure/assistant/panel-storage';
 import { AssistantPanelView } from './AssistantPanelView';
 
 const OFFSET_PROPERTY = '--rucio-assistant-offset';
@@ -29,9 +29,18 @@ export function AssistantPanel() {
     const shell = useAssistantPanel();
     const { settings } = useAssistantSettings();
     const isMobile = useIsMobile();
-    const [width, setWidth] = useState(loadPanelWidth);
+    const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+    // The stored width is the preference; what is shown never exceeds 45% of the viewport.
+    const [preferredWidth, setPreferredWidth] = useState(() => loadPanelWidth());
+    const width = clampPanelWidth(preferredWidth, viewportWidth);
     const keyboardInset = useVisualViewportInset(isMobile && shell.panelState === 'open');
     const open = shell.panelState === 'open';
+
+    useEffect(() => {
+        const onResize = () => setViewportWidth(window.innerWidth);
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
+    }, []);
 
     // Docked on desktop: the page and header shrink by the panel width (Layout reads the variable).
     useEffect(() => {
@@ -60,7 +69,7 @@ export function AssistantPanel() {
             isMobile={isMobile}
             width={width}
             onResize={next => {
-                setWidth(next);
+                setPreferredWidth(next);
                 savePanelWidth(next);
             }}
             status={assistant.status}

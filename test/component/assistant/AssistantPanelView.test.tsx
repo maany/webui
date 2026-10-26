@@ -211,7 +211,8 @@ describe('AssistantPanelView', () => {
         render(<AssistantPanelView {...props()} />);
         const separator = screen.getByRole('separator', { name: 'Resize Rucio bot panel' });
         expect(separator).toHaveAttribute('aria-valuemin', '320');
-        expect(separator).toHaveAttribute('aria-valuemax', '720');
+        // The jsdom window is 1024 wide: 45% of it, floored.
+        expect(separator).toHaveAttribute('aria-valuemax', '460');
         expect(separator).toHaveAttribute('aria-valuenow', '420');
     });
 
