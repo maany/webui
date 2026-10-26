@@ -71,7 +71,7 @@ describe('assistant settings storage', () => {
         localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...withProviders(), toolPolicies: { create_rule: 'always' } }));
         expect(loadAssistantSettings()).toEqual({ ...withProviders(), toolPolicies: {} });
         localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...withProviders(), providers: [{ ...claude, kind: 'gemini' }] }));
-        expect(loadAssistantSettings()).toEqual({ ...withProviders(), providers: [] });
+        expect(loadAssistantSettings()).toEqual({ ...withProviders(), providers: [], activeProviderId: 'operator' });
         localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify('just a string'));
         expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
     });
@@ -204,6 +204,64 @@ describe('assistant settings storage', () => {
         const loaded = loadAssistantSettings();
         expect(loaded.providers.map(provider => provider.id)).toEqual(['p-claude', 'p-ollama']);
         expect(loaded.retention).toEqual(getDefaultAssistantSettings().retention);
+    });
+
+    describe('salvage refinements', () => {
+        const broken = { id: 'p-bad', kind: 'nope', label: 'x', model: 'm' };
+        const staleRetention = { maxAgeDays: 99999, maxTotalMB: 50, clearOnLogout: false };
+        const store = (value: unknown) => localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify(value));
+
+        it('falls back to the operator when the active provider was dropped', () => {
+            store({ ...withProviders(), providers: [broken, ollama], activeProviderId: 'p-bad', retention: staleRetention });
+            expect(loadAssistantSettings().activeProviderId).toBe('operator');
+        });
+
+        it('falls back to the first remaining provider when there is no operator model', () => {
+            store({ ...withProviders(), providers: [broken, ollama, claude], activeProviderId: 'p-bad', retention: staleRetention });
+            expect(loadAssistantSettings({ operatorAvailable: false }).activeProviderId).toBe('p-ollama');
+        });
+
+        it('falls back to the default when no operator model and no provider remain', () => {
+            store({ ...withProviders(), providers: [broken], activeProviderId: 'p-bad', retention: staleRetention });
+            expect(loadAssistantSettings({ operatorAvailable: false }).activeProviderId).toBe('operator');
+        });
+
+        it('keeps an active provider that survived the salvage', () => {
+            store({ ...withProviders(), providers: [broken, ollama, claude], activeProviderId: 'p-claude', retention: staleRetention });
+            expect(loadAssistantSettings({ operatorAvailable: false }).activeProviderId).toBe('p-claude');
+        });
+
+        it('drops only the invalid user skills', () => {
+            const good = { name: 'triage', description: 'd', body: 'b', importedAt: '2026-10-25T10:00:00.000Z' };
+            store({
+                ...withProviders(),
+                skills: { enabled: { triage: true }, user: [good, { name: '', description: 'd', body: 'b', importedAt: 'x' }, { name: 'half' }] },
+            });
+            const loaded = loadAssistantSettings();
+            expect(loaded.skills.user).toEqual([good]);
+            expect(loaded.skills.enabled).toEqual({ triage: true });
+            expect(loaded.providers.map(provider => provider.id)).toEqual(['p-claude', 'p-ollama']);
+        });
+
+        it('keeps valid skill toggles when some are invalid', () => {
+            store({ ...withProviders(), skills: { enabled: { a: true, b: 'yes' }, user: [] } });
+            expect(loadAssistantSettings().skills.enabled).toEqual({ a: true });
+        });
+
+        it('removes session-stored keys of dropped providers', () => {
+            store({
+                ...withProviders({ keyStorage: 'session' }),
+                providers: [{ ...claude, apiKey: undefined }, broken],
+                retention: staleRetention,
+            });
+            sessionStorage.setItem(
+                ASSISTANT_SESSION_KEYS_KEY,
+                JSON.stringify({ 'p-claude': 'sk-ant-secret', 'p-bad': 'sk-orphan', gone: 'sk-gone' }),
+            );
+            const loaded = loadAssistantSettings();
+            expect(loaded.providers[0].apiKey).toBe('sk-ant-secret');
+            expect(JSON.parse(sessionStorage.getItem(ASSISTANT_SESSION_KEYS_KEY) ?? '{}')).toEqual({ 'p-claude': 'sk-ant-secret' });
+        });
     });
 
     it('still resets everything on a version mismatch', () => {

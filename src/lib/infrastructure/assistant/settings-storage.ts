@@ -99,12 +99,19 @@ function readSessionKeys(): Record<string, string> {
     }
 }
 
+export interface LoadAssistantSettingsOptions {
+    /** Whether the operator offers a default model. Decides the fallback when the active provider was dropped. */
+    operatorAvailable?: boolean;
+}
+
 /**
  * Parses each top-level section on its own and keeps the valid ones, so one bad field
  * (for example a hand-edited retention value) does not reset providers and keys.
- * Providers that fail individually are dropped.
+ * Providers and user skills that fail individually are dropped. An active provider that
+ * is no longer there falls back like ProvidersTab does on removal: the operator model if
+ * it is available, else the first remaining provider, else the default.
  */
-function salvageSettings(value: unknown): AssistantSettings | undefined {
+function salvageSettings(value: unknown, options: LoadAssistantSettingsOptions): AssistantSettings | undefined {
     if (typeof value !== 'object' || value === null || (value as { version?: unknown }).version !== STORAGE_VERSION) return undefined;
     const stored = value as Record<string, unknown>;
     const result: Record<string, unknown> = { ...getDefaultAssistantSettings() };
@@ -119,24 +126,50 @@ function salvageSettings(value: unknown): AssistantSettings | undefined {
             }
             continue;
         }
+        if (key === 'skills') {
+            result.skills = salvageSkills(stored.skills);
+            continue;
+        }
         const section = SettingsObjectSchema.shape[key].safeParse(stored[key]);
         if (section.success) result[key] = section.data;
+    }
+    const providers = result.providers as ProviderConfig[];
+    const active = result.activeProviderId;
+    if (active !== 'operator' && !providers.some(provider => provider.id === active)) {
+        result.activeProviderId = options.operatorAvailable === false ? providers[0]?.id ?? 'operator' : 'operator';
     }
     return result as unknown as AssistantSettings;
 }
 
+function salvageSkills(value: unknown): AssistantSettings['skills'] {
+    const skills: AssistantSettings['skills'] = { enabled: {}, user: [] };
+    if (typeof value !== 'object' || value === null) return skills;
+    const { enabled, user } = value as { enabled?: unknown; user?: unknown };
+    if (typeof enabled === 'object' && enabled !== null && !Array.isArray(enabled)) {
+        for (const [name, on] of Object.entries(enabled)) if (typeof on === 'boolean') skills.enabled[name] = on;
+    }
+    if (Array.isArray(user)) {
+        skills.user = user.flatMap(item => {
+            const skill = UserSkillSchema.safeParse(item);
+            return skill.success ? [skill.data] : [];
+        });
+    }
+    return skills;
+}
+
 /** zod-validated; salvages valid sections of a partly invalid entry, resets to the defaults on a missing entry, version mismatch or invalid JSON. */
-export function loadAssistantSettings(): AssistantSettings {
+export function loadAssistantSettings(options: LoadAssistantSettingsOptions = {}): AssistantSettings {
     if (!isBrowser()) return getDefaultAssistantSettings();
     try {
         const raw = localStorage.getItem(ASSISTANT_SETTINGS_KEY);
         if (!raw) return getDefaultAssistantSettings();
         const json: unknown = JSON.parse(raw);
         const parsed = AssistantSettingsSchema.safeParse(json);
-        const settings = parsed.success ? parsed.data : salvageSettings(json);
+        const settings = parsed.success ? parsed.data : salvageSettings(json, options);
         if (!settings) return getDefaultAssistantSettings();
         if (settings.keyStorage !== 'session') return settings;
         const keys = readSessionKeys();
+        if (!parsed.success) dropOrphanedSessionKeys(keys, settings.providers);
         return {
             ...settings,
             providers: settings.providers.map(provider =>
@@ -146,6 +179,18 @@ export function loadAssistantSettings(): AssistantSettings {
     } catch {
         return getDefaultAssistantSettings();
     }
+}
+
+/** After a salvage dropped providers, their keys must not linger in sessionStorage. */
+function dropOrphanedSessionKeys(keys: Record<string, string>, providers: ProviderConfig[]): void {
+    const kept = Object.fromEntries(Object.entries(keys).filter(([id]) => providers.some(provider => provider.id === id)));
+    if (Object.keys(kept).length === Object.keys(keys).length) return;
+    try {
+        sessionStorage.setItem(ASSISTANT_SESSION_KEYS_KEY, JSON.stringify(kept));
+    } catch {
+        // Best effort: the orphaned keys are never read again.
+    }
+    for (const id of Object.keys(keys)) if (!(id in kept)) delete keys[id];
 }
 
 function withoutKey(provider: ProviderConfig): ProviderConfig {
