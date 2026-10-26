@@ -100,6 +100,21 @@ describe.each(repositories)('%s', (_name, open) => {
         expect((await repository.listConversations('root@def')).map(c => c.id)).toEqual(['new']);
     });
 
+    it('applies the size budget per account and leaves other accounts alone', async () => {
+        const big = 'x'.repeat(600 * 1024);
+        const policy = { maxAgeDays: 0, maxTotalMB: 1, clearOnLogout: false };
+        await repository.saveConversation(makeConversation('a1', 'a@def', '2026-10-20T00:00:00.000Z'));
+        await repository.saveConversation(makeConversation('a2', 'a@def', '2026-10-21T00:00:00.000Z'));
+        await repository.saveConversation(makeConversation('b1', 'b@def', '2026-10-01T00:00:00.000Z'));
+        await repository.saveMessage(message('ma1', 'a1', '2026-10-20T00:00:01.000Z', big));
+        await repository.saveMessage(message('ma2', 'a2', '2026-10-21T00:00:01.000Z', big));
+        await repository.saveMessage(message('mb1', 'b1', '2026-10-01T00:00:01.000Z', 'small'));
+        const deleted = await repository.enforceRetention(policy, new Date('2026-10-25T00:00:00.000Z'));
+        expect(deleted).toEqual(['a1']);
+        expect((await repository.listConversations('b@def')).map(c => c.id)).toEqual(['b1']);
+        expect((await repository.listConversations('a@def')).map(c => c.id)).toEqual(['a2']);
+    });
+
     it('never evicts a protected conversation, even when it is past the age limit', async () => {
         await repository.saveConversation(makeConversation('open', 'root@def', '2026-08-01T00:00:00.000Z'));
         await repository.saveConversation(makeConversation('old', 'root@def', '2026-08-02T00:00:00.000Z'));

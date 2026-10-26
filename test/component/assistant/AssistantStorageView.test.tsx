@@ -113,9 +113,9 @@ describe('AssistantStorageView', () => {
             render(<AssistantStorageView {...p} />);
             edit('Delete chats older than (days)', '99999');
             expect(p.onRetentionChange).toHaveBeenLastCalledWith({ maxAgeDays: 3650, maxTotalMB: 50, clearOnLogout: false });
-            edit('Keep at most (MB)', '0', 'enter');
+            edit('Maximum storage per account (MB)', '0', 'enter');
             expect(p.onRetentionChange).toHaveBeenLastCalledWith({ maxAgeDays: 30, maxTotalMB: 1, clearOnLogout: false });
-            edit('Keep at most (MB)', '5000');
+            edit('Maximum storage per account (MB)', '5000');
             expect(p.onRetentionChange).toHaveBeenLastCalledWith({ maxAgeDays: 30, maxTotalMB: 1024, clearOnLogout: false });
         });
 

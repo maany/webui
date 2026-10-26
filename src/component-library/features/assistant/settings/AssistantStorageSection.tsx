@@ -64,7 +64,7 @@ function RetentionNumberInput({
     };
     return (
         <label className="flex items-center gap-2 text-sm">
-            <span className="w-48">{label}</span>
+            <span className="w-64">{label}</span>
             <input
                 type="number"
                 min={min}
@@ -189,7 +189,7 @@ export function AssistantStorageView(props: AssistantStorageViewProps) {
                     onCommit={maxAgeDays => props.onRetentionChange({ ...retention, maxAgeDays })}
                 />
                 <RetentionNumberInput
-                    label="Keep at most (MB)"
+                    label="Maximum storage per account (MB)"
                     value={retention.maxTotalMB}
                     min={RETENTION_LIMITS.maxTotalMB.min}
                     max={RETENTION_LIMITS.maxTotalMB.max}

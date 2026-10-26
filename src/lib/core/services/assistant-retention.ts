@@ -4,6 +4,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface RetentionCandidate {
     id: string;
+    accountKey: string;
     updatedAt: string; // ISO
     bytes: number;
 }
@@ -34,7 +35,7 @@ export function jsonBytes(value: unknown): number {
 
 /**
  * Conversations to delete: everything older than maxAgeDays, then the oldest
- * remaining ones until the total fits in maxTotalMB. Protected ids (the open
+ * remaining ones of each account until that account fits in maxTotalMB. Protected ids (the open
  * conversation) are never evicted but still count toward the total. A limit of 0 disables it.
  */
 export function selectConversationsToEvict(
@@ -53,13 +54,22 @@ export function selectConversationsToEvict(
     }
     if (policy.maxTotalMB > 0) {
         const limit = policy.maxTotalMB * 1024 * 1024;
-        const remaining = candidates.filter(candidate => !evicted.has(candidate.id)).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
-        let total = remaining.reduce((sum, candidate) => sum + candidate.bytes, 0);
-        for (const candidate of remaining) {
-            if (total <= limit) break;
-            if (isProtected.has(candidate.id)) continue;
-            evicted.add(candidate.id);
-            total -= candidate.bytes;
+        const byAccount = new Map<string, RetentionCandidate[]>();
+        for (const candidate of candidates) {
+            if (evicted.has(candidate.id)) continue;
+            const group = byAccount.get(candidate.accountKey);
+            if (group) group.push(candidate);
+            else byAccount.set(candidate.accountKey, [candidate]);
+        }
+        for (const group of byAccount.values()) {
+            group.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+            let total = group.reduce((sum, candidate) => sum + candidate.bytes, 0);
+            for (const candidate of group) {
+                if (total <= limit) break;
+                if (isProtected.has(candidate.id)) continue;
+                evicted.add(candidate.id);
+                total -= candidate.bytes;
+            }
         }
     }
     return Array.from(evicted);

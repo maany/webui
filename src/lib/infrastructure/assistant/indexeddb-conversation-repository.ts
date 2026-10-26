@@ -239,6 +239,7 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
         const candidates = await Promise.all(
             conversations.map(async conversation => ({
                 id: conversation.id,
+                accountKey: conversation.accountKey,
                 updatedAt: conversation.updatedAt,
                 bytes: await this.conversationBytes(conversation),
             })),

@@ -11,8 +11,8 @@ describe('selectConversationsToEvict', () => {
     it('evicts conversations older than maxAgeDays', () => {
         const ids = selectConversationsToEvict(
             [
-                { id: 'old', updatedAt: '2026-09-01T00:00:00.000Z', bytes: 10 },
-                { id: 'new', updatedAt: '2026-10-20T00:00:00.000Z', bytes: 10 },
+                { id: 'old', accountKey: 'root@def', updatedAt: '2026-09-01T00:00:00.000Z', bytes: 10 },
+                { id: 'new', accountKey: 'root@def', updatedAt: '2026-10-20T00:00:00.000Z', bytes: 10 },
             ],
             { maxAgeDays: 30, maxTotalMB: 50, clearOnLogout: false },
             now,
@@ -23,9 +23,9 @@ describe('selectConversationsToEvict', () => {
     it('evicts the oldest until the total fits in maxTotalMB', () => {
         const ids = selectConversationsToEvict(
             [
-                { id: 'a', updatedAt: '2026-10-20T00:00:00.000Z', bytes: 2 * MB },
-                { id: 'b', updatedAt: '2026-10-21T00:00:00.000Z', bytes: 2 * MB },
-                { id: 'c', updatedAt: '2026-10-22T00:00:00.000Z', bytes: 2 * MB },
+                { id: 'a', accountKey: 'root@def', updatedAt: '2026-10-20T00:00:00.000Z', bytes: 2 * MB },
+                { id: 'b', accountKey: 'root@def', updatedAt: '2026-10-21T00:00:00.000Z', bytes: 2 * MB },
+                { id: 'c', accountKey: 'root@def', updatedAt: '2026-10-22T00:00:00.000Z', bytes: 2 * MB },
             ],
             { maxAgeDays: 30, maxTotalMB: 4, clearOnLogout: false },
             now,
@@ -33,12 +33,41 @@ describe('selectConversationsToEvict', () => {
         expect(ids).toEqual(['a']);
     });
 
+    it('applies the size budget to each account separately', () => {
+        const ids = selectConversationsToEvict(
+            [
+                { id: 'a1', accountKey: 'a@def', updatedAt: '2026-10-20T00:00:00.000Z', bytes: 2 * MB },
+                { id: 'a2', accountKey: 'a@def', updatedAt: '2026-10-21T00:00:00.000Z', bytes: 2 * MB },
+                { id: 'a3', accountKey: 'a@def', updatedAt: '2026-10-22T00:00:00.000Z', bytes: 2 * MB },
+                { id: 'b1', accountKey: 'b@def', updatedAt: '2026-10-01T00:00:00.000Z', bytes: 3 * MB },
+                { id: 'b2', accountKey: 'b@def', updatedAt: '2026-10-02T00:00:00.000Z', bytes: 1 * MB },
+            ],
+            { maxAgeDays: 0, maxTotalMB: 4, clearOnLogout: false },
+            now,
+        );
+        expect(ids).toEqual(['a1']);
+    });
+
+    it('never evicts a protected id when its account is over budget', () => {
+        const ids = selectConversationsToEvict(
+            [
+                { id: 'open', accountKey: 'a@def', updatedAt: '2026-10-01T00:00:00.000Z', bytes: 3 * MB },
+                { id: 'a2', accountKey: 'a@def', updatedAt: '2026-10-21T00:00:00.000Z', bytes: 2 * MB },
+                { id: 'b1', accountKey: 'b@def', updatedAt: '2026-10-01T00:00:00.000Z', bytes: 1 * MB },
+            ],
+            { maxAgeDays: 0, maxTotalMB: 4, clearOnLogout: false },
+            now,
+            ['open'],
+        );
+        expect(ids).toEqual(['a2']);
+    });
+
     it('never evicts protected conversations but counts their bytes', () => {
         const ids = selectConversationsToEvict(
             [
-                { id: 'open', updatedAt: '2026-10-01T00:00:00.000Z', bytes: 3 * MB },
-                { id: 'b', updatedAt: '2026-10-21T00:00:00.000Z', bytes: 2 * MB },
-                { id: 'c', updatedAt: '2026-10-22T00:00:00.000Z', bytes: 2 * MB },
+                { id: 'open', accountKey: 'root@def', updatedAt: '2026-10-01T00:00:00.000Z', bytes: 3 * MB },
+                { id: 'b', accountKey: 'root@def', updatedAt: '2026-10-21T00:00:00.000Z', bytes: 2 * MB },
+                { id: 'c', accountKey: 'root@def', updatedAt: '2026-10-22T00:00:00.000Z', bytes: 2 * MB },
             ],
             { maxAgeDays: 30, maxTotalMB: 4, clearOnLogout: false },
             now,
@@ -46,7 +75,7 @@ describe('selectConversationsToEvict', () => {
         );
         expect(ids).toEqual(['b', 'c']);
         const aged = selectConversationsToEvict(
-            [{ id: 'open', updatedAt: '2026-08-01T00:00:00.000Z', bytes: 1 }],
+            [{ id: 'open', accountKey: 'root@def', updatedAt: '2026-08-01T00:00:00.000Z', bytes: 1 }],
             { maxAgeDays: 30, maxTotalMB: 50, clearOnLogout: false },
             now,
             ['open'],

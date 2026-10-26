@@ -69,6 +69,7 @@ export class InMemoryConversationRepository implements AssistantConversationRepo
         const candidates = await Promise.all(
             Array.from(this.conversations.values()).map(async conversation => ({
                 id: conversation.id,
+                accountKey: conversation.accountKey,
                 updatedAt: conversation.updatedAt,
                 bytes: await this.conversationBytes(conversation),
             })),
