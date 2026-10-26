@@ -24,6 +24,15 @@ export function createAssistantMessage(conversationId: string): ChatMessage {
     return { id: createId(), conversationId, role: 'assistant', parts: [], createdAt: monotonicIso() };
 }
 
+/** Rows-tool and SQL results are already bounded (3 sample rows, maxRows) and carry handle names the transcript needs. */
+function isBoundedDataResult(result: unknown): boolean {
+    if (typeof result !== 'object' || result === null || Array.isArray(result)) return false;
+    const r = result as Record<string, unknown>;
+    const isRows = typeof r.handle === 'string' && typeof r.rowCount === 'number' && Array.isArray(r.columns);
+    const isSql = Array.isArray(r.columns) && Array.isArray(r.rows) && typeof r.totalRows === 'number';
+    return isRows || isSql;
+}
+
 /** Keeps stored results small; large results become a preview string. */
 export function trimToolResult(result: unknown, maxChars: number = MAX_STORED_RESULT_CHARS): unknown {
     let serialized: string;
@@ -91,7 +100,7 @@ export function applyRunnerUpdate(message: ChatMessage, update: RunnerUpdate): C
             return updateToolPart(message, update.toolCallId, part => ({
                 ...part,
                 status: statusForToolError(update.error),
-                result: update.error ? undefined : trimToolResult(update.result),
+                result: update.error ? undefined : isBoundedDataResult(update.result) ? update.result : trimToolResult(update.result),
                 ...(update.error ? { error: update.error } : {}),
                 durationMs: update.durationMs,
             }));

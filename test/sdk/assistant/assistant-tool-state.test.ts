@@ -2,8 +2,9 @@ import type { ChatMessage, Conversation } from '@/lib/core/entity/assistant/conv
 import type { AssistantConversationRepositoryPort } from '@/lib/core/port/secondary/assistant-conversation-repository-port';
 import type { RegisteredTool } from '@/lib/infrastructure/assistant/tool-types';
 import { addActiveTools, selectRunTools } from '@/lib/infrastructure/assistant/active-tools';
-import { stripRowsForStorage, withToolState } from '@/lib/infrastructure/assistant/conversation-tool-state';
+import { isStoredSqlResult, stripRowsForStorage, withToolState } from '@/lib/infrastructure/assistant/conversation-tool-state';
 import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/in-memory-conversation-repository';
+import { applyRunnerUpdate } from '@/lib/infrastructure/assistant/message-reducer';
 import { makeConversation } from 'test/fixtures/assistant-fixtures';
 import { deriveHandleRecords, hasSessionExpired, referencedHandles } from '@/lib/infrastructure/assistant/message-selectors';
 
@@ -155,10 +156,13 @@ describe('withToolState', () => {
         return { inner, wrapped, saveConversation, listMessages, saveMessage };
     }
 
+    // private helpers of the in-memory class that are not part of the port
+    const nonPortHelpers = { conversationBytes: true };
+
     it('forwards every member of the port', () => {
         const { inner, wrapped } = setup();
         const portMethods = Object.getOwnPropertyNames(InMemoryConversationRepository.prototype).filter(
-            name => name !== 'constructor' && name !== 'conversationBytes',
+            name => name !== 'constructor' && !(name in nonPortHelpers),
         );
         expect(
             Object.keys(wrapped)
@@ -282,5 +286,114 @@ describe('withToolState', () => {
         const result = wrapped.onPersistenceLost?.(listener);
         expect(onPersistenceLost).toHaveBeenCalledWith(listener);
         expect(result).toBe(unsubscribe);
+    });
+});
+
+describe('trimmed results never store a preview', () => {
+    const bigSql = () => ({
+        columns: ['id', 'payload'],
+        rows: Array.from({ length: 50 }, (_, id) => ({ id, payload: 'x'.repeat(600) })),
+        totalRows: 50,
+        savedAs: 'stuck',
+    });
+
+    it('keeps bounded data results intact in the reducer', () => {
+        let live = message('assistant', [call('run_sql', { sql: 's', save_as: 'stuck' }, undefined, { status: 'running' })]);
+        const toolCallId = (live.parts[0] as { toolCallId: string }).toolCallId;
+        const result = bigSql();
+        live = applyRunnerUpdate(live, { type: 'tool-result', toolCallId, result, durationMs: 1 });
+        expect((live.parts[0] as { result: unknown }).result).toBe(result);
+        expect(deriveHandleRecords([live]).map(record => record.name)).toEqual(['stuck']);
+    });
+
+    it('still trims other large results in the reducer', () => {
+        let live = message('assistant', [call('get_x', {}, undefined, { status: 'running' })]);
+        const toolCallId = (live.parts[0] as { toolCallId: string }).toolCallId;
+        live = applyRunnerUpdate(live, { type: 'tool-result', toolCallId, result: { big: 'x'.repeat(30000) }, durationMs: 1 });
+        expect((live.parts[0] as { result: unknown }).result).toMatchObject({ trimmed: true });
+    });
+
+    it('stores a trimmed result without its preview', () => {
+        const stored = stripRowsForStorage(message('assistant', [call('run_sql', {}, { preview: '[{"id":1}]', trimmed: true })]));
+        expect((stored.parts[0] as { result: unknown }).result).toEqual({ trimmed: true, previewOmitted: true });
+    });
+
+    it('stores a large run_sql result as a StoredSqlResult', () => {
+        const stored = stripRowsForStorage(message('assistant', [call('run_sql', { sql: 's' }, bigSql())]));
+        const result = (stored.parts[0] as { result: unknown }).result;
+        expect(isStoredSqlResult(result)).toBe(true);
+        expect(JSON.stringify(result)).not.toContain('xxxx');
+        expect(result).toEqual({ columns: ['id', 'payload'], totalRows: 50, savedAs: 'stuck', rowsOmitted: true });
+        expect(deriveHandleRecords([stored]).map(record => record.name)).toEqual(['stuck']);
+        expect(isStoredSqlResult(bigSql())).toBe(false);
+    });
+});
+
+describe('withToolState state maintenance', () => {
+    const listing = (id: string, handle: string, createdAt: string, conversationId = 'c1'): ChatMessage => ({
+        ...message('assistant', [call('list_rules', {}, { handle, rowCount: 1, truncated: false, columns: [], sample: [] })], createdAt),
+        id,
+        conversationId,
+    });
+
+    it('restores the previous handle state when the write fails', async () => {
+        const inner = new InMemoryConversationRepository();
+        const wrapped = withToolState(inner, () => undefined);
+        await wrapped.saveMessage(listing('m1', 'rules_1', '2026-10-25T10:00:00.000Z'));
+        jest.spyOn(inner, 'saveMessage').mockRejectedValueOnce(new Error('disk'));
+        await expect(wrapped.saveMessage(listing('m1', 'rules_9', '2026-10-25T11:00:00.000Z'))).rejects.toThrow('disk');
+        await wrapped.saveConversation({ ...makeConversation('c1', 'a'), handles: [] });
+        expect((await inner.getConversation('c1'))?.handles.map(h => h.name)).toEqual(['rules_1']);
+    });
+
+    it('removes a deleted message handles synchronously', async () => {
+        const inner = new InMemoryConversationRepository();
+        const wrapped = withToolState(inner, () => undefined);
+        await wrapped.saveMessage(listing('m1', 'rules_1', '2026-10-25T10:00:00.000Z'));
+        const pending = wrapped.deleteMessage('m1');
+        await wrapped.saveConversation({ ...makeConversation('c1', 'a'), handles: [] });
+        await pending;
+        expect((await inner.getConversation('c1'))?.handles).toEqual([]);
+    });
+
+    it('keeps a message saved while a deleteMessage re-read is in flight', async () => {
+        const inner = new InMemoryConversationRepository();
+        await inner.saveMessage(listing('m1', 'rules_1', '2026-10-25T10:00:00.000Z'));
+        await inner.saveConversation({
+            ...makeConversation('c1', 'a'),
+            handles: [{ name: 'rules_1', toolName: 'list_rules', args: {}, fetchedAt: 'x' }],
+        });
+        const wrapped = withToolState(inner, () => undefined);
+        await wrapped.getConversation('c1');
+        const pending = wrapped.deleteMessage('m1');
+        await wrapped.saveMessage(listing('m2', 'rules_2', '2026-10-25T12:00:00.000Z'));
+        await pending;
+        await wrapped.saveConversation({ ...makeConversation('c1', 'a'), handles: [] });
+        expect((await inner.getConversation('c1'))?.handles.map(h => h.name)).toEqual(['rules_2']);
+    });
+
+    it('drops state of conversations evicted by retention', async () => {
+        const inner = new InMemoryConversationRepository();
+        const wrapped = withToolState(inner, () => undefined);
+        await wrapped.saveConversation({ ...makeConversation('c1', 'a', '2000-01-01T00:00:00.000Z'), handles: [] });
+        await wrapped.saveMessage(listing('m1', 'rules_1', '2000-01-01T00:00:00.000Z'));
+        const evicted = await wrapped.enforceRetention({ maxAgeDays: 1, maxTotalMB: 50, clearOnLogout: false }, new Date('2026-10-26T00:00:00.000Z'));
+        expect(evicted).toEqual(['c1']);
+        await wrapped.saveConversation({ ...makeConversation('c1', 'a'), handles: [] });
+        expect((await inner.getConversation('c1'))?.handles).toEqual([]);
+    });
+
+    it('deleteAll clears state only for that account', async () => {
+        const inner = new InMemoryConversationRepository();
+        const wrapped = withToolState(inner, () => undefined);
+        await wrapped.saveConversation({ ...makeConversation('c1', 'a'), handles: [] });
+        await wrapped.saveConversation({ ...makeConversation('c2', 'b'), handles: [] });
+        await wrapped.saveMessage(listing('m1', 'rules_1', '2026-10-25T10:00:00.000Z', 'c1'));
+        await wrapped.saveMessage(listing('m2', 'rules_2', '2026-10-25T10:00:00.000Z', 'c2'));
+        await wrapped.deleteAll('a');
+        await wrapped.saveConversation({ ...makeConversation('c1', 'a'), handles: [] });
+        await wrapped.saveConversation({ ...makeConversation('c2', 'b'), handles: [] });
+        expect((await inner.getConversation('c1'))?.handles).toEqual([]);
+        expect((await inner.getConversation('c2'))?.handles.map(h => h.name)).toEqual(['rules_2']);
     });
 });

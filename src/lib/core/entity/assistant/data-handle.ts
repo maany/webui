@@ -37,5 +37,10 @@ export interface SqlResult {
     rows: Record<string, unknown>[]; // at most maxRows
     totalRows: number;
     savedAs?: string;
-    rowsOmitted?: boolean; // only on the persisted copy of a message: its rows were stripped before storage
 }
+
+/** Persisted copy of a SqlResult: rows are never stored (spec 9.4). */
+export type StoredSqlResult = Omit<SqlResult, 'rows'> & { rowsOmitted: true };
+
+/** Persisted copy of a RowsToolResult: the sample rows are never stored. */
+export type StoredRowsToolResult = Omit<RowsToolResult, 'sample'>;
