@@ -29,10 +29,15 @@ export class InMemoryConversationRepository implements AssistantConversationRepo
         }
     }
 
-    async deleteAll(accountKey?: string): Promise<void> {
+    async deleteAll(accountKey: string): Promise<void> {
         for (const conversation of Array.from(this.conversations.values())) {
-            if (accountKey === undefined || conversation.accountKey === accountKey) await this.deleteConversation(conversation.id);
+            if (conversation.accountKey === accountKey) await this.deleteConversation(conversation.id);
         }
+    }
+
+    async deleteAllAccounts(): Promise<void> {
+        this.conversations.clear();
+        this.messages.clear();
     }
 
     async listMessages(conversationId: string): Promise<ChatMessage[]> {

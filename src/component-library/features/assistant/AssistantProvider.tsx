@@ -110,16 +110,19 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
         [handles, registerMemoryControls],
     );
 
-    const { deleteConversation, deleteAllConversations } = assistant;
+    const { deleteConversation, deleteAllConversations, deleteAllAccountsConversations } = assistant;
     useEffect(
         () =>
             registerConversationControls({
                 deleteConversation,
-                deleteAll: async () => {
-                    await deleteAllConversations?.();
+                deleteAll: async accountKey => {
+                    await deleteAllConversations?.(accountKey);
+                },
+                deleteAllAccounts: async () => {
+                    await deleteAllAccountsConversations?.();
                 },
             }),
-        [deleteConversation, deleteAllConversations, registerConversationControls],
+        [deleteConversation, deleteAllConversations, deleteAllAccountsConversations, registerConversationControls],
     );
 
     const refresh = assistant.refreshConversations;

@@ -57,8 +57,13 @@ export interface UseAssistantResult {
     newConversation(): void;
     openConversation(id: string): Promise<void>;
     deleteConversation(id: string): Promise<void>;
-    /** Deletes every conversation of the active account, stopping any running turn first. */
-    deleteAllConversations?(): Promise<void>;
+    /**
+     * Deletes every conversation of an account (default: the active one), stopping any running turn first.
+     * The explicit key lets a sign-out that runs after the session is gone still stop and tombstone its turn.
+     */
+    deleteAllConversations?(accountKey?: string): Promise<void>;
+    /** Deletes every conversation of every account, stopping any running turn first. */
+    deleteAllAccountsConversations?(): Promise<void>;
     /** False when IndexedDB is unavailable and history lives in memory only. */
     persistent?: boolean;
     /** Context window of the model used for the last turn, for the gauge label. */
@@ -832,32 +837,65 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         [refreshConversations, resetView],
     );
 
-    const deleteAllConversations = useCallback(async () => {
-        const accountKey = depsRef.current.accountKey;
-        if (!accountKey) return;
-        // Blocks new sends until the delete settles; a turn already running is stopped below.
-        deletingAllRef.current = true;
-        const ids = new Set<string>();
-        try {
-            const { repository } = await depsRef.current.repository;
-            for (const item of await repository.listConversations(accountKey)) ids.add(item.id);
-            // A turn that created its conversation while the list was loading is covered too.
-            const open = conversationRef.current;
-            if (open && open.accountKey === accountKey) ids.add(open.id);
-            // Marked first so a streaming turn of any of these skips every later write.
-            for (const id of ids) deletedRef.current.add(id);
-            if (open && ids.has(open.id)) resetView();
+    // Shared by both delete-all flavours: blocks new sends until the delete settles, tombstones every id the
+    // delete will remove (so a streaming turn skips its later writes) and un-marks them when the delete fails.
+    const deleteConversationsWhere = useCallback(
+        async (
+            scope: (repository: AssistantConversationRepositoryPort) => Promise<Conversation[]>,
+            ownsOpen: (open: Conversation) => boolean,
+            remove: (repository: AssistantConversationRepositoryPort) => Promise<void>,
+        ) => {
+            deletingAllRef.current = true;
+            const ids = new Set<string>();
             try {
-                await repository.deleteAll(accountKey);
-            } catch (deleteError) {
-                for (const id of ids) deletedRef.current.delete(id);
-                throw deleteError;
+                const { repository } = await depsRef.current.repository;
+                for (const item of await scope(repository)) ids.add(item.id);
+                // A turn that created its conversation while the list was loading is covered too.
+                const open = conversationRef.current;
+                if (open && ownsOpen(open)) ids.add(open.id);
+                // Marked first so a streaming turn of any of these skips every later write.
+                for (const id of ids) deletedRef.current.add(id);
+                if (open && ids.has(open.id)) resetView();
+                try {
+                    await remove(repository);
+                } catch (deleteError) {
+                    for (const id of ids) deletedRef.current.delete(id);
+                    throw deleteError;
+                }
+                await refreshConversations();
+            } finally {
+                deletingAllRef.current = false;
             }
-            await refreshConversations();
-        } finally {
-            deletingAllRef.current = false;
-        }
-    }, [refreshConversations, resetView]);
+        },
+        [refreshConversations, resetView],
+    );
+
+    const deleteAllConversations = useCallback(
+        async (explicitAccountKey?: string) => {
+            const accountKey = explicitAccountKey ?? depsRef.current.accountKey;
+            if (!accountKey) return;
+            await deleteConversationsWhere(
+                repository => repository.listConversations(accountKey),
+                open => open.accountKey === accountKey,
+                repository => repository.deleteAll(accountKey),
+            );
+        },
+        [deleteConversationsWhere],
+    );
+
+    const deleteAllAccountsConversations = useCallback(
+        () =>
+            deleteConversationsWhere(
+                async repository => {
+                    const all: Conversation[] = [];
+                    for (const account of await repository.listAccounts()) all.push(...(await repository.listConversations(account.accountKey)));
+                    return all;
+                },
+                () => true,
+                repository => repository.deleteAllAccounts(),
+            ),
+        [deleteConversationsWhere],
+    );
 
     return {
         status,
@@ -875,6 +913,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         openConversation,
         deleteConversation,
         deleteAllConversations,
+        deleteAllAccountsConversations,
         persistent,
         contextWindow,
         pageContext: deps.pageContext(),

@@ -67,6 +67,7 @@ describe('AssistantStorageSection', () => {
         const conversationControls = {
             deleteConversation: jest.fn().mockResolvedValue(undefined),
             deleteAll: jest.fn().mockResolvedValue(undefined),
+            deleteAllAccounts: jest.fn(),
         };
         const { repository, notifyStorageChanged } = setup({ conversationControls });
         await seed(repository);
@@ -84,7 +85,11 @@ describe('AssistantStorageSection', () => {
     });
 
     it('shows an inline message when deleting one chat fails', async () => {
-        const conversationControls = { deleteConversation: jest.fn().mockRejectedValue(new Error('disk full')), deleteAll: jest.fn() };
+        const conversationControls = {
+            deleteConversation: jest.fn().mockRejectedValue(new Error('disk full')),
+            deleteAll: jest.fn(),
+            deleteAllAccounts: jest.fn(),
+        };
         const { repository, notifyStorageChanged } = setup({ conversationControls });
         await seed(repository);
         renderSection();
@@ -193,7 +198,7 @@ describe('AssistantStorageSection', () => {
         });
 
         it('deletes one other account through the repository, never the controller', async () => {
-            const conversationControls = { deleteConversation: jest.fn(), deleteAll: jest.fn() };
+            const conversationControls = { deleteConversation: jest.fn(), deleteAll: jest.fn(), deleteAllAccounts: jest.fn() };
             const { repository, notifyStorageChanged } = setup({ conversationControls });
             await seedOthers(repository);
             renderSection();
@@ -236,23 +241,28 @@ describe('AssistantStorageSection', () => {
             expect((await repository.listConversations('root@def')).map(c => c.id)).toEqual(['n1']);
         });
 
-        it('stops a running turn through the controller before deleting all accounts', async () => {
-            const conversationControls = { deleteConversation: jest.fn(), deleteAll: jest.fn().mockResolvedValue(undefined) };
-            const { repository } = setup({ conversationControls });
+        it('uses the controller to delete every account when the assistant is mounted', async () => {
+            const conversationControls = {
+                deleteConversation: jest.fn(),
+                deleteAll: jest.fn(),
+                deleteAllAccounts: jest.fn().mockResolvedValue(undefined),
+            };
+            const { repository, notifyStorageChanged } = setup({ conversationControls });
             await seedOthers(repository);
-            const deleteAllSpy = jest.spyOn(repository, 'deleteAll');
+            const spy = jest.spyOn(repository, 'deleteAllAccounts');
             renderSection();
             fireEvent.click(await screen.findByRole('button', { name: 'Delete Rucio bot data for all accounts' }));
             fireEvent.click(screen.getByRole('button', { name: 'Delete everything' }));
-            await waitFor(() => expect(deleteAllSpy).toHaveBeenCalledWith());
-            expect(conversationControls.deleteAll).toHaveBeenCalledTimes(1);
-            expect(deleteAllSpy.mock.invocationCallOrder[0]).toBeGreaterThan(conversationControls.deleteAll.mock.invocationCallOrder[0]);
+            await waitFor(() => expect(conversationControls.deleteAllAccounts).toHaveBeenCalledTimes(1));
+            await waitFor(() => expect(notifyStorageChanged).toHaveBeenCalled());
+            expect(conversationControls.deleteAll).not.toHaveBeenCalled();
+            expect(spy).not.toHaveBeenCalled();
         });
 
         it('shows an inline message when deleting all accounts fails', async () => {
             const { repository, notifyStorageChanged } = setup();
             await seedOthers(repository);
-            jest.spyOn(repository, 'deleteAll').mockRejectedValueOnce(new Error('blocked'));
+            jest.spyOn(repository, 'deleteAllAccounts').mockRejectedValueOnce(new Error('blocked'));
             renderSection();
             fireEvent.click(await screen.findByRole('button', { name: 'Delete Rucio bot data for all accounts' }));
             fireEvent.click(screen.getByRole('button', { name: 'Delete everything' }));

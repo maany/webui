@@ -161,12 +161,13 @@ describe('Rucio bot shell', () => {
         expect(deleteAssistantDatabase).not.toHaveBeenCalled();
     });
 
-    it('deletes through the conversation controller when the panel registered one', async () => {
+    it('stops the turn through the conversation controller when the panel registered one, then deletes', async () => {
         const repository = await seedTwoAccounts();
         enableClearOnLogout();
         const controls: AssistantConversationControls = {
             deleteConversation: jest.fn().mockResolvedValue(undefined),
             deleteAll: jest.fn().mockResolvedValue(undefined),
+            deleteAllAccounts: jest.fn(),
         };
         function Register() {
             const { registerConversationControls } = useAssistantPanel();
@@ -184,8 +185,10 @@ describe('Rucio bot shell', () => {
             await runSignOutHooks();
         });
         expect(controls.deleteAll).toHaveBeenCalledTimes(1);
-        expect(createConversationRepository).not.toHaveBeenCalled();
-        expect((await repository.listConversations('alice@def')).length).toBe(2);
+        expect(controls.deleteAll).toHaveBeenCalledWith('alice@def');
+        // The repository delete runs too, so the clear does not depend on the controller.
+        expect(await repository.listConversations('alice@def')).toEqual([]);
+        expect((await repository.listConversations('bob@def')).length).toBe(1);
     });
 
     it('falls back to the repository when the controller delete fails, and never throws', async () => {
@@ -194,6 +197,7 @@ describe('Rucio bot shell', () => {
         const controls: AssistantConversationControls = {
             deleteConversation: jest.fn(),
             deleteAll: jest.fn().mockRejectedValue(new Error('boom')),
+            deleteAllAccounts: jest.fn(),
         };
         function Register() {
             const { registerConversationControls } = useAssistantPanel();
@@ -247,6 +251,38 @@ describe('Rucio bot shell', () => {
         await act(async () => {
             await runSignOutHooks();
         });
+        expect(await repository.listConversations('alice@def')).toEqual([]);
+        expect((await repository.listConversations('bob@def')).length).toBe(1);
+    });
+
+    it('clears the active account through the repository even when the controller no-ops after expiry', async () => {
+        const repository = await seedTwoAccounts();
+        enableClearOnLogout();
+        // Like the real controller, which has no account key once the session is gone and returns early.
+        const controls: AssistantConversationControls = {
+            deleteConversation: jest.fn(),
+            deleteAll: jest.fn().mockResolvedValue(undefined),
+            deleteAllAccounts: jest.fn(),
+        };
+        function Register() {
+            const { registerConversationControls } = useAssistantPanel();
+            React.useEffect(() => registerConversationControls(controls), [registerConversationControls]);
+            return null;
+        }
+        const tree = () => (
+            <FeatureProvider features={flagMap({ assistant: true })}>
+                <AssistantShellProvider>
+                    <Register />
+                </AssistantShellProvider>
+            </FeatureProvider>
+        );
+        const { rerender } = render(tree());
+        mockSession.current = null;
+        rerender(tree());
+        await act(async () => {
+            await runSignOutHooks();
+        });
+        expect(controls.deleteAll).toHaveBeenCalledWith('alice@def');
         expect(await repository.listConversations('alice@def')).toEqual([]);
         expect((await repository.listConversations('bob@def')).length).toBe(1);
     });

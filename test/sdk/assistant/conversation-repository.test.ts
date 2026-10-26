@@ -68,7 +68,7 @@ describe.each(repositories)('%s', (_name, open) => {
         await repository.deleteAll('root@def');
         expect(await repository.listConversations('root@def')).toEqual([]);
         expect(await repository.listConversations('jdoe@def')).toHaveLength(1);
-        await repository.deleteAll();
+        await repository.deleteAllAccounts();
         expect(await repository.listConversations('jdoe@def')).toEqual([]);
     });
 

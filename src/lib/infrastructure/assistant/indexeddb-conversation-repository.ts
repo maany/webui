@@ -175,18 +175,18 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
         );
     }
 
-    async deleteAll(accountKey?: string): Promise<void> {
-        if (accountKey !== undefined) {
-            for (const conversation of await this.listConversations(accountKey)) await this.deleteConversation(conversation.id);
-            return;
-        }
+    async deleteAll(accountKey: string): Promise<void> {
+        for (const conversation of await this.listConversations(accountKey)) await this.deleteConversation(conversation.id);
+    }
+
+    async deleteAllAccounts(): Promise<void> {
         await this.run(
             async db => {
                 const tx = db.transaction(['conversations', 'messages'], 'readwrite');
                 await Promise.all([tx.objectStore('conversations').clear(), tx.objectStore('messages').clear()]);
                 await tx.done;
             },
-            memory => memory.deleteAll(),
+            memory => memory.deleteAllAccounts(),
         );
     }
 

@@ -21,7 +21,9 @@ export interface AssistantMemoryControls {
 
 export interface AssistantConversationControls {
     deleteConversation(id: string): Promise<void>;
-    deleteAll(): Promise<void>;
+    /** Active account by default; the explicit key lets sign-out target an account whose session is already gone. */
+    deleteAll(accountKey?: string): Promise<void>;
+    deleteAllAccounts(): Promise<void>;
 }
 
 export interface AssistantShellValue {
@@ -205,24 +207,20 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
             const keys = signedInKeysRef.current;
             if (keys.length === 0) return;
             const active = activeAccountKeyRef.current;
-            let remaining = keys;
             // The mounted controller aborts a running turn and tombstones the ids, so the turn cannot save them again.
-            // It only knows the active account; the others go through the repository.
             const controls = conversationControlsRef.current;
             if (controls && active) {
                 try {
-                    await controls.deleteAll();
-                    remaining = keys.filter(key => key !== active);
+                    await controls.deleteAll(active);
                 } catch {
-                    // Fall through: the chats must still go.
+                    // Not enough on its own: the repository delete below covers every key anyway.
                 }
             }
-            if (remaining.length === 0) return;
             try {
                 const { createConversationRepository } = await import('@/lib/infrastructure/assistant/indexeddb-conversation-repository');
                 const { repository } = await createConversationRepository();
                 try {
-                    for (const key of remaining) await repository.deleteAll(key);
+                    await Promise.all(keys.map(key => repository.deleteAll(key)));
                 } finally {
                     (repository as { close?: () => void }).close?.();
                 }

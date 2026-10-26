@@ -6,7 +6,8 @@ export interface AssistantConversationRepositoryPort {
     getConversation(id: string): Promise<Conversation | undefined>;
     saveConversation(conversation: Conversation): Promise<void>;
     deleteConversation(id: string): Promise<void>; // also deletes its messages
-    deleteAll(accountKey?: string): Promise<void>; // undefined = every account
+    deleteAll(accountKey: string): Promise<void>; // every conversation of one account
+    deleteAllAccounts(): Promise<void>; // every conversation of every account
     listMessages(conversationId: string): Promise<ChatMessage[]>; // oldest first
     saveMessage(message: ChatMessage): Promise<void>; // insert or replace by id
     deleteMessage(id: string): Promise<void>; // no-op when the message does not exist

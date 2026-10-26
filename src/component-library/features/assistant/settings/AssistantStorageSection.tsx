@@ -391,9 +391,8 @@ export function AssistantStorageSection({
     const deleteEverything = async () => {
         setError(undefined);
         try {
-            if (shell.conversationControls) await shell.conversationControls.deleteAll();
-            if (!store) throw new Error('store not open');
-            await store.repository.deleteAll();
+            if (shell.conversationControls) await shell.conversationControls.deleteAllAccounts();
+            else await requireStore().repository.deleteAllAccounts();
         } catch {
             setError('Could not delete Rucio bot data.');
             return;
@@ -449,7 +448,7 @@ export function AssistantStorageSection({
             }
             onDeleteAll={() =>
                 void runDelete(async () => {
-                    if (shell.conversationControls) await shell.conversationControls.deleteAll();
+                    if (shell.conversationControls) await shell.conversationControls.deleteAll(accountKey);
                     else if (accountKey) await requireStore().repository.deleteAll(accountKey);
                 }, 'Could not delete chats.')
             }

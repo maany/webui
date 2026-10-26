@@ -982,4 +982,88 @@ describe('useAssistantController races', () => {
         });
         expect(created).toHaveLength(1);
     });
+
+    it('deleteAllConversations takes an explicit account key, also after the session is gone', async () => {
+        const { hook, repository } = setup([approvalScript]);
+        await repository.saveConversation(makeConversation('other', 'root@def', '2026-10-01T00:00:00.000Z'));
+        await repository.saveConversation(makeConversation('foreign', 'jdoe@def', '2026-10-01T00:00:00.000Z'));
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('delete rule r1');
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals).toHaveLength(1));
+        const id = hook.result.current.conversation!.id;
+        hook.rerender({ accountKey: '' });
+        await act(async () => {
+            await hook.result.current.deleteAllConversations?.('root@def');
+            await sending;
+        });
+        expect(await repository.listConversations('root@def')).toEqual([]);
+        expect(await repository.listMessages(id)).toEqual([]);
+        expect(await repository.getConversation('foreign')).toBeDefined();
+        expect(hook.result.current.conversation).toBeUndefined();
+    });
+
+    it('deleteAllAccountsConversations empties every account and leaves no running turn behind', async () => {
+        const { hook, repository } = setup([approvalScript]);
+        await repository.saveConversation(makeConversation('other', 'root@def', '2026-10-01T00:00:00.000Z'));
+        await repository.saveConversation(makeConversation('foreign', 'jdoe@def', '2026-10-01T00:00:00.000Z'));
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('delete rule r1');
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals).toHaveLength(1));
+        const id = hook.result.current.conversation!.id;
+        await act(async () => {
+            await hook.result.current.deleteAllAccountsConversations?.();
+            await sending;
+        });
+        expect(await repository.listAccounts()).toEqual([]);
+        expect(await repository.listMessages(id)).toEqual([]);
+        expect(hook.result.current.conversation).toBeUndefined();
+    });
+
+    it('refuses to send while deleteAllAccountsConversations is in progress and releases after it settles', async () => {
+        const { hook, repository, created } = setup([textScript('never'), textScript('after')]);
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        jest.spyOn(repository, 'deleteAllAccounts').mockImplementationOnce(async () => {
+            await gate;
+        });
+        let deleting!: Promise<void>;
+        act(() => {
+            deleting = hook.result.current.deleteAllAccountsConversations!();
+        });
+        await act(async () => {
+            await hook.result.current.send('too early');
+        });
+        expect(created).toHaveLength(0);
+        await act(async () => {
+            release();
+            await deleting;
+        });
+        await act(async () => {
+            await hook.result.current.send('after');
+        });
+        expect(created).toHaveLength(1);
+    });
+
+    it('rejects and keeps saving when deleteAllAccountsConversations fails', async () => {
+        const { hook, repository } = setup([textScript('one'), textScript('two')]);
+        await act(async () => {
+            await hook.result.current.send('first');
+        });
+        const id = hook.result.current.conversation!.id;
+        jest.spyOn(repository, 'deleteAllAccounts').mockRejectedValueOnce(new Error('disk full'));
+        await act(async () => {
+            await expect(hook.result.current.deleteAllAccountsConversations!()).rejects.toThrow('disk full');
+        });
+        await act(async () => {
+            await hook.result.current.openConversation(id);
+        });
+        await act(async () => {
+            await hook.result.current.send('second');
+        });
+        expect((await repository.listMessages(id)).filter(m => m.role === 'assistant')).toHaveLength(2);
+    });
 });
