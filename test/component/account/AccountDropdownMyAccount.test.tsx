@@ -22,6 +22,7 @@ const flags = (accounts: boolean): FeatureFlagMap =>
         'accounts.manage.quotas': true,
         'dids.metadata': true,
         'dids.mutate': true,
+        requests: true,
         'dids.ami_tags': false,
         'dids.panda_task': false,
         assistant: false,

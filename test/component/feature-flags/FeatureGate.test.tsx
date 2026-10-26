@@ -17,6 +17,7 @@ const baseMap: FeatureFlagMap = {
     'accounts.manage.quotas': true,
     'dids.metadata': false,
     'dids.mutate': true,
+    requests: true,
     'dids.ami_tags': false,
     'dids.panda_task': false,
     assistant: false,

@@ -33,6 +33,8 @@ export const FEATURE_REGISTRY = {
     'accounts.manage.quotas': { default: true, parent: 'accounts.manage', pages: [] },
     'dids.metadata': { default: true, pages: [] },
     'dids.mutate': { default: true, pages: [] },
+    // Transfer request listing (/api/feature/list-requests). Rucio's default policy only lets admins list requests.
+    requests: { default: true, pages: [] },
     // ATLAS-only: AMI tag chips on DID views + /api/feature/get-ami-tag-info
     'dids.ami_tags': { default: false, pages: [] },
     // ATLAS-only: PanDA task link on DID views + /api/feature/get-panda-task-link
