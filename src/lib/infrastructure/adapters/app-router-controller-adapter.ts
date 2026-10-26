@@ -355,32 +355,6 @@ export async function executeAuthenticatedController<TParams extends TAuthentica
 }
 
 /**
- * Parse and validate query parameters from Request URL
- *
- * @param request - The incoming Request object
- * @returns Object with query parameters
- */
-export function parseQueryParams(request: Request): Record<string, string | string[]> {
-    const url = new URL(request.url);
-    const params: Record<string, string | string[]> = {};
-
-    url.searchParams.forEach((value, key) => {
-        if (params[key]) {
-            // Handle multiple values for same key
-            if (Array.isArray(params[key])) {
-                (params[key] as string[]).push(value);
-            } else {
-                params[key] = [params[key] as string, value];
-            }
-        } else {
-            params[key] = value;
-        }
-    });
-
-    return params;
-}
-
-/**
  * Parse and validate request body
  *
  * @param request - The incoming Request object
