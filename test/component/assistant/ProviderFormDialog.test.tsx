@@ -1,19 +1,35 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { ProviderFormDialog } from '@/component-library/features/assistant/settings/ProviderFormDialog';
-import type { ProviderConfig } from '@/lib/core/entity/assistant/provider-config';
-
-const ALL_KINDS: ProviderConfig['kind'][] = ['anthropic', 'openai', 'openai-compatible', 'ollama'];
+import { BYOK_PROVIDER_KINDS, type ProviderConfig } from '@/lib/core/entity/assistant/provider-config';
+import { DEFAULT_BASE_URLS } from '@/lib/infrastructure/assistant/provider-kinds';
 
 const renderDialog = (props: Partial<React.ComponentProps<typeof ProviderFormDialog>> = {}) => {
     const onSave = jest.fn();
     const onClose = jest.fn();
-    render(<ProviderFormDialog allowedKinds={ALL_KINDS} onSave={onSave} onClose={onClose} newId={() => 'new-1'} {...props} />);
+    render(<ProviderFormDialog allowedKinds={[...BYOK_PROVIDER_KINDS]} onSave={onSave} onClose={onClose} newId={() => 'new-1'} {...props} />);
     const dialog = screen.getByRole('dialog');
     const type = (label: RegExp, value: string) => fireEvent.change(within(dialog).getByLabelText(label), { target: { value } });
     return { dialog, onSave, onClose, type };
 };
 
 describe('ProviderFormDialog', () => {
+    it('uses a text input for the base URL so the inline error shows instead of native validation', () => {
+        const { dialog } = renderDialog();
+        const input = within(dialog).getByLabelText(/^Base URL/);
+        expect(input).toHaveAttribute('type', 'text');
+        expect(input).toHaveAttribute('inputmode', 'url');
+    });
+
+    it('masks the API key input', () => {
+        const { dialog } = renderDialog();
+        expect(within(dialog).getByLabelText(/^API key/)).toHaveAttribute('type', 'password');
+    });
+
+    it('derives the Ollama base URL hint from the default', () => {
+        const { dialog } = renderDialog({ allowedKinds: ['ollama'] });
+        expect(within(dialog).getByText(`Leave empty for ${DEFAULT_BASE_URLS.ollama}.`)).toBeInTheDocument();
+    });
+
     it('saves a new Anthropic provider', () => {
         const { dialog, onSave, onClose, type } = renderDialog();
         fireEvent.click(within(dialog).getByRole('radio', { name: /^Anthropic/ }));

@@ -23,6 +23,11 @@ describe('validateProviderDraft', () => {
         expect(validateProviderDraft(draft({ label: 'Mine', apiKey: 'sk', model: 'claude-sonnet-5-5' }), knownOnly)).toEqual({});
     });
 
+    it.each(['ftp://x', 'javascript:alert(1)'])('rejects the base URL %s', baseURL => {
+        const base = { kind: 'openai-compatible' as const, label: 'Gateway', model: 'claude-sonnet-5-5' };
+        expect(validateProviderDraft(draft({ ...base, baseURL }), knownOnly).baseURL).toBe('Enter a full URL that starts with http:// or https://.');
+    });
+
     it('needs a base URL for OpenAI-compatible providers and checks its shape', () => {
         const base = { kind: 'openai-compatible' as const, label: 'Gateway', model: 'claude-sonnet-5-5' };
         expect(validateProviderDraft(draft(base), knownOnly).baseURL).toBe('This provider type needs a base URL.');

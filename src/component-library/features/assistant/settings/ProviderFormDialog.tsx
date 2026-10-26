@@ -45,7 +45,7 @@ const MODEL_PLACEHOLDERS: Record<ByokProviderKind, string> = {
 
 function baseUrlHint(kind: ByokProviderKind): string {
     if (kind === 'openai-compatible') return 'Usually ends in /v1.';
-    if (kind === 'ollama') return 'Leave empty for http://localhost:11434.';
+    if (kind === 'ollama') return `Leave empty for ${DEFAULT_BASE_URLS.ollama}.`;
     return 'Leave empty to use the default.';
 }
 
@@ -74,7 +74,7 @@ export const ProviderFormDialog: React.FC<ProviderFormDialogProps> = ({ allowedK
             placeholder?: string;
             hint?: string;
             required?: boolean;
-            inputMode?: 'numeric' | 'decimal';
+            inputMode?: 'numeric' | 'decimal' | 'url';
         } = {},
     ) => {
         const id = `${ID}-${name}`;
@@ -123,7 +123,8 @@ export const ProviderFormDialog: React.FC<ProviderFormDialogProps> = ({ allowedK
                 />
                 {textField('label', 'Name', { required: true, placeholder: 'My provider' })}
                 {textField('baseURL', 'Base URL', {
-                    type: 'url',
+                    // Not type="url": native validation would block submit and hide the inline error.
+                    inputMode: 'url',
                     required: KIND_NEEDS_BASE_URL[draft.kind],
                     placeholder: DEFAULT_BASE_URLS[draft.kind] ?? 'https://litellm.example.org/v1',
                     hint: baseUrlHint(draft.kind),
