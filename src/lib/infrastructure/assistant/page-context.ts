@@ -7,33 +7,43 @@ const PARAM_KEY_MAX_CHARS = 64;
 const PARAM_VALUE_MAX_CHARS = 256;
 const MAX_PARAMS = 30;
 
-/** Param names that commonly carry credentials; matched case-insensitively with - and _ ignored. */
-const SENSITIVE_PARAM_KEYS = new Set(
-    [
-        'token',
-        'code',
-        'state',
-        'access_token',
-        'id_token',
-        'refresh_token',
-        'password',
-        'secret',
-        'key',
-        'apikey',
-        'api_key',
-        'session',
-        'auth',
-        'authorization',
-    ].map(normaliseParamKey),
-);
+const SENSITIVE_EXACT_KEYS = new Set([
+    'code',
+    'password',
+    'secret',
+    'key',
+    'apikey',
+    'session',
+    'sessionid',
+    'auth',
+    'authorization',
+    'jwt',
+    'bearer',
+]);
+const SENSITIVE_KEY_SUFFIXES = ['token', 'secret', 'password', 'apikey'];
 
 function normaliseParamKey(key: string): string {
     return key.toLowerCase().replace(/[-_]/g, '');
 }
 
-/** Breaks the closing tags of the untrusted-data blocks so text cannot end the block early. */
+/** Credential-like param names: exact names, or names ending in token, secret, password or apikey. */
+function isSensitiveParamKey(key: string): boolean {
+    const normalised = normaliseParamKey(key);
+    return SENSITIVE_EXACT_KEYS.has(normalised) || SENSITIVE_KEY_SUFFIXES.some(suffix => normalised.endsWith(suffix));
+}
+
+const CLOSING_DATA_TAG = /(?:<|&lt;)\s*\/\s*(?:page_context|conversation_summary)\b/gi;
+
+/**
+ * Removes closing tags of the untrusted-data blocks so text cannot end the block early.
+ * Matches after NFKC normalisation and format-character stripping, so full-width,
+ * zero-width, entity and spaced variants are caught too.
+ */
 export function neutraliseDataTags(text: string): string {
-    return text.replace(/<\s*\/(?=\s*(?:page_context|conversation_summary)\b)/gi, '<\\/');
+    return text
+        .normalize('NFKC')
+        .replace(/\p{Cf}/gu, '')
+        .replace(CLOSING_DATA_TAG, '[removed tag]');
 }
 
 /** Single-line, tag-safe text for a field of the page context. */
@@ -59,11 +69,11 @@ export interface PageContextInput {
  * no session object or token can reach the prompt through it.
  */
 export function buildPageContext(input: PageContextInput): PageContext {
-    const params: Record<string, string> = {};
+    const params: Record<string, string> = Object.create(null);
     input.searchParams?.forEach((value, key) => {
-        if (SENSITIVE_PARAM_KEYS.has(normaliseParamKey(key))) return;
+        if (isSensitiveParamKey(key)) return;
         const safeKey = toSingleLine(truncate(key, PARAM_KEY_MAX_CHARS));
-        if (!(safeKey in params) && Object.keys(params).length >= MAX_PARAMS) return;
+        if (!Object.hasOwn(params, safeKey) && Object.keys(params).length >= MAX_PARAMS) return;
         params[safeKey] = toSingleLine(truncate(value, PARAM_VALUE_MAX_CHARS));
     });
     const summary = input.summary?.trim();
@@ -79,7 +89,7 @@ export function buildPageContext(input: PageContextInput): PageContext {
 /** The note added to the next turn when the user moved to another page. */
 export function navigationNote(previousRoute: string | undefined, context: PageContext): string | undefined {
     if (!previousRoute || previousRoute === context.route) return undefined;
-    return `The user is now on ${context.route}.`;
+    return `The user is now on ${toSingleLine(truncate(context.route, PATHNAME_MAX_CHARS))}.`;
 }
 
 /** `${account}@${vo}` from the two session fields, or undefined when either is missing. */

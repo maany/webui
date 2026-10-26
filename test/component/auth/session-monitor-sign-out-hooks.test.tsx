@@ -68,8 +68,12 @@ describe('SessionMonitorProvider automatic sign-out hooks', () => {
             update: jest.fn(),
         });
         (usePathname as jest.Mock).mockReturnValue('/dashboard');
+        let releaseHooks: () => void = () => undefined;
         (runSignOutHooks as jest.Mock).mockReset().mockImplementation(async () => {
             order.push('hooks');
+            await new Promise<void>(resolve => {
+                releaseHooks = resolve;
+            });
         });
         (signOut as jest.Mock).mockReset().mockImplementation(async () => {
             order.push('signOut');
@@ -85,6 +89,10 @@ describe('SessionMonitorProvider automatic sign-out hooks', () => {
             );
         });
         expect(runSignOutHooks).toHaveBeenCalledWith(1000);
+        expect(signOut).not.toHaveBeenCalled();
+        await act(async () => {
+            releaseHooks();
+        });
         expect(order.slice(0, 3)).toEqual(['hooks', 'signOut', 'navigate']);
     });
 });
