@@ -2,8 +2,8 @@ import type { ToolError, ToolPolicy } from './tool';
 import type { TurnUsage } from './usage';
 
 export type AssistantEvent =
-    | { type: 'turn-started'; conversationId: string; turnId: string; providerKind: string; model: string; at: number }
-    | { type: 'llm-call-finished'; turnId: string; usage: TurnUsage; finishReason?: string; at: number }
+    | { type: 'turn-started'; conversationId: string; turnId: string; providerKind: string; model: string; at: number; userText?: string }
+    | { type: 'llm-call-finished'; turnId: string; usage: TurnUsage; finishReason?: string; at: number; outputText?: string }
     | { type: 'tool-call-started'; turnId: string; toolCallId: string; toolName: string; args: unknown; policy: ToolPolicy; at: number }
     | {
           type: 'tool-approval';
