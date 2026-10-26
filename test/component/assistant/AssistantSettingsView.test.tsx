@@ -37,6 +37,13 @@ describe('AssistantSettingsView', () => {
         expect(patch(getDefaultAssistantSettings()).display).toEqual({ detail: 'verbose' });
     });
 
+    it('lists the shipped skills on the skills tab', async () => {
+        render(<AssistantSettingsView {...props()} />);
+        fireEvent.click(screen.getByRole('tab', { name: 'Skills' }));
+        expect(screen.getByText('creating-replication-rules')).toBeInTheDocument();
+        expect(await screen.findByText('Docs index details are not available.')).toBeInTheDocument();
+    });
+
     it('clears the settings after confirmation', async () => {
         const p = props();
         render(<AssistantSettingsView {...p} />);
@@ -72,7 +79,7 @@ describe('AssistantSettingsView', () => {
     it('uses no em dashes in any tab', async () => {
         render(<AssistantSettingsView {...props()} />);
         let text = document.body.textContent ?? '';
-        ['Display', 'Storage'].forEach(name => {
+        ['Skills', 'Display', 'Storage'].forEach(name => {
             fireEvent.click(screen.getByRole('tab', { name }));
             text += document.body.textContent ?? '';
         });

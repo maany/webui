@@ -150,16 +150,18 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
 
 /**
  * Narrows the tools sent with each model call (for example while a skill with
- * allowed-tools is active, phase 5). Runs before every model call.
+ * allowed-tools is active, phase 5). Runs before every model call. `registered`
+ * may be a getter so tools loaded mid-turn (find_tools, phase 2) are judged too.
  */
 export function createToolFilterMiddleware(
     filter: (tools: RegisteredTool<any>[]) => RegisteredTool<any>[],
-    registered: RegisteredTool<any>[],
+    registered: RegisteredTool<any>[] | (() => RegisteredTool<any>[]),
 ): ChatMiddleware {
     return {
         name: 'rucio-assistant-tool-filter',
         onConfig: (_ctx, config) => {
-            const allowed = new Set(filter(registered).map(tool => tool.spec.name));
+            const current = typeof registered === 'function' ? registered() : registered;
+            const allowed = new Set(filter(current).map(tool => tool.spec.name));
             return { tools: config.tools.filter(tool => allowed.has(tool.name)) };
         },
     };

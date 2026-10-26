@@ -29,6 +29,7 @@ import { useAssistantConfig } from '@/lib/infrastructure/hooks/useAssistantConfi
 import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { useDataHandleLifecycle } from '@/lib/infrastructure/hooks/useDataHandleLifecycle';
 import { useAssistantSettings } from '@/lib/infrastructure/hooks/useAssistantSettings';
+import { useAssistantSkills } from '@/lib/infrastructure/hooks/useAssistantSkills';
 import { usePermissions } from '@/lib/infrastructure/hooks/usePermissions';
 
 export { usePageActionRegistry } from '@/lib/infrastructure/hooks/useAssistantShell';
@@ -57,6 +58,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     const queryClient = useQueryClient();
     const shell = useAssistantPanel();
     const [bus] = useState(createAssistantEventBus);
+    const assistantSkills = useAssistantSkills(bus);
     // find_tools active set per conversation, persisted as Conversation.activeTools by withToolState.
     const activeToolsRef = useRef<Map<string, string[]>>(new Map());
     const openConversationIdRef = useRef<string | undefined>(undefined);
@@ -105,7 +107,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
         },
         // Visible tools that are always on or were loaded by find_tools in this conversation.
         visibleTools: () => selectRunTools(allTools(), isVisible, new Set(activeNames())),
-        systemPromptSections: () => [ASSISTANT_DATA_TOOLS_PROMPT],
+        systemPromptSections: () => [ASSISTANT_DATA_TOOLS_PROMPT, ...assistantSkills.promptSections()],
         makePolicyFor,
         toolContextExtras: () => ({
             ...(flags ? { flags } : {}),
@@ -117,6 +119,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
             isToolVisible,
             toolPolicy,
             handleRecords: () => deriveHandleRecords(messagesRef.current),
+            skills: assistantSkills.source,
         }),
         pageContext: () =>
             accountKey
@@ -135,6 +138,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
         navigate: url => router.push(url),
         queryClient,
         createRunner: overrides?.createRunner ?? (runnerDeps => createAgentRunner(runnerDeps)),
+        decorateRunnerDeps: (runnerDeps, conversationId) => assistantSkills.decorate(runnerDeps, conversationId),
         summarize: overrides?.summarize ?? (input => completeText(input)),
     };
     const assistant = useAssistantController(deps);

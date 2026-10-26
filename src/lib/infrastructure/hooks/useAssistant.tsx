@@ -13,6 +13,7 @@ import { addUsage, computeCost, EMPTY_USAGE_TOTALS, type TokenUsage, type TurnUs
 import type { AssistantConversationRepositoryPort } from '@/lib/core/port/secondary/assistant-conversation-repository-port';
 import type { AssistantDataHandleStorePort } from '@/lib/core/port/secondary/assistant-data-handle-store-port';
 import type { AssistantPageActionRegistryPort } from '@/lib/core/port/secondary/assistant-page-action-registry-port';
+import type { AssistantSkillSourcePort } from '@/lib/core/port/secondary/assistant-skill-source-port';
 import { createApprovalsController } from '@/lib/infrastructure/assistant/approvals-controller';
 import { KEEP_RECENT_TURNS, messagesAfter, planCompaction, shouldCompact } from '@/lib/infrastructure/assistant/compaction';
 import type { AssistantEventBus } from '@/lib/infrastructure/assistant/event-bus';
@@ -100,7 +101,13 @@ export interface AssistantControllerDeps {
         isToolVisible?: ToolExecutionContext['isToolVisible'];
         toolPolicy?: ToolExecutionContext['toolPolicy'];
         handleRecords?: ToolExecutionContext['handleRecords'];
+        skills?: AssistantSkillSourcePort;
     };
+    /**
+     * Wraps the runner deps of a turn (phase 5 skills: tool filter and execution guard). Called on every
+     * deps() read with the id of the conversation being run. It may only narrow tools, never add one.
+     */
+    decorateRunnerDeps?(deps: AgentRunnerDeps, conversationId: string): AgentRunnerDeps;
     pageContext(): PageContext | undefined;
     retention(): RetentionSettings;
     handles: AssistantDataHandleStorePort;
@@ -451,7 +458,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             // find_tools during the turn are offered on the next step.
             const runner = d.createRunner(() => {
                 const tools = depsRef.current.visibleTools();
-                return {
+                const runnerDeps: AgentRunnerDeps = {
                     provider,
                     tools,
                     policyFor,
@@ -481,6 +488,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     },
                     maxSteps: d.maxSteps ?? DEFAULT_MAX_STEPS,
                 };
+                return depsRef.current.decorateRunnerDeps?.(runnerDeps, startConversation.id) ?? runnerDeps;
             });
             runnerRef.current = runner;
 

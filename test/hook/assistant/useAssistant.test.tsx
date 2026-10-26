@@ -1067,3 +1067,25 @@ describe('useAssistantController races', () => {
         expect((await repository.listMessages(id)).filter(m => m.role === 'assistant')).toHaveLength(2);
     });
 });
+
+describe('decorateRunnerDeps (phase 5)', () => {
+    it('passes the runner deps of a turn and the running conversation id through the decorator', async () => {
+        const seen: string[] = [];
+        const { hook, created } = setup([textScript('ok')], {
+            decorateRunnerDeps: (deps, conversationId) => {
+                seen.push(conversationId);
+                return { ...deps, toolFilter: tools => tools.filter(tool => tool.spec.name !== 'do_write') };
+            },
+        });
+        await act(async () => {
+            await hook.result.current.send('hi');
+        });
+        const conversationId = hook.result.current.conversation?.id;
+        expect(conversationId).toEqual(expect.any(String));
+        expect(seen.length).toBeGreaterThan(0);
+        expect(new Set(seen)).toEqual(new Set([conversationId]));
+        const deps = created[0].lastDeps;
+        expect(deps?.tools.map(tool => tool.spec.name)).toEqual(['do_write']);
+        expect(deps?.toolFilter?.(deps.tools)).toEqual([]);
+    });
+});
