@@ -24,7 +24,7 @@ export function usePageAction<I>(action: PageActionRegistration<I>, options: Use
         latest.current = action;
     });
 
-    const { name, description } = action;
+    const { name, description, risk } = action;
 
     useEffect(() => {
         if (!registry || !enabled) return;
@@ -33,6 +33,7 @@ export function usePageAction<I>(action: PageActionRegistration<I>, options: Use
             description,
             schema: latest.current.schema,
             apply: (args: I) => latest.current.apply(args),
+            ...(risk ? { risk } : {}),
         });
-    }, [registry, enabled, name, description]);
+    }, [registry, enabled, name, description, risk]);
 }

@@ -30,6 +30,29 @@ describe('page_action tool', () => {
         expect(result).toEqual({ action: 'rules.filter', outcome: 'Showing Stuck rules.', actions: registry.list() });
     });
 
+    it('refuses an action that is not read only before invoking anything (PF7)', async () => {
+        for (const risk of ['write', 'high'] as const) {
+            const registry = new FakePageActionRegistry();
+            const apply = jest.fn(async () => 'applied');
+            registry.register({ name: 'rules.delete_all', description: 'Delete', schema: z.object({}), apply, risk });
+            const invoke = jest.spyOn(registry, 'invoke');
+            await expect(tool.execute({ name: 'rules.delete_all', args: {} }, makeTestToolContext({ pages: registry }))).resolves.toEqual({
+                error: 'denied_by_policy',
+                message: 'This page action changes data and cannot run from Rucio bot yet.',
+            });
+            expect(invoke).not.toHaveBeenCalled();
+            expect(apply).not.toHaveBeenCalled();
+        }
+    });
+
+    it('still runs an action that declares risk read', async () => {
+        const registry = new FakePageActionRegistry();
+        registry.register({ name: 'rules.filter', description: 'Filter', schema: z.object({}), apply: async () => 'ok', risk: 'read' });
+        await expect(tool.execute({ name: 'rules.filter', args: {} }, makeTestToolContext({ pages: registry }))).resolves.toMatchObject({
+            outcome: 'ok',
+        });
+    });
+
     it('returns invalid_args for arguments the page schema rejects', async () => {
         const apply = jest.fn(async () => 'never');
         const result = await tool.execute({ name: 'rules.filter', args: { state: 'Broken' } }, makeTestToolContext({ pages: pageWithFilter(apply) }));

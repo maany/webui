@@ -26,6 +26,15 @@ describe('usePageAction', () => {
         expect(registry.list()).toEqual([]);
     });
 
+    it('passes the declared risk through and defaults to read', () => {
+        renderHook(() => usePageAction({ name: 'demo.search', description: 'Search', schema, apply: async () => 'ok' }));
+        renderHook(() => usePageAction({ name: 'demo.delete', description: 'Delete', schema, apply: async () => 'ok', risk: 'write' }));
+        expect(registry.list().map(action => [action.name, action.risk])).toEqual([
+            ['demo.search', 'read'],
+            ['demo.delete', 'write'],
+        ]);
+    });
+
     it('calls the latest apply without registering again', async () => {
         const first = jest.fn(async () => 'first');
         const second = jest.fn(async () => 'second');

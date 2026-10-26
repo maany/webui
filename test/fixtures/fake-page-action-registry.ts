@@ -39,6 +39,7 @@ export class FakePageActionRegistry implements AssistantPageActionRegistryPort {
             name: action.name,
             description: action.description,
             inputJsonSchema: z.toJSONSchema(action.schema),
+            risk: action.risk ?? 'read',
         }));
     }
 

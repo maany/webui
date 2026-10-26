@@ -30,6 +30,7 @@ export function createPageActionRegistry(): AssistantPageActionRegistryPort {
         name: action.name,
         description: action.description,
         inputJsonSchema: jsonSchemaOf(action.schema),
+        risk: action.risk ?? 'read',
     });
 
     const list = () => Array.from(actions.values()).map(toInfo);

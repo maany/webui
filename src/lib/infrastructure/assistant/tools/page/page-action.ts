@@ -36,6 +36,10 @@ export function createPageActionTool(): RegisteredTool<PageActionInput> {
         },
         async execute(input, ctx) {
             if (ctx.signal.aborted) return toolError('aborted', 'The page action was stopped.');
+            // No gate path exists for page actions yet, so anything that is not read only fails closed before it is invoked.
+            const info = ctx.pages.list().find(action => action.name === input.name);
+            if (info && (info.risk ?? 'read') !== 'read')
+                return toolError('denied_by_policy', 'This page action changes data and cannot run from Rucio bot yet.');
             try {
                 const outcome = await ctx.pages.invoke(input.name, input.args ?? {});
                 if (isMobileViewport()) ctx.minimizePanel?.();
