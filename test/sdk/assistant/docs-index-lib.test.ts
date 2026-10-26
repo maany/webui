@@ -248,3 +248,19 @@ describe('headingAnchor repeated slugs', () => {
         expect(['Examples', 'Examples 1', 'Examples'].map(h => headingAnchor(h, used).anchor)).toEqual(['examples', 'examples-1', 'examples-2']);
     });
 });
+
+describe('em dash normalisation', () => {
+    it('replaces U+2014 in text, titles and code, but keeps the anchor Docusaurus would generate', () => {
+        const dash = String.fromCharCode(0x2014);
+        const drafts = chunkMarkdown(
+            'a.md',
+            `---\ntitle: Page ${dash} one\n---\n\n## Foo ${dash} bar\n\nSome ${dash} text\n\n\`\`\`\nx ${dash} y\n\`\`\`\n`,
+        );
+        const json = JSON.stringify(drafts);
+        expect(json).not.toContain(dash);
+        expect(drafts[0].title).toBe('Page - one > Foo - bar');
+        expect(drafts[0].text).toContain('Some - text');
+        expect(drafts[0].text).toContain('x - y');
+        expect(drafts[0].url).toMatch(/#foo--bar$/);
+    });
+});

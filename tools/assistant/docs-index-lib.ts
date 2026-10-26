@@ -57,6 +57,16 @@ function stripStarEmphasis(text: string): string {
 
 /** Strip inline markdown so a heading reads as plain text. Underscores inside words are kept. */
 export function inlineText(markdown: string): string {
+    return noEmDash(rawInlineText(markdown));
+}
+
+/** The user-facing rule is no em dashes anywhere; upstream docs contain a few. */
+export function noEmDash(text: string): string {
+    return text.replace(/\u2014/g, '-');
+}
+
+/** Like inlineText but keeps every character, so anchors can be computed the way Docusaurus does. */
+function rawInlineText(markdown: string): string {
     const withoutLinks = markdown.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
     const codeSpans: string[] = [];
     const masked = withoutLinks.replace(/`([^`]*)`/g, (_m, code: string) => `\u0000${codeSpans.push(code) - 1}\u0000`);
@@ -71,7 +81,7 @@ export function inlineText(markdown: string): string {
 export function headingAnchor(heading: string, used: Map<string, number>): { text: string; anchor: string } {
     const custom = /\s*\{#([^}]+)\}\s*$/.exec(heading);
     const raw = custom ? heading.slice(0, custom.index) : heading;
-    const text = inlineText(raw);
+    const text = rawInlineText(raw);
     let anchor =
         custom?.[1] ??
         text
@@ -91,7 +101,7 @@ export function headingAnchor(heading: string, used: Map<string, number>): { tex
         }
         used.set(anchor, 0);
     }
-    return { text, anchor };
+    return { text: noEmDash(text), anchor };
 }
 
 const FENCE_RE = /^\s*(```|~~~)/;
@@ -130,10 +140,12 @@ export function toPlainText(markdown: string): string {
         if (/^\s*(import|export)\s.+$/.test(line) || /^\s*:::/.test(line) || /^\s*\|[\s:|-]+$/.test(line)) continue;
         out.push(proseLine(line));
     }
-    return out
-        .join('\n')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
+    return noEmDash(
+        out
+            .join('\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim(),
+    );
 }
 
 export function excerptOf(text: string): string {
@@ -209,7 +221,9 @@ export function chunkMarkdown(relPath: string, raw: string): ChunkDraft[] {
     const url = pageUrl(route);
     const h1 = /^#\s+(.+)$/m.exec(prose);
     const pageTitle =
-        frontmatterString(frontmatter, 'title') ?? (h1 ? inlineText(h1[1]) : undefined) ?? relPath.replace(/^.*\//, '').replace(/\.mdx?$/, '');
+        noEmDash(frontmatterString(frontmatter, 'title') ?? '') ||
+        (h1 ? inlineText(h1[1]) : undefined) ||
+        relPath.replace(/^.*\//, '').replace(/\.mdx?$/, '');
     const used = new Map<string, number>();
     const drafts: ChunkDraft[] = [];
     for (const section of splitSections(body)) {
@@ -266,11 +280,13 @@ export function openapiChunks(spec: OpenApiSpec): ChunkDraft[] {
                 .filter(p => p.name)
                 .map(p => `${p.name} (${p.in ?? 'param'}): ${p.description ?? ''}`.trim())
                 .join('\n');
-            const text = [op.tags?.length ? `Tags: ${op.tags.join(', ')}` : '', op.summary ?? '', op.description ?? '', params]
-                .filter(s => s !== '')
-                .join('\n');
+            const text = noEmDash(
+                [op.tags?.length ? `Tags: ${op.tags.join(', ')}` : '', op.summary ?? '', op.description ?? '', params]
+                    .filter(s => s !== '')
+                    .join('\n'),
+            );
             drafts.push({
-                title: `${method.toUpperCase()} ${path}${op.summary ? ` (${op.summary})` : ''}`,
+                title: noEmDash(`${method.toUpperCase()} ${path}${op.summary ? ` (${op.summary})` : ''}`),
                 text,
                 excerpt: excerptOf(text),
                 url: REST_API_DOC_URL,

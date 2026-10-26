@@ -93,7 +93,7 @@ export function createKnowledgeIndex(loaders: KnowledgeIndexLoaders = fetchKnowl
             const trimmed = query.trim();
             if (trimmed === '') return [];
             const { search } = await load();
-            const max = Math.max(1, Math.min(MAX_DOC_HITS, Math.floor(limit)));
+            const max = Math.max(1, Math.min(MAX_DOC_HITS, Math.floor(Number.isFinite(limit) ? limit : 5)));
             return search
                 .search(trimmed, DOCS_SEARCH_OPTIONS)
                 .slice(0, max)

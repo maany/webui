@@ -10,7 +10,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +37,19 @@ const sourcesPath = join(here, 'docs-sources.json');
 
 function argValue(flag: string): string | undefined {
     const i = process.argv.indexOf(flag);
-    return i >= 0 ? process.argv[i + 1] : undefined;
+    if (i < 0) return undefined;
+    const value = process.argv[i + 1];
+    if (value === undefined || value.startsWith('--')) throw new Error(`${flag} needs a value`);
+    return value;
+}
+
+function validateSources(sources: DocsSources): void {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(sources.documentation?.repo ?? '')) {
+        throw new Error(`docs-sources.json: documentation.repo must look like "owner/name", got "${sources.documentation?.repo}"`);
+    }
+    if (!/^[0-9a-f]{40}$/.test(sources.documentation?.ref ?? '')) {
+        throw new Error(`docs-sources.json: documentation.ref must be a 40 character commit sha, got "${sources.documentation?.ref}"`);
+    }
 }
 
 function listMarkdown(dir: string): string[] {
@@ -63,16 +75,26 @@ async function docsRoot(sources: DocsSources): Promise<{ root: string; cleanup: 
         if (head !== sources.documentation.ref) {
             throw new Error(`--docs-dir is at ${head}, but docs-sources.json pins ${sources.documentation.ref}. Check out the pinned ref first.`);
         }
+        const dirty = execFileSync('git', ['-C', local, 'status', '--porcelain']).toString().trim();
+        if (dirty !== '') throw new Error(`--docs-dir ${local} has uncommitted changes; use a clean checkout of the pinned ref.`);
+        if (!existsSync(join(local, 'docs')) || !statSync(join(local, 'docs')).isDirectory()) {
+            throw new Error(`--docs-dir ${local} has no docs directory.`);
+        }
         return { root: resolve(local), cleanup: () => undefined };
     }
     const tmp = mkdtempSync(join(tmpdir(), 'rucio-docs-'));
-    const url = `https://codeload.github.com/${sources.documentation.repo}/tar.gz/${sources.documentation.ref}`;
-    const tarball = join(tmp, 'docs.tar.gz');
-    writeFileSync(tarball, Buffer.from(await (await fetchOk(url)).arrayBuffer()));
-    execFileSync('tar', ['-xzf', tarball, '-C', tmp]);
-    const extracted = readdirSync(tmp).find(name => name !== 'docs.tar.gz');
-    if (!extracted) throw new Error('Documentation tarball was empty');
-    return { root: join(tmp, extracted), cleanup: () => rmSync(tmp, { recursive: true, force: true }) };
+    try {
+        const url = `https://codeload.github.com/${sources.documentation.repo}/tar.gz/${sources.documentation.ref}`;
+        const tarball = join(tmp, 'docs.tar.gz');
+        writeFileSync(tarball, Buffer.from(await (await fetchOk(url)).arrayBuffer()));
+        execFileSync('tar', ['-xzf', tarball, '-C', tmp]);
+        const extracted = readdirSync(tmp).find(name => name !== 'docs.tar.gz');
+        if (!extracted) throw new Error('Documentation tarball was empty');
+        return { root: join(tmp, extracted), cleanup: () => rmSync(tmp, { recursive: true, force: true }) };
+    } catch (error) {
+        rmSync(tmp, { recursive: true, force: true });
+        throw error;
+    }
 }
 
 async function loadOpenApi(sources: DocsSources): Promise<OpenApiSpec> {
@@ -83,9 +105,11 @@ async function loadOpenApi(sources: DocsSources): Promise<OpenApiSpec> {
 
 async function main(): Promise<void> {
     const sources = JSON.parse(readFileSync(sourcesPath, 'utf8')) as DocsSources;
+    validateSources(sources);
     const updatePins = process.argv.includes('--update-pins');
     const out = resolve(repoRoot, argValue('--out') ?? 'public/assistant/docs-index.json');
 
+    let newPin: DocsSources['openapi'] | undefined;
     const spec = await loadOpenApi(sources);
     const sha256 = createHash('sha256').update(canonicalJson(spec)).digest('hex');
     const version = spec.info?.version ?? 'unknown';
@@ -96,9 +120,7 @@ async function main(): Promise<void> {
                     'Re-run with --update-pins to accept it.',
             );
         }
-        sources.openapi = { ...sources.openapi, version, sha256 };
-        writeFileSync(sourcesPath, `${JSON.stringify(sources, null, 4)}\n`);
-        console.log(`Updated OpenAPI pin to ${version} ${sha256}`);
+        newPin = { ...sources.openapi, version, sha256 };
     }
 
     const { root, cleanup } = await docsRoot(sources);
@@ -129,6 +151,10 @@ async function main(): Promise<void> {
         writeFileSync(metaOut, `${JSON.stringify(meta, null, 4)}\n`);
         console.log(`Wrote ${relative(repoRoot, out)}: ${files.length} pages, ${index.metadata.chunkCount} chunks, ${json.length} bytes`);
         console.log(`Wrote ${relative(repoRoot, metaOut)}`);
+        if (newPin) {
+            writeFileSync(sourcesPath, `${JSON.stringify({ ...sources, openapi: newPin }, null, 4)}\n`);
+            console.log(`Updated OpenAPI pin to ${newPin.version} ${newPin.sha256}`);
+        }
     } finally {
         cleanup();
     }

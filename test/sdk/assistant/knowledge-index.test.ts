@@ -63,6 +63,12 @@ describe('createKnowledgeIndex', () => {
         });
     });
 
+    it('falls back to 5 hits for a non-finite limit', async () => {
+        const index = createKnowledgeIndex(fixtureLoaders());
+        expect(await index.search('quota', Number.NaN)).toHaveLength(1);
+        expect(await index.search('quota', Infinity)).toHaveLength(1);
+    });
+
     it('finds OpenAPI operations and caps the number of hits', async () => {
         const index = createKnowledgeIndex(fixtureLoaders());
         const hits = await index.search('delete replication rule', 1);
