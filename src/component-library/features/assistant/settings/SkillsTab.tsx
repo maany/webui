@@ -11,6 +11,7 @@ import { Button } from '@/component-library/atoms/form/button';
 import { Checkbox } from '@/component-library/atoms/form/checkbox';
 import { Textarea } from '@/component-library/atoms/form/input';
 import { cn } from '@/component-library/utils';
+import { MAX_SKILL_BYTES } from '@/lib/infrastructure/assistant/skills/skill-md';
 
 export const SOURCE_LABELS: Record<SkillSourceKind, string> = { shipped: 'Shipped', operator: 'Operator', user: 'User' };
 const SOURCE_BADGE: Record<SkillSourceKind, 'neutral' | 'info' | 'warning'> = { shipped: 'neutral', operator: 'info', user: 'warning' };
@@ -50,7 +51,7 @@ function DocsVersion({ docs }: { docs: SkillsTabProps['docs'] }) {
     }
     return (
         <section aria-labelledby="assistant-docs-index" className="flex flex-col gap-1">
-            <h3 id="assistant-docs-index" className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
+            <h3 id="assistant-docs-index" className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
                 Docs index
             </h3>
             <p className="text-sm text-neutral-700 dark:text-neutral-300">{text}</p>
@@ -130,15 +131,28 @@ export function SkillsTab({ entries, docs, onToggle, onImport, onDelete }: Skill
     const onFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         event.target.value = '';
-        if (file) runImport(await readFileText(file));
+        if (!file) return;
+        if (file.size > MAX_SKILL_BYTES) {
+            setFeedback({ variant: 'error', message: `That file is larger than ${MAX_SKILL_BYTES / 1024} KB.` });
+            return;
+        }
+        let text: string;
+        try {
+            text = await readFileText(file);
+        } catch {
+            setFeedback({ variant: 'error', message: 'Could not read the file.' });
+            return;
+        }
+        runImport(text);
     };
 
     return (
         <div className="flex flex-col gap-6">
+            <h2 className="sr-only">Skills</h2>
             <DocsVersion docs={docs} />
 
             <section aria-labelledby="assistant-skills" className="flex flex-col gap-3">
-                <h3 id="assistant-skills" className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
+                <h3 id="assistant-skills" className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
                     Skills
                 </h3>
                 <p className="text-sm text-neutral-700 dark:text-neutral-300">
@@ -163,7 +177,7 @@ export function SkillsTab({ entries, docs, onToggle, onImport, onDelete }: Skill
             </section>
 
             <section aria-labelledby="assistant-import-skill" className="flex flex-col gap-3">
-                <h3 id="assistant-import-skill" className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
+                <h3 id="assistant-import-skill" className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
                     Add your own skill
                 </h3>
                 <p className="text-sm text-neutral-700 dark:text-neutral-300">

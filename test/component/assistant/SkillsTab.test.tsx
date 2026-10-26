@@ -114,6 +114,30 @@ describe('SkillsTab', () => {
         expect(screen.getByRole('alert')).toHaveTextContent('Could not import the skill: description is required.');
     });
 
+    it('rejects a file over 32 KB without reading it', async () => {
+        const props = renderTab();
+        const user = userEvent.setup();
+        const big = new File(['a'.repeat(32 * 1024 + 1)], 'SKILL.md', { type: 'text/markdown' });
+        await user.upload(screen.getByLabelText('Import a SKILL.md file'), big);
+        expect(await screen.findByRole('alert')).toHaveTextContent('That file is larger than 32 KB.');
+        expect(props.onImport).not.toHaveBeenCalled();
+    });
+
+    it('reports a file that cannot be read', async () => {
+        const spy = jest.spyOn(FileReader.prototype, 'readAsText').mockImplementation(function (this: FileReader) {
+            setTimeout(() => this.onerror?.(new ProgressEvent('error') as ProgressEvent<FileReader>), 0);
+        });
+        try {
+            const props = renderTab();
+            const user = userEvent.setup();
+            await user.upload(screen.getByLabelText('Import a SKILL.md file'), new File(['x'], 'SKILL.md'));
+            expect(await screen.findByRole('alert')).toHaveTextContent('Could not read the file.');
+            expect(props.onImport).not.toHaveBeenCalled();
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
     it('avoids em dashes in its copy', () => {
         renderTab();
         expect(document.body.textContent).not.toContain('\u2014');
