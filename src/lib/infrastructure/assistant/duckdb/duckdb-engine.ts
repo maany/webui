@@ -5,10 +5,10 @@ export interface DuckDbQueryResult {
 }
 
 export interface DuckDbEngine {
-    exec(sql: string): Promise<void>;
+    exec(sql: string, signal?: AbortSignal): Promise<void>;
     query(sql: string, signal?: AbortSignal): Promise<DuckDbQueryResult>;
     /** Creates table `table` from a JSON array of row objects. */
-    insertJSON(table: string, jsonText: string): Promise<void>;
+    insertJSON(table: string, jsonText: string, signal?: AbortSignal): Promise<void>;
     terminate(): Promise<void>;
 }
 

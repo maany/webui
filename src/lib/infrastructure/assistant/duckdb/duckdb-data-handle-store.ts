@@ -115,12 +115,12 @@ export class DuckDbDataHandleStore implements AssistantDataHandleStorePort {
                 this.throwIfStale(generation, signal);
                 let columns: DataHandleColumn[];
                 try {
-                    await engine.exec(`DROP TABLE IF EXISTS ${quote(name)}`);
+                    await engine.exec(`DROP TABLE IF EXISTS ${quote(name)}`, signal);
                     if (buffer.length === 0) {
-                        await engine.exec(`CREATE TABLE ${quote(name)} AS SELECT NULL::VARCHAR AS _empty WHERE false`);
+                        await engine.exec(`CREATE TABLE ${quote(name)} AS SELECT NULL::VARCHAR AS _empty WHERE false`, signal);
                         columns = [];
                     } else {
-                        await engine.insertJSON(name, JSON.stringify(normalizeRows(buffer)));
+                        await engine.insertJSON(name, JSON.stringify(normalizeRows(buffer)), signal);
                         columns = await this.describe(engine, name);
                     }
                 } catch (error) {
@@ -164,7 +164,7 @@ export class DuckDbDataHandleStore implements AssistantDataHandleStorePort {
                 if (saveAs !== undefined) {
                     // The handle map may have changed while this call waited in the queue.
                     this.checkSaveAs(saveAs);
-                    await engine.exec(`CREATE OR REPLACE TABLE ${quote(saveAs)} AS SELECT * FROM (${statement}) AS _q`);
+                    await engine.exec(`CREATE OR REPLACE TABLE ${quote(saveAs)} AS SELECT * FROM (${statement}) AS _q`, signal);
                     let savedColumns: DataHandleColumn[];
                     let totalRows: number;
                     let page: DuckDbQueryResult;
@@ -243,6 +243,15 @@ export class DuckDbDataHandleStore implements AssistantDataHandleStorePort {
         } catch {
             // The engine never started or is already gone.
         }
+    }
+
+    /** Called by an engine that terminated itself. Only acts if that engine is still the current one. */
+    async terminateEngine(dead: DuckDbEngine): Promise<void> {
+        const pending = this.engine;
+        if (!pending) return;
+        const current = await pending.catch(() => undefined);
+        if (current !== dead || this.engine !== pending) return;
+        await this.terminate();
     }
 
     subscribe(listener: () => void): () => void {

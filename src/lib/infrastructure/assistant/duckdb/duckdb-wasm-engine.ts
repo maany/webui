@@ -49,7 +49,7 @@ export interface DuckDbWasmEngineDeps {
     startupTimeoutMs?: number;
     abortGraceMs?: number;
     /** Called when the engine terminated itself (a cancelled query would not stop), so the owner can forget it. */
-    onTerminated?: () => void;
+    onTerminated?: (engine: DuckDbEngine) => void;
 }
 
 export async function createDuckDbWasmEngine(deps: DuckDbWasmEngineDeps = {}): Promise<DuckDbEngine> {
@@ -103,7 +103,10 @@ export async function createDuckDbWasmEngine(deps: DuckDbWasmEngineDeps = {}): P
     const terminate = async (): Promise<void> => {
         if (dead) return;
         dead = true;
-        // Terminate the worker first: it is the only thing that stops a running query.
+        // Terminate the worker first: it is the only thing that stops a running call. duckdb-wasm leaves its pending
+        // requests unsettled afterwards, so reject every in-flight call ourselves.
+        worker.removeEventListener('error', onCrash);
+        worker.removeEventListener('messageerror', onCrash);
         worker.terminate();
         inflight.forEach(reject => reject(abortError()));
         inflight.clear();
@@ -111,9 +114,23 @@ export async function createDuckDbWasmEngine(deps: DuckDbWasmEngineDeps = {}): P
         await db.terminate().catch(() => undefined);
     };
 
-    const query = (sql: string, signal?: AbortSignal): Promise<DuckDbQueryResult> => {
+    // The engine ended without being asked to (worker crash, or a call that would not stop): tell the owner.
+    const killAndNotify = async (): Promise<void> => {
+        if (dead) return;
+        await terminate();
+        deps.onTerminated?.(engine);
+    };
+
+    function onCrash(): void {
+        void killAndNotify();
+    }
+    worker.addEventListener('error', onCrash);
+    worker.addEventListener('messageerror', onCrash);
+
+    /** Runs one engine call. It settles on its own result, on abort escalation, or when the engine is terminated. */
+    const track = <T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
         if (dead || signal?.aborted) return Promise.reject(abortError());
-        return new Promise<DuckDbQueryResult>((resolve, reject) => {
+        return new Promise<T>((resolve, reject) => {
             let settled = false;
             let graceTimer: ReturnType<typeof setTimeout> | undefined;
             const finish = (settle: () => void) => {
@@ -129,39 +146,37 @@ export async function createDuckDbWasmEngine(deps: DuckDbWasmEngineDeps = {}): P
                 try {
                     void Promise.resolve(conn.cancelSent()).catch(() => undefined);
                 } catch {
-                    // Cancellation is best effort; the grace timer below still ends the query.
+                    // Cancellation is best effort; the grace timer below still ends the call.
                 }
                 graceTimer = setTimeout(() => {
                     fail(abortError());
-                    void terminate().then(() => deps.onTerminated?.());
+                    void killAndNotify();
                 }, deps.abortGraceMs ?? ABORT_GRACE_MS);
             };
             inflight.add(fail);
             signal?.addEventListener('abort', onAbort, { once: true });
-            conn.query(sql).then(
-                table => finish(() => (signal?.aborted ? reject(abortError()) : resolve(arrowTableToRows(table as unknown as ArrowLikeTable)))),
+            run().then(
+                value => finish(() => (signal?.aborted ? reject(abortError()) : resolve(value))),
                 error => fail(error),
             );
         });
     };
 
-    return {
-        exec: async sql => {
-            if (dead) throw abortError();
-            await conn.query(sql);
-        },
-        query,
-        insertJSON: async (table, jsonText) => {
-            if (dead) throw abortError();
-            fileSeq += 1;
-            const file = `rucio_ingest_${fileSeq}.json`;
-            await db.registerFileText(file, jsonText);
-            try {
-                await conn.insertJSONFromPath(file, { name: table });
-            } finally {
-                await db.dropFile(file);
-            }
-        },
+    const engine: DuckDbEngine = {
+        exec: (sql, signal) => track(async () => void (await conn.query(sql)), signal),
+        query: (sql, signal) => track<DuckDbQueryResult>(async () => arrowTableToRows((await conn.query(sql)) as unknown as ArrowLikeTable), signal),
+        insertJSON: (table, jsonText, signal) =>
+            track(async () => {
+                fileSeq += 1;
+                const file = `rucio_ingest_${fileSeq}.json`;
+                await db.registerFileText(file, jsonText);
+                try {
+                    await conn.insertJSONFromPath(file, { name: table });
+                } finally {
+                    await db.dropFile(file).catch(() => undefined);
+                }
+            }, signal),
         terminate,
     };
+    return engine;
 }

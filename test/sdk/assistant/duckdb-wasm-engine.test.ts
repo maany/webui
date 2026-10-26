@@ -177,3 +177,138 @@ describe('createDuckDbWasmEngine abort and terminate', () => {
         expect(db.terminate).toHaveBeenCalled();
     });
 });
+
+describe('createDuckDbWasmEngine tracks every call', () => {
+    afterEach(() => jest.useRealTimers());
+
+    it('terminate() rejects a never-settling exec', async () => {
+        const { db, deps } = setup();
+        const engine = await createDuckDbWasmEngine(deps);
+        db.conn.query.mockImplementation(never);
+        const outcome = expect(engine.exec('CREATE TABLE t AS SELECT 1')).rejects.toMatchObject({ name: 'AbortError' });
+        await engine.terminate();
+        await outcome;
+    });
+
+    it('terminate() rejects a never-settling insertJSON', async () => {
+        const { db, deps } = setup();
+        const engine = await createDuckDbWasmEngine(deps);
+        db.conn.insertJSONFromPath.mockImplementation(never);
+        const outcome = expect(engine.insertJSON('t', '[]')).rejects.toMatchObject({ name: 'AbortError' });
+        await engine.terminate();
+        await outcome;
+    });
+
+    it('escalates an aborted exec after 2 s', async () => {
+        jest.useFakeTimers();
+        const onTerminated = jest.fn();
+        const { worker, db, deps } = setup(undefined, { onTerminated });
+        const engine = await createDuckDbWasmEngine(deps);
+        db.conn.query.mockImplementation(never);
+        const controller = new AbortController();
+        const outcome = expect(engine.exec('CREATE TABLE t AS SELECT 1', controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+        controller.abort();
+        await jest.advanceTimersByTimeAsync(2000);
+        await outcome;
+        expect(worker.terminate).toHaveBeenCalled();
+        expect(onTerminated).toHaveBeenCalledWith(engine);
+    });
+
+    it('escalates an aborted insertJSON after 2 s', async () => {
+        jest.useFakeTimers();
+        const { worker, db, deps } = setup();
+        const engine = await createDuckDbWasmEngine(deps);
+        db.conn.insertJSONFromPath.mockImplementation(never);
+        const controller = new AbortController();
+        const outcome = expect(engine.insertJSON('t', '[]', controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+        controller.abort();
+        await jest.advanceTimersByTimeAsync(2000);
+        await outcome;
+        expect(worker.terminate).toHaveBeenCalled();
+    });
+
+    it('treats a worker error after start as a crash: rejects in-flight calls and reports termination', async () => {
+        const onTerminated = jest.fn();
+        const { worker, db, deps } = setup(undefined, { onTerminated });
+        const engine = await createDuckDbWasmEngine(deps);
+        db.conn.query.mockImplementation(never);
+        const outcome = expect(engine.query('SELECT 1')).rejects.toMatchObject({ name: 'AbortError' });
+        worker.emit('error');
+        await outcome;
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(onTerminated).toHaveBeenCalledWith(engine);
+        await expect(engine.exec('SELECT 1')).rejects.toMatchObject({ name: 'AbortError' });
+    });
+
+    it('store: a terminated engine does not block the chain, the next call starts a fresh engine', async () => {
+        const first = setup();
+        const second = setup();
+        const decks = [first, second];
+        let call = 0;
+        const store: DuckDbDataHandleStore = new DuckDbDataHandleStore(async () =>
+            createDuckDbWasmEngine({ ...decks[call++].deps, onTerminated: dead => void store.terminateEngine(dead) }),
+        );
+        const provenance = { toolName: 'list_rules', args: {}, fetchedAt: '2026-10-25T10:00:00.000Z' };
+        await store.ingestRows('rules', provenance, rowsOf([{ i: 1 }]), { rowCap: 10 });
+        first.db.conn.insertJSONFromPath.mockImplementation(never);
+        const hung = expect(store.ingestRows('rules', provenance, rowsOf([{ i: 1 }]), { rowCap: 10 })).rejects.toMatchObject({
+            name: 'AbortError',
+        });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        first.worker.emit('error');
+        await hung;
+        await expect(store.ingestRows('rules', provenance, rowsOf([{ i: 1 }]), { rowCap: 10 })).resolves.toBeDefined();
+        expect(call).toBe(2);
+    });
+
+    it('store: an aborted save_as that hangs rejects within 2 s, handles expire, the next call works', async () => {
+        jest.useFakeTimers();
+        const first = setup();
+        const second = setup();
+        const decks = [first, second];
+        let call = 0;
+        const store: DuckDbDataHandleStore = new DuckDbDataHandleStore(async () => {
+            const index = call++;
+            const engine = await createDuckDbWasmEngine({ ...decks[index].deps, onTerminated: dead => void store.terminateEngine(dead) });
+            return engine;
+        });
+        const provenance = { toolName: 'list_rules', args: {}, fetchedAt: '2026-10-25T10:00:00.000Z' };
+        await store.ingestRows('rules', provenance, rowsOf([{ i: 1 }]), { rowCap: 10 });
+        expect(store.listHandles()).toHaveLength(1);
+        first.db.conn.query.mockImplementation(never);
+        const controller = new AbortController();
+        const outcome = expect(
+            store.query('SELECT * FROM rules_1', { maxRows: 5, saveAs: 'saved', signal: controller.signal }),
+        ).rejects.toMatchObject({
+            name: 'AbortError',
+        });
+        await jest.advanceTimersByTimeAsync(10);
+        controller.abort();
+        await jest.advanceTimersByTimeAsync(2000);
+        await outcome;
+        expect(first.worker.terminate).toHaveBeenCalled();
+        expect(store.listHandles()).toEqual([]);
+        await expect(store.ingestRows('rules', provenance, rowsOf([{ i: 1 }]), { rowCap: 10 })).resolves.toBeDefined();
+        expect(call).toBe(2);
+    });
+
+    it('store.terminateEngine ignores an engine that is no longer current', async () => {
+        const first = setup();
+        const second = setup();
+        const decks = [first, second];
+        let call = 0;
+        const engines: Awaited<ReturnType<typeof createDuckDbWasmEngine>>[] = [];
+        const store = new DuckDbDataHandleStore(async () => {
+            const engine = await createDuckDbWasmEngine(decks[call++].deps);
+            engines.push(engine);
+            return engine;
+        });
+        const provenance = { toolName: 'list_rules', args: {}, fetchedAt: '2026-10-25T10:00:00.000Z' };
+        await store.ingestRows('a', provenance, rowsOf([{ i: 1 }]), { rowCap: 10 });
+        await store.terminate();
+        await store.ingestRows('b', provenance, rowsOf([{ i: 1 }]), { rowCap: 10 });
+        await store.terminateEngine(engines[0]);
+        expect(second.worker.terminate).not.toHaveBeenCalled();
+        expect(store.listHandles()).toHaveLength(1);
+    });
+});

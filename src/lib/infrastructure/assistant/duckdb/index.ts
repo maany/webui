@@ -7,7 +7,7 @@ let store: DuckDbDataHandleStore | undefined;
 export function getAssistantDataHandleStore(): DuckDbDataHandleStore {
     if (!store) {
         // When the engine had to kill a query that would not stop, its tables are gone: expire every handle.
-        store = new DuckDbDataHandleStore(() => createDuckDbWasmEngine({ onTerminated: () => void store?.terminate() }));
+        store = new DuckDbDataHandleStore(() => createDuckDbWasmEngine({ onTerminated: dead => void store?.terminateEngine(dead) }));
     }
     return store;
 }
