@@ -25,6 +25,8 @@ function Notice({ part }: { part: Extract<MessagePart, { type: 'notice' }> }) {
     );
 }
 
+const NO_HANDLE_RECORDS: HandleRecord[] = [];
+
 export interface AssistantMessageProps {
     message: ChatMessage;
     detail: 'compact' | 'verbose';
@@ -32,7 +34,7 @@ export interface AssistantMessageProps {
     handleRecords?: HandleRecord[];
 }
 
-export function AssistantMessage({ message, detail, handleRecords = [] }: AssistantMessageProps) {
+export function AssistantMessage({ message, detail, handleRecords = NO_HANDLE_RECORDS }: AssistantMessageProps) {
     if (message.role === 'user') {
         const text = message.parts.map(part => (part.type === 'text' ? part.text : '')).join('');
         const context = message.parts.find(part => part.type === 'page-context');

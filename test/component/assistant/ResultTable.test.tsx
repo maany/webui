@@ -94,4 +94,15 @@ describe('ResultTable', () => {
         const { container } = render(<ResultTable columns={columns} rows={rows} totalRows={2} expired onRefresh={jest.fn()} />);
         expect(container.textContent).not.toContain(EM_DASH);
     });
+
+    it('says rows are not stored and hides export until refreshed', () => {
+        const onRefresh = jest.fn();
+        render(<ResultTable columns={columns} rows={[]} totalRows={1234} expired rowsOmitted onRefresh={onRefresh} />);
+        expect(screen.getByText('Rows not stored (1,234 rows). Refresh to run the query again.')).toBeInTheDocument();
+        expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Export CSV' })).not.toBeInTheDocument();
+        expect(screen.getByText('Expired')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+        expect(onRefresh).toHaveBeenCalled();
+    });
 });

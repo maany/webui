@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { HiOutlineCog, HiPlus, HiSparkles, HiX } from 'react-icons/hi';
 import type { ChatMessage, Conversation } from '@/lib/core/entity/assistant/conversation';
 import type { PageContext } from '@/lib/core/entity/assistant/page-context';
@@ -58,6 +59,7 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
     const { state, isMobile, width, onResize, messages, status } = props;
     const listEnd = useRef<HTMLDivElement>(null);
     const composerRef = useRef<HTMLTextAreaElement>(null);
+    const pathname = usePathname();
     const handleRecords = useMemo(() => deriveHandleRecords(messages), [messages]);
     const busy = status === 'streaming' || status === 'awaiting-approval';
 
@@ -246,7 +248,7 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
                 )}
                 <div ref={listEnd} />
             </div>
-            <SessionExpiredBanner messages={messages} pathname={props.pageContext?.route ?? '/'} forced={props.sessionExpired} />
+            <SessionExpiredBanner messages={messages} pathname={pathname ?? props.pageContext?.route ?? '/'} forced={props.sessionExpired} />
             <Composer
                 busy={busy}
                 pageContext={props.pageContext}

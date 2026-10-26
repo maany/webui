@@ -68,27 +68,74 @@ describe('LiveSqlResult', () => {
                 </DataHandleStoreProvider>,
             );
             expect(screen.getByText('Expired')).toBeInTheDocument();
+            expect(screen.getByText('Rows not stored (3 rows). Refresh to run the query again.')).toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: 'Export CSV' })).not.toBeInTheDocument();
             fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
             await waitFor(() => expect(screen.getByText('fresh')).toBeInTheDocument());
             expect(screen.queryByText('Expired')).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Export CSV' })).toBeInTheDocument();
         });
     });
 
-    it('shows the gate message instead of refreshing when the tool is turned off', async () => {
-        jest.mocked(refreshHandle).mockResolvedValue({
-            error: 'denied_by_policy',
-            message: 'list_rules is turned off, so rules_1 cannot be refreshed',
+    describe('refresh gate copy', () => {
+        const renderGated = (gate: { toolPolicy?: () => 'ask' | 'deny' | 'allow'; isToolVisible?: () => boolean }) => {
+            const store = new DuckDbDataHandleStore(async () => new FakeDuckDbEngine());
+            render(
+                <DataHandleStoreProvider store={store} {...gate}>
+                    <LiveSqlResult entry={entry} records={records} />
+                </DataHandleStoreProvider>,
+            );
+            fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+        };
+
+        beforeEach(() => jest.mocked(refreshHandle).mockClear());
+
+        it('explains an ask policy', async () => {
+            renderGated({ toolPolicy: () => 'ask' });
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(
+                    'Refreshing rules_1 needs your approval for list_rules. Ask Rucio bot to refresh it.',
+                ),
+            );
+            expect(refreshHandle).not.toHaveBeenCalled();
+            expect(screen.getByText('old')).toBeInTheDocument();
+        });
+
+        it('explains a deny policy', async () => {
+            renderGated({ toolPolicy: () => 'deny' });
+            await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('list_rules is turned off in your settings.'));
+            expect(refreshHandle).not.toHaveBeenCalled();
+        });
+
+        it('explains a tool that is not visible', async () => {
+            renderGated({ isToolVisible: () => false });
+            await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('list_rules is not available to you.'));
+            expect(refreshHandle).not.toHaveBeenCalled();
+        });
+    });
+
+    it('re-syncs when the entry result changes', () => {
+        const { rerender } = render(<LiveSqlResult entry={entry} records={records} />);
+        expect(screen.getByText('old')).toBeInTheDocument();
+        rerender(<LiveSqlResult entry={{ ...entry, result: { columns: ['id'], rows: [{ id: 'newer' }], totalRows: 1 } }} records={records} />);
+        expect(screen.getByText('newer')).toBeInTheDocument();
+    });
+
+    it('aborts an in-flight refresh on unmount', async () => {
+        let signal: AbortSignal | undefined;
+        jest.mocked(refreshHandle).mockImplementation(async (_name, deps) => {
+            signal = deps.signal;
+            return new Promise(() => undefined);
         });
         const store = new DuckDbDataHandleStore(async () => new FakeDuckDbEngine());
-        const toolPolicy = jest.fn(() => 'deny' as const);
-        render(
-            <DataHandleStoreProvider store={store} toolPolicy={toolPolicy}>
+        const { unmount } = render(
+            <DataHandleStoreProvider store={store}>
                 <LiveSqlResult entry={entry} records={records} />
             </DataHandleStoreProvider>,
         );
         fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('list_rules is turned off'));
-        expect(refreshHandle).toHaveBeenCalledWith('rules_1', expect.objectContaining({ toolPolicy: expect.any(Function) }));
-        expect(screen.getByText('old')).toBeInTheDocument();
+        await waitFor(() => expect(signal).toBeDefined());
+        unmount();
+        expect(signal?.aborted).toBe(true);
     });
 });

@@ -5,6 +5,8 @@ import Link from 'next/link';
 import type { ChatMessage } from '@/lib/core/entity/assistant/conversation';
 import { hasSessionExpired } from '@/lib/infrastructure/assistant/message-selectors';
 
+const SAFE_PATH = /^\/(?![/\\])/;
+
 export interface SessionExpiredBannerProps {
     messages: ChatMessage[];
     pathname: string;
@@ -15,7 +17,9 @@ export interface SessionExpiredBannerProps {
 /** Shown in the panel, directly above the composer, when the WebUI session is gone. */
 export const SessionExpiredBanner = ({ messages, pathname, forced = false }: SessionExpiredBannerProps) => {
     if (!forced && !hasSessionExpired(messages)) return null;
-    const href = `/auth/login?expired=true&callbackUrl=${encodeURIComponent(pathname)}`;
+    // Only a same-origin path may become the callback; anything else lands on the home page.
+    const callback = SAFE_PATH.test(pathname) ? pathname : '/';
+    const href = `/auth/login?expired=true&callbackUrl=${encodeURIComponent(callback)}`;
     return (
         <div
             role="alert"

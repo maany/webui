@@ -41,4 +41,9 @@ describe('SessionExpiredBanner', () => {
         const { container } = render(<SessionExpiredBanner messages={[turn('timeout')]} pathname="/" />);
         expect(container).toBeEmptyDOMElement();
     });
+
+    it.each(['//evil.com', '/\\evil.com', 'https://evil.com', 'rules'])('falls back to / for the unsafe path %s', path => {
+        render(<SessionExpiredBanner messages={[turn('session_expired')]} pathname={path} />);
+        expect(screen.getByRole('link', { name: 'Log in again' })).toHaveAttribute('href', '/auth/login?expired=true&callbackUrl=%2F');
+    });
 });
