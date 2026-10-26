@@ -56,6 +56,7 @@ export function convertToTransferRequestDTO(data: TRucioRequest): TransferReques
         activity: data.activity ?? null,
         bytes: typeof data.bytes === 'number' ? data.bytes : null,
         sourceRse: data.source_rse ?? null,
+        // Rucio adds dest_rse to every row; the id only stands in if a server ever omits it.
         destRse: data.dest_rse ?? data.dest_rse_id,
         account: data.account ?? null,
         ruleId: data.rule_id ?? null,
