@@ -8,6 +8,8 @@ export const READ_PAGE_TEXT_MAX = 4000;
 const FIELD_LIMIT = 20;
 const FIELD_VALUE_MAX = 200;
 const HIDDEN_SELECTOR = '[hidden], [aria-hidden="true"], [inert], dialog:not([open])';
+// Above main only these count: the mobile sheet sets inert on the app wrapper and Radix modals set aria-hidden on the page behind them while the model reads.
+const HIDDEN_ABOVE_MAIN_SELECTOR = '[hidden], dialog:not([open])';
 const STRIPPED_SELECTOR = `script, style, noscript, template, svg, textarea, select, option, input[type="password"], input[type="hidden"], ${HIDDEN_SELECTOR}`;
 const FIELD_LABEL_MAX = 200;
 const SKIPPED_INPUT_TYPES = new Set(['password', 'hidden', 'file', 'submit', 'button', 'reset', 'image']);
@@ -91,7 +93,8 @@ function readFields(main: Element): PageField[] {
     const fields: PageField[] = [];
     main.querySelectorAll<FieldElement>('input, textarea, select').forEach(element => {
         if (fields.length >= FIELD_LIMIT) return;
-        if (element.closest(HIDDEN_SELECTOR)) return;
+        const hit = element.closest(HIDDEN_SELECTOR);
+        if (hit && main.contains(hit)) return;
         if (isSecretField(element)) return;
         const value = fieldValue(element);
         if (!value) return;
@@ -153,7 +156,7 @@ export function createReadCurrentPageTool(): RegisteredTool<ReadCurrentPageInput
                 return result;
             }
 
-            if (main.closest(HIDDEN_SELECTOR)) {
+            if (main.closest(HIDDEN_ABOVE_MAIN_SELECTOR)) {
                 const result: CurrentPageResult = { ...base, text: '', fields: [], truncated: false };
                 return result;
             }

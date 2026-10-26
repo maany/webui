@@ -150,12 +150,21 @@ describe('read_current_page tool', () => {
         expect(JSON.stringify(result)).not.toContain('</page_context>');
     });
 
-    it('returns nothing when main sits in a hidden, inert or aria-hidden ancestor', async () => {
-        for (const wrapper of ['<div hidden>', '<div aria-hidden="true">', '<div inert>']) {
-            document.body.innerHTML = `${wrapper}<main id="main-content"><p>buried</p><input type="text" aria-label="A" value="x" /></main></div>`;
+    it('returns nothing when main sits in a hidden ancestor', async () => {
+        document.body.innerHTML = `<div hidden><main id="main-content"><p>buried</p><input type="text" aria-label="A" value="x" /></main></div>`;
+        const result = (await tool.execute({}, makeTestToolContext())) as CurrentPageResult;
+        expect(result.text).toBe('');
+        expect(result.fields).toEqual([]);
+    });
+
+    it('still reads main while the mobile sheet makes the app content inert or aria-hidden', async () => {
+        for (const attribute of ['inert', 'aria-hidden="true"']) {
+            document.body.innerHTML = `<div id="rucio-app-content" ${attribute}><main id="main-content"><p>visible text</p><input type="text" aria-label="A" value="x" />
+                <div inert><p>inert text</p><input type="text" aria-label="Inert" value="inert-value" /></div></main></div>`;
             const result = (await tool.execute({}, makeTestToolContext())) as CurrentPageResult;
-            expect(result.text).toBe('');
-            expect(result.fields).toEqual([]);
+            expect(result.text).toContain('visible text');
+            expect(result.fields).toEqual([{ label: 'A', value: 'x' }]);
+            expect(JSON.stringify(result)).not.toContain('inert');
         }
     });
 
