@@ -206,12 +206,12 @@ describe('createAgentRunner', () => {
         // Stop only once the tool is really running, so load cannot reorder the abort and the stream.
         void slowToolStarted.then(() => controller.abort());
         const updates = await collectUpdates(run());
-        // The stop ends the turn without waiting for the tool's rejection to be streamed back, so a tool-result
-        // may or may not precede `finished`; the reducer closes open tool calls as aborted either way.
         await slowToolAborted;
-        const result = updates.find(update => update.type === 'tool-result');
-        if (result) expect(result).toMatchObject({ error: { error: 'aborted' } });
-        expect(updates.some(update => update.type === 'tool-call')).toBe(true);
+        // The runner shows and closes a call whose tool started, even when the client had not delivered it before the stop.
+        expect(updates.filter(update => update.type === 'tool-call')).toHaveLength(1);
+        expect(updates.filter(update => update.type === 'tool-result')).toEqual([
+            expect.objectContaining({ error: { error: 'aborted', message: 'The tool call was stopped.' } }),
+        ]);
         expect(finished(updates)).toEqual({ type: 'finished', status: 'stopped' });
     });
 

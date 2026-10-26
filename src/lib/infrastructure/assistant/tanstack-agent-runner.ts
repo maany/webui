@@ -18,6 +18,7 @@ import { CONTEXT_OVERFLOW_ERROR, SESSION_EXPIRED_ERROR } from './runner-errors';
 import { formatUserTurn } from './system-prompt';
 import { maskSensitiveArgs } from './approvals';
 import { getTool } from './tool-registry';
+import { MAY_HAVE_LANDED } from './write-executor';
 import { REJECTED_BY_USER, buildTanstackTools, createPolicyMiddleware, createToolFilterMiddleware, deniedByPolicy } from './tanstack-tools';
 import { isToolError, type RegisteredTool, type ToolExecutionContext } from './tool-types';
 
@@ -397,12 +398,50 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
             liveClient?.updateOptions({ tools: rebuilt.approvalClientTools });
             return rebuilt.serverTools;
         };
+        const specFor = (toolName: string) =>
+            [latestTools, d.tools].map(list => list.find(tool => tool.spec.name === toolName)).find(Boolean)?.spec ?? getTool(toolName)?.spec;
+        // Calls already shown, and calls whose tool started but has no result yet.
+        const announced = new Set<string>();
+        const running = new Map<string, { toolName: string; startedAt: number }>();
+        const announce = (toolCallId: string, toolName: string, args: unknown) => {
+            if (announced.has(toolCallId)) return;
+            announced.add(toolCallId);
+            const policy = built.builtPolicy.get(toolName) ?? d.policyFor(toolName);
+            // Execution keeps TanStack's own args; what is stored, shown and emitted never carries sensitive values.
+            const shownArgs = maskSensitiveArgs(args, specFor(toolName)?.sensitiveArgs ?? []);
+            channel.push({ type: 'tool-call', toolCallId, toolName, args: shownArgs, policy });
+            d.emit({ type: 'tool-call-started', turnId: input.turnId, toolCallId, toolName, args: shownArgs, policy, at: Date.now() });
+        };
+        // A Stop drops the chunks the client has not processed yet, so a tool that already started would leave no
+        // result. Close it here; a write may have landed, so it says so.
+        const closeRunningCalls = () => {
+            running.forEach(({ toolName, startedAt }, toolCallId) => {
+                const error: ToolError =
+                    specFor(toolName)?.risk === 'read'
+                        ? { error: 'aborted', message: 'The tool call was stopped.' }
+                        : { error: 'aborted', message: `Stopped by the user. ${MAY_HAVE_LANDED}` };
+                const durationMs = Date.now() - startedAt;
+                channel.push({ type: 'tool-result', toolCallId, result: error, error, durationMs });
+                d.emit({ type: 'tool-call-finished', turnId: input.turnId, toolCallId, durationMs, error, at: Date.now() });
+            });
+            running.clear();
+        };
         // Later phases append to this list (for example telemetry or skill middleware). The refresh stays first.
         const middleware: ChatMiddleware[] = [
             createRefreshToolsMiddleware(buildTools),
             createPolicyMiddleware(name => d.policyFor(name), recordDuration),
         ];
         if (d.toolFilter) middleware.push(createToolFilterMiddleware(d.toolFilter, d.tools));
+        // The client can still be behind when a tool starts, so the call is shown from here too. Guards run in order
+        // until one decides, so this one, kept last, only sees calls that are about to run.
+        middleware.push({
+            name: 'rucio-announce-started',
+            onGuardToolCall: (_ctx, hook) => {
+                announce(hook.toolCallId, hook.toolName, hook.args);
+                running.set(hook.toolCallId, { toolName: hook.toolName, startedAt: Date.now() });
+                return undefined;
+            },
+        });
         const historyMessages = toModelMessages(input.history);
 
         const drive = async () => {
@@ -481,26 +520,11 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                         case 'TOOL_CALL_END': {
                             const toolName = toolNames.get(chunk.toolCallId) ?? 'unknown';
                             const args = chunk.input !== undefined ? chunk.input : parseToolContent(toolArgsText.get(chunk.toolCallId) || '{}');
-                            const policy = built.builtPolicy.get(toolName) ?? d.policyFor(toolName);
-                            // Execution keeps TanStack's own args; what is stored, shown and emitted never carries sensitive values.
-                            const spec =
-                                [latestTools, d.tools].map(list => list.find(tool => tool.spec.name === toolName)).find(Boolean)?.spec ??
-                                getTool(toolName)?.spec;
-                            const sensitiveArgs = spec?.sensitiveArgs ?? [];
-                            const shownArgs = maskSensitiveArgs(args, sensitiveArgs);
-                            channel.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName, args: shownArgs, policy });
-                            d.emit({
-                                type: 'tool-call-started',
-                                turnId: input.turnId,
-                                toolCallId: chunk.toolCallId,
-                                toolName,
-                                args: shownArgs,
-                                policy,
-                                at: Date.now(),
-                            });
+                            announce(chunk.toolCallId, toolName, args);
                             break;
                         }
                         case 'TOOL_CALL_RESULT': {
+                            running.delete(chunk.toolCallId);
                             const result = parseToolContent(chunk.content);
                             const error = isToolError(result) ? result : undefined;
                             const durationMs = durations.get(chunk.toolCallId) ?? 0;
@@ -588,8 +612,10 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                     });
                 }
 
-                if (input.signal.aborted) channel.push({ type: 'finished', status: 'stopped' });
-                else if (runError)
+                if (input.signal.aborted) {
+                    closeRunningCalls();
+                    channel.push({ type: 'finished', status: 'stopped' });
+                } else if (runError)
                     channel.push({
                         type: 'finished',
                         status: 'error',
@@ -602,6 +628,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                 else if (stepLimitHit || lastFinishReason === 'tool_calls') channel.push({ type: 'finished', status: 'step-limit' });
                 else channel.push({ type: 'finished', status: 'completed' });
             } catch (error) {
+                if (input.signal.aborted) closeRunningCalls();
                 channel.push(
                     input.signal.aborted
                         ? { type: 'finished', status: 'stopped' }

@@ -30,7 +30,7 @@ export interface WriteRequestOptions {
     timeoutMs?: number;
 }
 
-const MAY_HAVE_LANDED = 'The change may still have been applied, so check its state before retrying.';
+export const MAY_HAVE_LANDED = 'The change may still have been applied, so check its state before retrying.';
 const sessionExpired = () => toolError('session_expired', SESSION_EXPIRED_MESSAGE);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
