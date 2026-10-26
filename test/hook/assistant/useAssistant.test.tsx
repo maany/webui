@@ -6,6 +6,7 @@ import { createAssistantEventBus } from '@/lib/infrastructure/assistant/event-bu
 import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/in-memory-conversation-repository';
 import { CONTEXT_OVERFLOW_ERROR, SESSION_EXPIRED_ERROR } from '@/lib/infrastructure/assistant/runner-errors';
 import type { AgentRunner, AgentRunnerDeps, RunnerUpdate } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
+import { registerTools, resetToolRegistryForTests } from '@/lib/infrastructure/assistant/tool-registry';
 import { useAssistantController, type AssistantControllerDeps } from '@/lib/infrastructure/hooks/useAssistant';
 import { makeConversation, makeNoopHandles, makePages, makeTool } from 'test/fixtures/assistant-fixtures';
 
@@ -84,6 +85,8 @@ function setup(scripts: Script[], overrides: Partial<AssistantControllerDeps> = 
     const { createRunner, created } = scriptedRunnerFactory(scripts);
     const summarize = jest.fn().mockResolvedValue({ text: 'Summary of older turns.' });
     const tool = makeTool('do_write', 'write', z.object({ id: z.string() }), async () => ({ ok: true }));
+    // PendingApproval.risk reads the registry and treats unknown tools as high risk.
+    registerTools([tool]);
     const baseDeps = (accountKey: string): AssistantControllerDeps => ({
         accountKey,
         repository: Promise.resolve({ repository, persistent: true }),
@@ -107,6 +110,8 @@ function setup(scripts: Script[], overrides: Partial<AssistantControllerDeps> = 
     });
     return { hook, repository, handles, events, created, summarize };
 }
+
+afterEach(() => resetToolRegistryForTests());
 
 describe('useAssistantController', () => {
     it('goes idle -> streaming -> idle and persists the conversation with usage', async () => {

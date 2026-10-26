@@ -1,0 +1,325 @@
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { z } from 'zod';
+import type { ResolvedProvider } from '@/lib/core/entity/assistant/provider-config';
+import type { AssistantEvent } from '@/lib/core/entity/assistant/events';
+import { createAssistantEventBus } from '@/lib/infrastructure/assistant/event-bus';
+import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/in-memory-conversation-repository';
+import type { AgentRunner, RunnerUpdate } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
+import { registerTools, resetToolRegistryForTests } from '@/lib/infrastructure/assistant/tool-registry';
+import { useAssistantController, type AssistantControllerDeps } from '@/lib/infrastructure/hooks/useAssistant';
+import { makeNoopHandles, makePages, makeTool } from 'test/fixtures/assistant-fixtures';
+
+const PROVIDER: ResolvedProvider = {
+    providerId: 'operator',
+    kind: 'openai-compatible',
+    model: 'fake-model',
+    baseURL: '/api/assistant/llm',
+    via: 'relay',
+    contextWindow: 1_000,
+};
+
+/** Asks for approval of call-1, then waits until it is resolved or the turn is aborted. */
+function approvalRunner(toolName: string, log: string[]) {
+    const resolveSpy = jest.fn<void, [string, boolean]>();
+    let decide: ((outcome: boolean | 'aborted') => void) | null = null;
+    const runner: AgentRunner = {
+        async *run(input): AsyncGenerator<RunnerUpdate> {
+            yield { type: 'tool-call', toolCallId: 'call-1', toolName, args: { id: 'r1' }, policy: 'ask' };
+            yield { type: 'approval-required', toolCallId: 'call-1' };
+            const outcome = await new Promise<boolean | 'aborted'>(resolve => {
+                decide = resolve;
+                if (input.signal.aborted) resolve('aborted');
+                input.signal.addEventListener('abort', () => resolve('aborted'));
+            });
+            if (outcome === 'aborted') {
+                yield { type: 'finished', status: 'stopped' };
+                return;
+            }
+            yield outcome
+                ? { type: 'tool-result', toolCallId: 'call-1', result: { ok: true }, durationMs: 1 }
+                : { type: 'tool-result', toolCallId: 'call-1', result: null, error: { error: 'rejected_by_user', message: 'no' }, durationMs: 0 };
+            yield { type: 'finished', status: 'completed' };
+        },
+        resolveApproval(toolCallId, approved) {
+            log.push(`runner.resolveApproval:${approved}`);
+            resolveSpy(toolCallId, approved);
+            decide?.(approved);
+        },
+    };
+    return { runner, resolveSpy };
+}
+
+function setup(options: { toolName?: string; risk?: 'write' | 'high' } = {}) {
+    const toolName = options.toolName ?? 'do_write';
+    const log: string[] = [];
+    const repository = new InMemoryConversationRepository();
+    const originalSaveMessage = repository.saveMessage.bind(repository);
+    const originalSaveConversation = repository.saveConversation.bind(repository);
+    const saveMessage = jest.spyOn(repository, 'saveMessage').mockImplementation(async message => {
+        const decided = message.parts.some(part => part.type === 'approval');
+        await originalSaveMessage(message);
+        if (decided) log.push('saved-message');
+    });
+    const saveConversation = jest.spyOn(repository, 'saveConversation').mockImplementation(async conversation => {
+        await originalSaveConversation(conversation);
+        if (conversation.conversationAllow.length > 0) log.push(`saved-conversation:${conversation.conversationAllow.join(',')}`);
+    });
+    const { runner, resolveSpy } = approvalRunner(toolName, log);
+    const tool = makeTool(toolName, options.risk ?? 'write', z.object({ id: z.string() }), async () => ({ ok: true }));
+    registerTools([tool]);
+    const bus = createAssistantEventBus();
+    const events: AssistantEvent[] = [];
+    bus.subscribe(event => events.push(event));
+    const deps = (accountKey: string): AssistantControllerDeps => ({
+        accountKey,
+        repository: Promise.resolve({ repository, persistent: true }),
+        resolveProvider: () => PROVIDER,
+        visibleTools: () => [tool],
+        makePolicyFor: () => () => 'ask',
+        toolContextExtras: () => ({}),
+        pageContext: () => undefined,
+        retention: () => ({ maxAgeDays: 30, maxTotalMB: 50, clearOnLogout: false }),
+        handles: makeNoopHandles(),
+        pages: makePages(),
+        bus,
+        navigate: jest.fn(),
+        queryClient: {} as AssistantControllerDeps['queryClient'],
+        createRunner: () => runner,
+        summarize: jest.fn().mockResolvedValue({ text: '' }),
+    });
+    const hook = renderHook(({ accountKey }: { accountKey: string }) => useAssistantController(deps(accountKey)), {
+        initialProps: { accountKey: 'root@def' },
+    });
+    return { hook, repository, resolveSpy, log, events, saveMessage, saveConversation, originalSaveMessage };
+}
+
+async function storedAssistantMessage(repository: InMemoryConversationRepository) {
+    const [conversation] = await repository.listConversations('root@def');
+    const messages = await repository.listMessages(conversation.id);
+    return messages[messages.length - 1];
+}
+
+async function startTurn(hook: ReturnType<typeof setup>['hook']) {
+    let sending!: Promise<void>;
+    act(() => {
+        sending = hook.result.current.send('delete rule r1');
+    });
+    await waitFor(() => expect(hook.result.current.pendingApprovals).toHaveLength(1));
+    // Boxed: returning the promise from an async function would wait for the whole turn.
+    return { sending };
+}
+
+afterEach(() => {
+    resetToolRegistryForTests();
+    jest.restoreAllMocks();
+});
+
+describe('useAssistantController approvals (phase 4 hardening)', () => {
+    it('ignores an Approve that arrives after Stop and never resumes the runner (Review Focus 5, P2)', async () => {
+        const { hook, repository, resolveSpy } = setup();
+        const { sending } = await startTurn(hook);
+        await act(async () => {
+            hook.result.current.stop();
+            await hook.result.current.resolveApproval('call-1', 'approved', 'once');
+            await sending;
+        });
+        expect(resolveSpy).not.toHaveBeenCalled();
+        const assistant = await storedAssistantMessage(repository);
+        expect(assistant.parts.find(part => part.type === 'tool-call')).toMatchObject({ status: 'expired' });
+        expect(assistant.parts.filter(part => part.type === 'approval')).toEqual([
+            expect.objectContaining({ toolCallId: 'call-1', decision: 'expired' }),
+        ]);
+    });
+
+    it('expires a waiting approval when the panel unmounts, so it is never stored as runnable (Review Focus 5)', async () => {
+        const { hook, repository, resolveSpy } = setup();
+        const { sending } = await startTurn(hook);
+        await act(async () => {
+            hook.unmount();
+            await sending;
+        });
+        expect(resolveSpy).not.toHaveBeenCalled();
+        const assistant = await storedAssistantMessage(repository);
+        expect(assistant.parts.find(part => part.type === 'tool-call')).toMatchObject({ status: 'expired' });
+        expect(assistant.parts).toContainEqual(
+            expect.objectContaining({ type: 'approval', toolCallId: 'call-1', decision: 'expired', approver: 'root@def' }),
+        );
+    });
+
+    it('persists the approval and the running status before the runner resumes', async () => {
+        const { hook, repository, log } = setup();
+        const { sending } = await startTurn(hook);
+        let storedAtResume: unknown;
+        const [conversation] = await repository.listConversations('root@def');
+        const original = log.push.bind(log);
+        log.push = (...items: string[]) => {
+            if (items[0] === 'runner.resolveApproval:true') {
+                storedAtResume = repository.listMessages(conversation.id);
+            }
+            return original(...items);
+        };
+        await act(async () => {
+            await hook.result.current.resolveApproval('call-1', 'approved', 'once');
+            await sending;
+        });
+        expect(log.indexOf('saved-message')).toBeGreaterThanOrEqual(0);
+        expect(log.indexOf('saved-message')).toBeLessThan(log.indexOf('runner.resolveApproval:true'));
+        // The decision was readable from storage at the moment the runner resumed.
+        const atResume = (await storedAtResume) as Awaited<ReturnType<typeof repository.listMessages>>;
+        const assistantAtResume = atResume[atResume.length - 1];
+        expect(assistantAtResume.parts.find(part => part.type === 'tool-call')).toMatchObject({ status: 'running' });
+        expect(assistantAtResume.parts).toContainEqual(
+            expect.objectContaining({ type: 'approval', toolCallId: 'call-1', decision: 'approved', scope: 'once' }),
+        );
+    });
+
+    it('stores a rejection as denied before the runner is told', async () => {
+        const { hook, repository, log, resolveSpy } = setup();
+        const { sending } = await startTurn(hook);
+        const [conversation] = await repository.listConversations('root@def');
+        let storedAtResume: unknown;
+        const original = log.push.bind(log);
+        log.push = (...items: string[]) => {
+            if (items[0] === 'runner.resolveApproval:false') storedAtResume = repository.listMessages(conversation.id);
+            return original(...items);
+        };
+        await act(async () => {
+            await hook.result.current.resolveApproval('call-1', 'rejected', 'once');
+            await sending;
+        });
+        expect(resolveSpy).toHaveBeenCalledWith('call-1', false);
+        const atResume = (await storedAtResume) as Awaited<ReturnType<typeof repository.listMessages>>;
+        const part = atResume[atResume.length - 1].parts.find(item => item.type === 'tool-call');
+        expect(part).toMatchObject({ status: 'denied', error: { error: 'rejected_by_user' } });
+    });
+
+    it('resolves once when Approve is clicked twice', async () => {
+        const { hook, resolveSpy, saveMessage } = setup();
+        const { sending } = await startTurn(hook);
+        const savesBefore = saveMessage.mock.calls.length;
+        await act(async () => {
+            const first = hook.result.current.resolveApproval('call-1', 'approved', 'once');
+            const second = hook.result.current.resolveApproval('call-1', 'approved', 'once');
+            await Promise.all([first, second]);
+            await sending;
+        });
+        expect(resolveSpy).toHaveBeenCalledTimes(1);
+        expect(resolveSpy).toHaveBeenCalledWith('call-1', true);
+        // One save for the decision, plus the turn's own tool-result and final saves.
+        const decisionSaves = saveMessage.mock.calls.slice(savesBefore).filter(([message]) => message.parts.some(part => part.type === 'approval'));
+        expect(decisionSaves.length).toBeGreaterThan(0);
+        const approvalParts = (await storedAssistantMessageFromHook(hook)).parts.filter(part => part.type === 'approval');
+        expect(approvalParts).toHaveLength(1);
+    });
+
+    it('does not resume with true when the decision could not be saved, and tells the user the action did not run', async () => {
+        const { hook, repository, resolveSpy, originalSaveMessage } = setup();
+        const { sending } = await startTurn(hook);
+        let failed = false;
+        jest.spyOn(repository, 'saveMessage').mockImplementation(async message => {
+            // Only the decision save fails; the turn's own later saves go through.
+            if (!failed && message.parts.some(part => part.type === 'approval')) {
+                failed = true;
+                throw new Error('quota exceeded');
+            }
+            await originalSaveMessage(message);
+        });
+        await act(async () => {
+            await hook.result.current.resolveApproval('call-1', 'approved', 'once');
+            await sending;
+        });
+        expect(resolveSpy).not.toHaveBeenCalledWith('call-1', true);
+        expect(resolveSpy).toHaveBeenCalledWith('call-1', false);
+        const part = hook.result.current.messages[1].parts.find(item => item.type === 'tool-call');
+        expect(part).toMatchObject({ status: 'denied', error: { message: expect.stringContaining('could not be recorded') } });
+        expect(hook.result.current.messages[1].parts).toContainEqual(
+            expect.objectContaining({ type: 'approval', toolCallId: 'call-1', decision: 'approved' }),
+        );
+    });
+
+    it('does nothing for an Approve after the account switched', async () => {
+        const { hook, resolveSpy, saveMessage } = setup();
+        const { sending } = await startTurn(hook);
+        act(() => {
+            hook.rerender({ accountKey: 'jdoe@def' });
+        });
+        await act(async () => {
+            await sending;
+        });
+        const saves = saveMessage.mock.calls.length;
+        await act(async () => {
+            await hook.result.current.resolveApproval('call-1', 'approved', 'once');
+        });
+        expect(resolveSpy).not.toHaveBeenCalledWith('call-1', true);
+        expect(saveMessage.mock.calls.length).toBe(saves);
+    });
+
+    it('does not resume when the turn is stopped while the decision is being saved', async () => {
+        const { hook, repository, resolveSpy, originalSaveMessage } = setup();
+        const { sending } = await startTurn(hook);
+        let finishSave: () => void = () => undefined;
+        let held = false;
+        jest.spyOn(repository, 'saveMessage').mockImplementation(async message => {
+            if (!held && message.parts.some(part => part.type === 'approval' && part.decision === 'approved')) {
+                held = true;
+                await new Promise<void>(resolve => (finishSave = resolve));
+            }
+            await originalSaveMessage(message);
+        });
+        let deciding!: Promise<void>;
+        act(() => {
+            deciding = hook.result.current.resolveApproval('call-1', 'approved', 'once') as Promise<void>;
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals).toEqual([]));
+        await act(async () => {
+            hook.result.current.stop();
+            finishSave();
+            await deciding;
+            await sending;
+        });
+        expect(resolveSpy).not.toHaveBeenCalledWith('call-1', true);
+    });
+
+    it('persists conversationAllow before the runner resumes for a write tool', async () => {
+        const { hook, repository, log } = setup({ risk: 'write' });
+        const { sending } = await startTurn(hook);
+        expect(hook.result.current.pendingApprovals[0]).toMatchObject({ risk: 'write', allowConversationScope: true });
+        await act(async () => {
+            await hook.result.current.resolveApproval('call-1', 'approved', 'conversation');
+            await sending;
+        });
+        expect(log.indexOf('saved-conversation:do_write')).toBeGreaterThanOrEqual(0);
+        expect(log.indexOf('saved-conversation:do_write')).toBeLessThan(log.indexOf('runner.resolveApproval:true'));
+        const [conversation] = await repository.listConversations('root@def');
+        expect(conversation.conversationAllow).toEqual(['do_write']);
+    });
+
+    it('never applies conversation scope to a high-risk tool', async () => {
+        const { hook, repository, events } = setup({ toolName: 'danger', risk: 'high' });
+        const { sending } = await startTurn(hook);
+        expect(hook.result.current.pendingApprovals[0]).toMatchObject({ risk: 'high', allowConversationScope: false });
+        await act(async () => {
+            await hook.result.current.resolveApproval('call-1', 'approved', 'conversation');
+            await sending;
+        });
+        const [conversation] = await repository.listConversations('root@def');
+        expect(conversation.conversationAllow).toEqual([]);
+        expect(events).toContainEqual(expect.objectContaining({ type: 'tool-approval', decision: 'approved', scope: 'once' }));
+    });
+
+    it('treats an unknown tool as high risk, so it never offers conversation scope (PF10)', async () => {
+        const { hook } = setup();
+        resetToolRegistryForTests();
+        const { sending } = await startTurn(hook);
+        expect(hook.result.current.pendingApprovals[0]).toMatchObject({ risk: 'high', allowConversationScope: false });
+        await act(async () => {
+            hook.result.current.stop();
+            await sending;
+        });
+    });
+});
+
+async function storedAssistantMessageFromHook(hook: ReturnType<typeof setup>['hook']) {
+    const messages = hook.result.current.messages;
+    return messages[messages.length - 1];
+}

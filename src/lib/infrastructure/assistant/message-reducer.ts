@@ -163,25 +163,36 @@ export function addApprovalPart(
     return { ...message, parts: [...message.parts, { type: 'approval', ...approval }] };
 }
 
+const APPROVED_OUTCOME_UNKNOWN: ToolError = {
+    error: 'aborted',
+    message: 'Approved, but the page closed before the result arrived. The change may have been applied, so check its state before retrying.',
+};
+
 /**
- * Used when a stored conversation is reopened: a tool call that was still
- * waiting for approval becomes expired, a running one becomes aborted.
+ * Used when a stored conversation is reopened: a tool call that was still waiting for approval becomes expired
+ * (without a second approval part when it already has one), a running one becomes aborted, and a running one the
+ * user had approved reports that its outcome is unknown. Nothing is ever replayed.
  */
 export function expireStaleParts(messages: ChatMessage[], approver: string, at: string): ChatMessage[] {
     return messages.map(message => {
         if (message.role !== 'assistant') return message;
         let changed = false;
         const extra: MessagePart[] = [];
+        const approvalFor = (toolCallId: string) => message.parts.find(part => part.type === 'approval' && part.toolCallId === toolCallId);
         const parts = message.parts.map(part => {
             if (part.type !== 'tool-call') return part;
             if (part.status === 'awaiting-approval') {
                 changed = true;
-                extra.push({ type: 'approval', toolCallId: part.toolCallId, decision: 'expired', scope: 'once', approver, at });
+                if (!approvalFor(part.toolCallId)) {
+                    extra.push({ type: 'approval', toolCallId: part.toolCallId, decision: 'expired', scope: 'once', approver, at });
+                }
                 return { ...part, status: 'expired' as const };
             }
             if (part.status === 'running') {
                 changed = true;
-                return { ...part, status: 'error' as const, error: ABORTED };
+                const approval = approvalFor(part.toolCallId);
+                const approved = approval !== undefined && approval.type === 'approval' && approval.decision === 'approved';
+                return { ...part, status: 'error' as const, error: approved ? APPROVED_OUTCOME_UNKNOWN : ABORTED };
             }
             return part;
         });

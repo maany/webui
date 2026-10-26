@@ -6,7 +6,7 @@ import type { ChatMessage, Conversation, MessagePart } from '@/lib/core/entity/a
 import type { PageContext } from '@/lib/core/entity/assistant/page-context';
 import type { ResolvedProvider } from '@/lib/core/entity/assistant/provider-config';
 import type { RetentionSettings } from '@/lib/core/entity/assistant/settings';
-import type { ToolPolicy, ToolRisk } from '@/lib/core/entity/assistant/tool';
+import type { ToolError, ToolPolicy, ToolRisk } from '@/lib/core/entity/assistant/tool';
 import type { Role } from '@/lib/core/entity/auth-models';
 import type { FeatureFlagMap } from '@/lib/core/entity/feature-config';
 import { addUsage, computeCost, EMPTY_USAGE_TOTALS, type TokenUsage, type TurnUsage } from '@/lib/core/entity/assistant/usage';
@@ -29,7 +29,8 @@ import { navigationNote } from '@/lib/infrastructure/assistant/page-context';
 import { CONTEXT_OVERFLOW_ERROR, SESSION_EXPIRED_ERROR, describeRunError } from '@/lib/infrastructure/assistant/runner-errors';
 import { buildSystemPrompt, COMPACTION_SYSTEM_PROMPT, transcriptForSummary } from '@/lib/infrastructure/assistant/system-prompt';
 import type { AgentRunner, AgentRunnerDeps } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
-import { isInvalidArgsMarker } from '@/lib/infrastructure/assistant/tanstack-tools';
+import { REJECTED_BY_USER, isInvalidArgsMarker } from '@/lib/infrastructure/assistant/tanstack-tools';
+import { getTool } from '@/lib/infrastructure/assistant/tool-registry';
 import type { RegisteredTool, ToolExecutionContext } from '@/lib/infrastructure/assistant/tool-types';
 
 export interface PendingApproval {
@@ -53,7 +54,8 @@ export interface UseAssistantResult {
     sessionExpired?: boolean;
     send(text: string, options?: { attachPageContext?: boolean }): Promise<void>;
     stop(): void;
-    resolveApproval(toolCallId: string, decision: 'approved' | 'rejected', scope: 'once' | 'conversation'): void;
+    /** Persists the decision first and resumes the runner only if the turn is still live; stale or repeated calls do nothing. */
+    resolveApproval(toolCallId: string, decision: 'approved' | 'rejected', scope: 'once' | 'conversation'): Promise<void> | void;
     newConversation(): void;
     openConversation(id: string): Promise<void>;
     deleteConversation(id: string): Promise<void>;
@@ -201,6 +203,10 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     const lastContextRouteRef = useRef<string | undefined>(undefined);
     const accountRef = useRef(deps.accountKey);
     const turnIdRef = useRef('');
+    /** Approval decisions being saved, so a double click cannot decide twice. */
+    const decidingRef = useRef(new Set<string>());
+    /** Calls whose approval could not be saved: the stored result says so instead of the generic rejection. */
+    const unrecordedRef = useRef(new Map<string, ToolError>());
 
     const setConversation = useCallback((next: Conversation | undefined) => {
         conversationRef.current = next;
@@ -271,6 +277,9 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         [replaceMessage],
     );
 
+    const approvalsRef = useRef(approvals);
+    approvalsRef.current = approvals;
+
     const resetView = useCallback(() => {
         abortRef.current?.abort();
         approvals.expireOpen();
@@ -310,7 +319,9 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         return () => {
             cancelled = true;
             unsubscribe?.();
+            // Unmount (sign-out, flag turned off): abort first, then expire waiting approvals so a reload shows them as Expired.
             abortRef.current?.abort();
+            approvalsRef.current.expireOpen();
         };
     }, [refreshConversations]);
 
@@ -526,7 +537,9 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                             continue;
                         }
                     }
-                    message = applyRunnerUpdate(message, update);
+                    const unrecorded = update.type === 'tool-result' ? unrecordedRef.current.get(update.toolCallId) : undefined;
+                    if (update.type === 'tool-result') unrecordedRef.current.delete(update.toolCallId);
+                    message = applyRunnerUpdate(message, unrecorded && update.type === 'tool-result' ? { ...update, error: unrecorded } : update);
                     storeMessage(message);
                     if (update.type === 'approval-required') {
                         const part = message.parts.find(item => item.type === 'tool-call' && item.toolCallId === update.toolCallId);
@@ -539,7 +552,8 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                             } catch {
                                 summary = `Run ${part.toolName}`;
                             }
-                            const risk = spec?.risk ?? 'write';
+                            // An unknown or hidden tool counts as high risk, so it never offers conversation scope.
+                            const risk: ToolRisk = getTool(part.toolName)?.spec.risk ?? 'high';
                             setPending([
                                 ...pendingRef.current,
                                 {
@@ -775,39 +789,115 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     }, [approvals, setPending]);
 
     const resolveApproval = useCallback(
-        (toolCallId: string, decision: 'approved' | 'rejected', scope: 'once' | 'conversation') => {
+        async (toolCallId: string, decision: 'approved' | 'rejected', scope: 'once' | 'conversation'): Promise<void> => {
+            const d = depsRef.current;
+            const accountKey = d.accountKey;
             const pending = pendingRef.current.find(item => item.toolCallId === toolCallId);
             const runner = runnerRef.current;
-            const accountKey = depsRef.current.accountKey;
-            if (!pending || !runner || !accountKey || abortRef.current?.signal.aborted) return;
-            const effectiveScope = scope === 'conversation' && pending.allowConversationScope ? 'conversation' : 'once';
-            const current = conversationRef.current;
-            if (decision === 'approved' && effectiveScope === 'conversation' && current && !current.conversationAllow.includes(pending.toolName)) {
-                setConversation({ ...current, conversationAllow: [...current.conversationAllow, pending.toolName] });
+            const controller = abortRef.current;
+            const message = assistantRef.current;
+            // Synchronous guards: a stale, repeated or torn-down decision returns with no side effects.
+            if (!pending || !runner || !accountKey || !controller || controller.signal.aborted || !message) return;
+            if (decidingRef.current.has(toolCallId)) return;
+            const call = message.parts.find(part => part.type === 'tool-call' && part.toolCallId === toolCallId);
+            if (!call || call.type !== 'tool-call' || call.status !== 'awaiting-approval') return;
+            if (message.parts.some(part => part.type === 'approval' && part.toolCallId === toolCallId)) return;
+
+            decidingRef.current.add(toolCallId);
+            const generation = generationRef.current;
+            try {
+                const approved = decision === 'approved';
+                const effectiveScope = approved && scope === 'conversation' && pending.allowConversationScope ? 'conversation' : 'once';
+                setPending(pendingRef.current.filter(item => item.toolCallId !== toolCallId));
+                // The decision moves the call out of awaiting-approval, so no later path can decide it again.
+                const decided: ChatMessage = addApprovalPart(
+                    {
+                        ...message,
+                        parts: message.parts.map(part =>
+                            part.type === 'tool-call' && part.toolCallId === toolCallId
+                                ? approved
+                                    ? { ...part, status: 'running' as const }
+                                    : { ...part, status: 'denied' as const, error: REJECTED_BY_USER }
+                                : part,
+                        ),
+                    },
+                    { toolCallId, decision, scope: effectiveScope, approver: accountKey, at: new Date().toISOString() },
+                );
+                assistantRef.current = decided;
+                turnMessagesRef.current.set(decided.id, decided);
+                replaceMessage(decided);
+                const current = conversationRef.current;
+                let allowUpdate: Conversation | undefined;
+                if (approved && effectiveScope === 'conversation' && current && !current.conversationAllow.includes(pending.toolName)) {
+                    allowUpdate = { ...current, conversationAllow: [...current.conversationAllow, pending.toolName] };
+                    setConversation(allowUpdate);
+                }
+                try {
+                    d.bus.emit({
+                        type: 'tool-approval',
+                        turnId: turnIdRef.current,
+                        toolCallId,
+                        decision,
+                        scope: effectiveScope,
+                        approver: accountKey,
+                        at: Date.now(),
+                    });
+                } catch {
+                    // Observers are best effort.
+                }
+
+                // Persist the decision before the runner may act on it.
+                let saved = true;
+                try {
+                    const { repository } = await d.repository;
+                    if (!deletedRef.current.has(decided.conversationId) && !deletedMessagesRef.current.has(decided.id)) {
+                        await repository.saveMessage(decided);
+                        if (allowUpdate) {
+                            const stored = await repository.getConversation(allowUpdate.id);
+                            if (stored && !deletedRef.current.has(stored.id)) {
+                                await repository.saveConversation({ ...stored, conversationAllow: allowUpdate.conversationAllow });
+                            }
+                        }
+                    }
+                } catch {
+                    saved = false;
+                }
+
+                // Resume only if this very turn is still live; otherwise teardown already handled it and the call never runs.
+                if (
+                    abortRef.current !== controller ||
+                    controller.signal.aborted ||
+                    runnerRef.current !== runner ||
+                    generationRef.current !== generation
+                ) {
+                    return;
+                }
+                if (!saved) {
+                    // Fail closed: an approval that could not be recorded never runs the action.
+                    const unrecorded: ToolError = {
+                        error: 'rejected_by_user',
+                        message: 'The approval could not be recorded, so the action did not run. Try again.',
+                    };
+                    unrecordedRef.current.set(toolCallId, unrecorded);
+                    const latest = turnMessagesRef.current.get(decided.id) ?? decided;
+                    const failed: ChatMessage = {
+                        ...latest,
+                        parts: latest.parts.map(part =>
+                            part.type === 'tool-call' && part.toolCallId === toolCallId
+                                ? { ...part, status: 'denied' as const, error: unrecorded }
+                                : part,
+                        ),
+                    };
+                    if (assistantRef.current?.id === failed.id) assistantRef.current = failed;
+                    turnMessagesRef.current.set(failed.id, failed);
+                    replaceMessage(failed);
+                    runner.resolveApproval(toolCallId, false);
+                    return;
+                }
+                runner.resolveApproval(toolCallId, approved);
+            } finally {
+                decidingRef.current.delete(toolCallId);
             }
-            const at = new Date().toISOString();
-            if (assistantRef.current) {
-                assistantRef.current = addApprovalPart(assistantRef.current, {
-                    toolCallId,
-                    decision,
-                    scope: effectiveScope,
-                    approver: accountKey,
-                    at,
-                });
-                turnMessagesRef.current.set(assistantRef.current.id, assistantRef.current);
-                replaceMessage(assistantRef.current);
-            }
-            depsRef.current.bus.emit({
-                type: 'tool-approval',
-                turnId: turnIdRef.current,
-                toolCallId,
-                decision,
-                scope: effectiveScope,
-                approver: accountKey,
-                at: Date.now(),
-            });
-            setPending(pendingRef.current.filter(item => item.toolCallId !== toolCallId));
-            runner.resolveApproval(toolCallId, decision === 'approved');
         },
         [replaceMessage, setConversation, setPending],
     );
