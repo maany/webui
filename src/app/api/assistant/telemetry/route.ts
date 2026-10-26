@@ -25,7 +25,10 @@ export async function POST(request: NextRequest) {
             const accountKeys = new Set<string>([accountKey]);
             const session = await getSession();
             for (const other of session?.allUsers ?? []) {
-                accountKeys.add(`${other.rucioAccount}@${other.rucioVO}`);
+                // Defensive: only complete account@vo keys; a bare '@' would rewrite every '@' in the export.
+                if (other && typeof other.rucioAccount === 'string' && other.rucioAccount && typeof other.rucioVO === 'string' && other.rucioVO) {
+                    accountKeys.add(`${other.rucioAccount}@${other.rucioVO}`);
+                }
             }
             return { rateLimitKey: `${user.rucioIdentity}|${accountKey}`, accountKey, accountKeys: Array.from(accountKeys) };
         },

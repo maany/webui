@@ -307,6 +307,20 @@ describe('POST /api/assistant/telemetry', () => {
         expect(JSON.parse(forwarded).resourceSpans[0].scopeSpans[0].spans[0].attributes[0].value.stringValue).toBe(hash(active));
     });
 
+    it('ignores malformed session users when collecting the accounts to hash', async () => {
+        process.env.ASSISTANT_TELEMETRY_HASH_USER = 'true';
+        mockSalt(SALT);
+        fetchMock.mockResponse('{}', { status: 200 });
+        getSession.mockResolvedValue({ allUsers: [null, { rucioAccount: '', rucioVO: '' }, { rucioIdentity: 'x' }] });
+        const res = await POST(req(JSON.stringify({ ...otlpBody(`jdoe${account}@def`), note: 'a@b and c@d' })));
+        expect(res.status).toBe(200);
+        const forwarded = String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body);
+        expect(forwarded).not.toContain(`jdoe${account}@def`);
+        expect(forwarded).toContain('a@b and c@d');
+        getSession.mockResolvedValue(null);
+        expect((await POST(req(JSON.stringify(otlpBody(`jdoe${account}@def`))))).status).toBe(200);
+    });
+
     it('answers 400, never 500, for a deeply nested body when hashing', async () => {
         process.env.ASSISTANT_TELEMETRY_HASH_USER = 'true';
         mockSalt(SALT);
