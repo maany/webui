@@ -205,9 +205,9 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     const turnIdRef = useRef('');
     /** Approval decisions being saved, so a double click cannot decide twice. */
     const decidingRef = useRef(new Set<string>());
-    /** Calls whose approval could not be saved: the stored result says so instead of the generic rejection. */
     /** Approval decisions still running (saving, or revoking a grant). */
     const decisionsRef = useRef(new Set<Promise<void>>());
+    /** Calls whose approval could not be saved: the stored result says so instead of the generic rejection. */
     const unrecordedRef = useRef(new Map<string, ToolError>());
 
     const setConversation = useCallback((next: Conversation | undefined) => {
@@ -899,13 +899,16 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     if (!open || open.id !== conversationId) {
                         saved = false;
                     } else if (!open.conversationAllow.includes(toolName)) {
-                        const granted: Conversation = { ...open, conversationAllow: [...open.conversationAllow, toolName] };
-                        setConversation(granted);
-                        grantedInMemory = true;
+                        // Storage first: the in-memory conversation only gains the grant in the block that resumes the runner.
                         try {
                             const stored = repository ? await repository.getConversation(conversationId) : undefined;
                             if (!stored || !repository || deletedRef.current.has(conversationId)) throw new Error('conversation not stored');
-                            await repository.saveConversation({ ...stored, conversationAllow: granted.conversationAllow });
+                            await repository.saveConversation({
+                                ...stored,
+                                conversationAllow: stored.conversationAllow.includes(toolName)
+                                    ? stored.conversationAllow
+                                    : [...stored.conversationAllow, toolName],
+                            });
                             grantStored = true;
                         } catch {
                             saved = false;
@@ -953,6 +956,17 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     if (approved) emitDecision('rejected');
                     runner.resolveApproval(toolCallId, false);
                     return;
+                }
+                if (approved && grantStored) {
+                    // No await between this check and the resume: the grant is in memory only for a call that runs.
+                    const open = conversationRef.current;
+                    if (!open || open.id !== conversationId) {
+                        await revokeGrant(repository);
+                        runner.resolveApproval(toolCallId, false);
+                        return;
+                    }
+                    setConversation({ ...open, conversationAllow: [...open.conversationAllow, toolName] });
+                    grantedInMemory = true;
                 }
                 if (approved) emitDecision('approved');
                 runner.resolveApproval(toolCallId, approved);

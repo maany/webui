@@ -236,6 +236,43 @@ describe('useAssistantController approvals (phase 4 hardening)', () => {
         expect(stored.conversationAllow).toEqual([]);
     });
 
+    it('never holds the grant in memory between Stop and a held conversation save (C-m2)', async () => {
+        const { hook, repository, originalSaveConversation } = setup();
+        const { sending } = await startTurn(hook);
+        let release: () => void = () => undefined;
+        let held = false;
+        const saved: string[][] = [];
+        jest.spyOn(repository, 'saveConversation').mockImplementation(async conversation => {
+            if (conversation.conversationAllow.length > 0 && !held) {
+                held = true;
+                await new Promise<void>(resolve => (release = resolve));
+            } else {
+                saved.push([...conversation.conversationAllow]);
+            }
+            await originalSaveConversation(conversation);
+        });
+        let deciding!: Promise<void>;
+        act(() => {
+            deciding = hook.result.current.resolveApproval('call-1', 'approved', 'conversation') as Promise<void>;
+        });
+        await waitFor(() => expect(held).toBe(true));
+        expect(hook.result.current.conversation?.conversationAllow).toEqual([]);
+        act(() => {
+            hook.result.current.stop();
+        });
+        await act(async () => {
+            await new Promise(resolve => setTimeout(resolve, 30));
+        });
+        expect(hook.result.current.conversation?.conversationAllow).toEqual([]);
+        await act(async () => {
+            release();
+            await deciding;
+            await sending;
+        });
+        expect(hook.result.current.conversation?.conversationAllow).toEqual([]);
+        expect(saved.every(allow => allow.length === 0)).toBe(true);
+    });
+
     it('keeps no grant when the account switches while the conversation save is in flight (I1b)', async () => {
         const { hook, repository, originalSaveConversation } = setup();
         const { sending } = await startTurn(hook);
