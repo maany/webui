@@ -4,8 +4,10 @@ import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { ListRSEsControllerParameters } from '@/lib/infrastructure/controller/list-rses-controller';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
+import { ListRsesSchema } from '@/lib/infrastructure/api-schemas/list-rses';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/list-rses
@@ -14,9 +16,14 @@ import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
  */
 async function getHandler(request: NextRequest) {
     try {
-        const params = parseQueryParams(request);
+        const params = parseQuery(ListRsesSchema, new URL(request.url).searchParams);
+
+        if (!params.success) {
+            return NextResponse.json({ error: 'Invalid parameter: rseExpression' }, { status: 400 });
+        }
+
         // Controller expects rseExpression to be a string, default to empty string
-        const rseExpression = (params.rseExpression as string) || '';
+        const rseExpression = params.data.rseExpression || '';
 
         const controller = appContainer.get<BaseController<ListRSEsControllerParameters, void>>(CONTROLLERS.LIST_RSES);
 

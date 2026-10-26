@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { didIdentifierShape, nonEmptyString, ruleFilterShape, ruleIdQueryShape } from '@/lib/infrastructure/api-schemas/common';
+import {
+    didIdentifierShape,
+    nonEmptyString,
+    rseOrRseNameQuerySchema,
+    ruleFilterShape,
+    ruleIdQueryShape,
+} from '@/lib/infrastructure/api-schemas/common';
 
 describe('common schema fragments', () => {
     it('nonEmptyString rejects the empty string', () => {
@@ -25,5 +31,13 @@ describe('common schema fragments', () => {
         expect(schema.safeParse({}).success).toBe(true);
         expect(schema.safeParse({ updated_after: '2024-01-01T00:00:00Z' }).success).toBe(true);
         expect(schema.safeParse({ updated_after: 'yesterday' }).success).toBe(false);
+    });
+
+    it('rseOrRseNameQuerySchema needs a non-empty rse or rseName', () => {
+        expect(rseOrRseNameQuerySchema.safeParse({ rse: 'A' }).success).toBe(true);
+        expect(rseOrRseNameQuerySchema.safeParse({ rseName: 'B' }).success).toBe(true);
+        expect(rseOrRseNameQuerySchema.safeParse({ rse: '', rseName: 'B' }).success).toBe(true);
+        expect(rseOrRseNameQuerySchema.safeParse({}).success).toBe(false);
+        expect(rseOrRseNameQuerySchema.safeParse({ rse: '', rseName: '' }).success).toBe(false);
     });
 });

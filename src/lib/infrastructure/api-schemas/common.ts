@@ -22,3 +22,11 @@ export const ruleFilterShape = {
     account: z.string().optional(),
     activity: z.string().optional(),
 };
+
+/** Query naming an RSE as `rse` or `rseName`; `rse` wins when both are set. */
+export const rseOrRseNameQuerySchema = z
+    .object({
+        rse: z.string().optional(),
+        rseName: z.string().optional(),
+    })
+    .refine(query => Boolean(query.rse || query.rseName), { message: 'Missing required parameter: rse or rseName' });
