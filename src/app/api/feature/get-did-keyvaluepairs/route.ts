@@ -4,8 +4,10 @@ import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { DIDKeyValuePairsDataControllerParameters } from '@/lib/infrastructure/controller/did-keyvaluepairs-controller';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
+import { GetDidKeyvaluepairsSchema } from '@/lib/infrastructure/api-schemas/get-did-keyvaluepairs';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/get-did-keyvaluepairs
@@ -14,17 +16,15 @@ import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
  */
 async function getHandler(request: NextRequest) {
     try {
-        const params = parseQueryParams(request);
-        const scope = params.scope as string;
-        const name = params.name as string;
+        const params = parseQuery(GetDidKeyvaluepairsSchema, new URL(request.url).searchParams);
 
-        if (!scope || !name) {
+        if (!params.success) {
             return NextResponse.json({ error: 'Missing required parameters: scope and name' }, { status: 400 });
         }
 
         const controller = appContainer.get<BaseController<DIDKeyValuePairsDataControllerParameters, void>>(CONTROLLERS.DID_KEYVALUEPAIRS);
 
-        return executeAuthenticatedController(controller, { scope, name });
+        return executeAuthenticatedController(controller, { scope: params.data.scope, name: params.data.name });
     } catch (error) {
         console.error('Error in get-did-keyvaluepairs:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
