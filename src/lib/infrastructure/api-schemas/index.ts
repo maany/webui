@@ -38,6 +38,7 @@ import { ListDidParentsSchema } from './list-did-parents';
 import { ListDidRulesSchema } from './list-did-rules';
 import { ListDidsSchema } from './list-dids';
 import { ListFileReplicasSchema } from './list-file-replicas';
+import { ListRequestsSchema } from './list-requests';
 import { ListRsesSchema } from './list-rses';
 import { ListRuleReplicaLockStatesSchema } from './list-rule-replica-lock-states';
 import { ListRulesSchema } from './list-rules';
@@ -90,6 +91,7 @@ export * from './list-did-parents';
 export * from './list-did-rules';
 export * from './list-dids';
 export * from './list-file-replicas';
+export * from './list-requests';
 export * from './list-rses';
 export * from './list-rule-replica-lock-states';
 export * from './list-rules';
@@ -146,6 +148,7 @@ export const API_ROUTE_NAMES = [
     'list-did-rules',
     'list-dids',
     'list-file-replicas',
+    'list-requests',
     'list-rses',
     'list-rule-replica-lock-states',
     'list-rules',
@@ -203,6 +206,7 @@ export const API_SCHEMAS: Record<RouteName, z.ZodType> = {
     'list-did-rules': ListDidRulesSchema,
     'list-dids': ListDidsSchema,
     'list-file-replicas': ListFileReplicasSchema,
+    'list-requests': ListRequestsSchema,
     'list-rses': ListRsesSchema,
     'list-rule-replica-lock-states': ListRuleReplicaLockStatesSchema,
     'list-rules': ListRulesSchema,
