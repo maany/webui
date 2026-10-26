@@ -3,6 +3,7 @@ import { registerTools } from '@/lib/infrastructure/assistant/tool-registry';
 import { accountToolSpecs, accountTools } from './accounts';
 import { CORE_DATA_TOOLS } from './core-tools';
 import { didToolSpecs, didTools } from './dids';
+import { registerKnowledgeTools } from './knowledge';
 import type { ToolArgs } from './read-tool-helpers';
 import { replicaToolSpecs, replicaTools } from './replicas';
 import { rseToolSpecs, rseTools } from './rses';
@@ -24,3 +25,5 @@ export const READ_TOOL_SPECS: ToolSpec<ToolArgs>[] = [
 // Registered once, when this module is first imported (AssistantProvider imports it). Later phases add their
 // domain arrays to this call (phase 7: requestTools) or their own register call below it (phase 3: registerPageTools).
 registerTools([...CORE_DATA_TOOLS, ...didTools, ...ruleTools, ...rseTools, ...accountTools, ...replicaTools, ...subscriptionTools]);
+// search_docs and activate_skill are core tools offered on every turn.
+registerKnowledgeTools();
