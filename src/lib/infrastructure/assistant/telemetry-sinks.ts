@@ -32,12 +32,15 @@ export function langfuseBaseUrl(endpoint: string): string {
         .replace(/\/api\/public\/otel(\/v1\/traces)?$/, '');
 }
 
+const LANGFUSE_OWNED_HEADERS = new Set(['authorization', LANGFUSE_INGESTION_VERSION_HEADER]);
+
 export function userSinkTarget(sink: TelemetrySinkSettings): OtlpTarget {
     if (sink.kind === 'langfuse') {
+        const extra = Object.fromEntries(Object.entries(sink.headers ?? {}).filter(([name]) => !LANGFUSE_OWNED_HEADERS.has(name.toLowerCase())));
         return {
             url: `${langfuseBaseUrl(sink.endpoint)}${LANGFUSE_OTLP_TRACES_PATH}`,
             headers: {
-                ...(sink.headers ?? {}),
+                ...extra,
                 Authorization: `Basic ${base64Utf8(`${sink.publicKey ?? ''}:${sink.secretKey ?? ''}`)}`,
                 [LANGFUSE_INGESTION_VERSION_HEADER]: LANGFUSE_INGESTION_VERSION,
             },
@@ -75,5 +78,24 @@ export function collectKnownSecrets(settings: AssistantSettings): string[] {
             secrets.push(target.headers.Authorization.replace(/^Basic /, ''));
         }
     }
-    return secrets.filter(secret => secret.trim() !== '');
+    const all = new Set<string>();
+    for (const secret of secrets) {
+        const trimmed = secret.trim();
+        if (trimmed === '') {
+            continue;
+        }
+        const space = trimmed.indexOf(' ');
+        const afterSpace = space === -1 ? '' : trimmed.slice(space + 1).trim();
+        for (const form of [secret, trimmed, afterSpace]) {
+            if (form === '') {
+                continue;
+            }
+            all.add(form);
+            const encoded = encodeURIComponent(form);
+            if (encoded !== form) {
+                all.add(encoded);
+            }
+        }
+    }
+    return [...all];
 }

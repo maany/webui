@@ -30,9 +30,9 @@ export function parseOtlpHeaders(raw: string | undefined): Record<string, string
     return headers;
 }
 
-/** Inverse of parseOtlpHeaders for display in settings. */
+/** Inverse of parseOtlpHeaders for display in settings. `%` and `,` in values are percent-encoded so values round-trip. */
 export function formatOtlpHeaders(headers: Record<string, string> | undefined): string {
     return Object.entries(headers ?? {})
-        .map(([key, value]) => `${key}=${value}`)
+        .map(([key, value]) => `${key}=${value.replace(/%/g, '%25').replace(/,/g, '%2C')}`)
         .join(',');
 }

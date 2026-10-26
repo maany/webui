@@ -33,6 +33,10 @@ describe('effectiveContentLevel', () => {
     it('treats an unknown stored value as metadata', () => {
         expect(effectiveContentLevel('everything' as TelemetryContentLevel, 'full')).toBe('metadata');
     });
+
+    it('treats an unknown cap as metadata', () => {
+        expect(effectiveContentLevel('full', 'bogus' as TelemetryContentLevel)).toBe('metadata');
+    });
 });
 
 describe('isContentLevelAllowed', () => {

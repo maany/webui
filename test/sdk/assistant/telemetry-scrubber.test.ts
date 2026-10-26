@@ -44,20 +44,66 @@ describe('scrubText', () => {
     });
 
     it.each([
-        ['hyphen run', '-'.repeat(8000)],
-        ['hyphen separated words', 'ab-'.repeat(2700)],
-        ['hex and hyphens', 'a-0123456789abcdef-'.repeat(420)],
-        ['key name then spaces', `token${' '.repeat(8000)}x`],
-        ['repeated key names', 'token '.repeat(1300)],
-        ['bearer then spaces', `Bearer${' '.repeat(8000)}!`],
-        ['repeated bearer', 'Bearer ab '.repeat(800)],
-        ['near jwt', `eyJ${'a'.repeat(7990)}`],
-        ['near jwt segments', `eyJaaaaa.${'b'.repeat(7980)}`],
-        ['near key', `sk-${'a'.repeat(7990)}`],
+        ['hyphen run', '-'.repeat(80000)],
+        ['hyphen separated words', 'ab-'.repeat(27000)],
+        ['hex and hyphens', 'a-0123456789abcdef-'.repeat(4200)],
+        ['key name then spaces', `token${' '.repeat(80000)}x`],
+        ['repeated key names', 'token '.repeat(13000)],
+        ['bearer then spaces', `Bearer${' '.repeat(80000)}!`],
+        ['repeated bearer', 'Bearer ab '.repeat(8000)],
+        ['near jwt', `eyJ${'a'.repeat(79990)}`],
+        ['near jwt segments', `eyJaaaaa.${'b'.repeat(79980)}`],
+        ['near key', `sk-${'a'.repeat(79990)}`],
+        ['jwt starts', 'eyJ-'.repeat(20000)],
+        ['rucio dot runs', '-a.'.repeat(26666)],
+        ['userinfo slashes', '//a:'.repeat(20000)],
+        ['userinfo no at', `//${'a'.repeat(80000)}`],
+        ['header shape', '{"name":"x-api-key","value":"'.repeat(2500)],
+        ['vendor prefixes', 'gsk_'.repeat(20000)],
+        ['hf prefixes', 'hf_aaaa'.repeat(11000)],
+        ['AIza prefixes', 'AIza'.repeat(20000)],
+        ['xai prefixes', 'xai-'.repeat(20000)],
+        ['escaped quotes', '\\"token\\": '.repeat(6000)],
+        ['bearer percent', 'Bearer%20'.repeat(9000)],
+        ['key underscores', 'api_key_'.repeat(10000)],
     ])('finishes fast on a long adversarial string: %s', (_label, input) => {
         const started = Date.now();
         scrubText(input, ['localsecret123']);
-        expect(Date.now() - started).toBeLessThan(150);
+        expect(Date.now() - started).toBeLessThan(1000);
+    });
+
+    it.each([
+        ['JSON-escaped JSON api key', '{"args":"{\\"apiKey\\":\\"abcd1234efgh\\"}"}', '{"args":"{\\"apiKey\\":\\"[REDACTED]\\"}"}'],
+        ['escaped token with space', '\\"token\\": \\"supersecretvalue\\"', '\\"token\\": \\"[REDACTED]\\"'],
+        ['URL-encoded bearer', 'x=Bearer%20abc123def456', 'x=Bearer [REDACTED]'],
+        ['snake case key', 'openai_api_key=abcd1234efgh', 'openai_api_key=[REDACTED]'],
+        ['upper case env key', 'ANTHROPIC_API_KEY=abcd1234efgh', 'ANTHROPIC_API_KEY=[REDACTED]'],
+        ['camel case key', 'langfuseSecretKey: abcd1234efgh', 'langfuseSecretKey: [REDACTED]'],
+        ['auth token', 'auth_token=abcd1234efgh', 'auth_token=[REDACTED]'],
+        ['session token', 'sessionToken: abcd1234efgh', 'sessionToken: [REDACTED]'],
+        ['private key', 'private_key=abcd1234efgh', 'private_key=[REDACTED]'],
+        ['cookie', 'cookie: sid=abcd1234efgh', 'cookie: [REDACTED]'],
+        ['set-cookie', 'set-cookie: sid=abcd1234efgh', 'set-cookie: [REDACTED]'],
+        ['URL userinfo', 'https://admin:hunter22pass@host.example/x', 'https://admin:[REDACTED]@host.example/x'],
+        ['header name value shape', '{"name":"x-api-key","value":"abcd1234efgh"}', '{"name":"x-api-key","value":"[REDACTED]"}'],
+        ['header shape authorization', '{"name":"Authorization","value":"Bearer abcd1234"}', '{"name":"Authorization","value":"[REDACTED]"}'],
+        ['header shape rucio token', '{"name":"x-rucio-auth-token","value":"abc"}', '{"name":"x-rucio-auth-token","value":"[REDACTED]"}'],
+        ['groq key', 'k gsk_abcdefghijklmnopqrstuv k', 'k [REDACTED] k'],
+        ['xai key', 'k xai-abcdefghijklmnopqrstuv k', 'k [REDACTED] k'],
+        ['hf key', 'k hf_abcdefghijklmnopqrstuv k', 'k [REDACTED] k'],
+        ['google key', `k AIza${'a'.repeat(35)} k`, 'k [REDACTED] k'],
+    ])('redacts %s', (_label, input, expected) => {
+        expect(scrubText(input)).toBe(expected);
+    });
+
+    it.each([
+        'Basic authentication is disabled',
+        'Token validation failed',
+        'see Bearer authentication docs',
+        'the token budget is large',
+        'a keyboard and a monkey',
+    ])('leaves prose alone: %s', input => {
+        expect(scrubText(input)).toBe(input);
     });
 });
 
@@ -90,8 +136,68 @@ describe('ScrubbingSpanProcessor', () => {
         expect(exported.name).toBe('call with [REDACTED]');
         expect(exported.attributes['gen_ai.tool.call.arguments']).toBe('{"password":"[REDACTED]","note":"[REDACTED]"}');
         expect(exported.events[0].attributes).toEqual({ header: 'Authorization: [REDACTED] [REDACTED]' });
+        expect(exported.events[0].name).toBe('retry');
         expect(exported.status.message).toBe('failed with key [REDACTED]');
         expect(exported.spanContext().spanId).toBe(span.spanContext().spanId);
         await provider.shutdown();
+    });
+
+    const contentSpan = async (processor: (next: SimpleSpanProcessor) => ScrubbingSpanProcessor) => {
+        const exporter = new InMemorySpanExporter();
+        const provider = new TracerProvider({ spanProcessors: [processor(new SimpleSpanProcessor({ exporter }))] });
+        provider
+            .getTracer('test')
+            .startSpan('s', {
+                attributes: {
+                    'langfuse.trace.input': 'a',
+                    'langfuse.trace.output': 'b',
+                    'langfuse.observation.input': 'c',
+                    'langfuse.observation.output': 'd',
+                    'gen_ai.tool.call.arguments': 'e',
+                    'gen_ai.tool.call.result': 'f',
+                    'db.query.text': 'g',
+                    'gen_ai.tool.name': 'keep',
+                },
+            })
+            .end();
+        const spans = exporter.getFinishedSpans();
+        await provider.shutdown();
+        return spans;
+    };
+
+    it('drops the span when known secrets cannot be read (fail closed)', async () => {
+        const spans = await contentSpan(
+            next =>
+                new ScrubbingSpanProcessor(next, () => {
+                    throw new Error('settings broke');
+                }),
+        );
+        expect(spans).toHaveLength(0);
+    });
+
+    it('strips content attributes when stripContent returns true or throws', async () => {
+        for (const strip of [
+            () => true,
+            () => {
+                throw new Error('x');
+            },
+        ]) {
+            const [span] = await contentSpan(next => new ScrubbingSpanProcessor(next, () => [], strip));
+            expect(Object.keys(span.attributes)).toEqual(['gen_ai.tool.name']);
+        }
+    });
+
+    it('keeps content attributes when stripContent returns false or is absent', async () => {
+        const [withFalse] = await contentSpan(
+            next =>
+                new ScrubbingSpanProcessor(
+                    next,
+                    () => [],
+                    () => false,
+                ),
+        );
+        expect(Object.keys(withFalse.attributes)).toHaveLength(8);
+        const [without] = await contentSpan(next => new ScrubbingSpanProcessor(next, () => []));
+        expect(Object.keys(without.attributes)).toHaveLength(8);
     });
 });

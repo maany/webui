@@ -18,6 +18,21 @@ describe('userSinkTarget', () => {
         },
     );
 
+    it('drops user headers that would override the Langfuse auth or version, in any case', () => {
+        const target = userSinkTarget({
+            kind: 'langfuse',
+            endpoint: 'https://lf.example.org',
+            publicKey: 'pk',
+            secretKey: 'sk',
+            headers: { authorization: 'Bearer evil', 'X-Langfuse-Ingestion-Version': '1', 'x-team': 'ddm' },
+        });
+        expect(target.headers).toEqual({
+            'x-team': 'ddm',
+            Authorization: `Basic ${btoa('pk:sk')}`,
+            'x-langfuse-ingestion-version': '4',
+        });
+    });
+
     it('uses the OTLP URL and headers as given', () => {
         expect(userSinkTarget({ kind: 'otlp', endpoint: ' https://otel.example.org/v1/traces ', headers: { 'x-team': 'ddm' } })).toEqual({
             url: 'https://otel.example.org/v1/traces',
@@ -55,7 +70,25 @@ describe('collectKnownSecrets', () => {
                 },
             },
         } as unknown as AssistantSettings;
-        expect(collectKnownSecrets(settings)).toEqual(['sk-provider-key-123', 'sk-lf-y', 'pk-lf-x', 'extra-secret', btoa('pk-lf-x:sk-lf-y')]);
+        expect(new Set(collectKnownSecrets(settings))).toEqual(
+            new Set(['sk-provider-key-123', 'sk-lf-y', 'pk-lf-x', 'extra-secret', btoa('pk-lf-x:sk-lf-y')]),
+        );
+    });
+
+    it('adds trimmed, after-first-space and URL-encoded forms, deduplicated', () => {
+        const settings = {
+            providers: [{ id: '1', kind: 'openai', label: 'o', model: 'gpt', apiKey: '  key with/space+x  ' }],
+            telemetry: {
+                enabled: true,
+                contentLevel: 'metadata',
+                shareWithOperator: false,
+                sink: { kind: 'otlp', endpoint: 'https://o.example', headers: { Authorization: 'Bearer tokenvalue123', again: 'tokenvalue123' } },
+            },
+        } as unknown as AssistantSettings;
+        const secrets = collectKnownSecrets(settings);
+        expect(secrets).toEqual(expect.arrayContaining(['key with/space+x', 'with/space+x', encodeURIComponent('key with/space+x')]));
+        expect(secrets).toEqual(expect.arrayContaining(['Bearer tokenvalue123', 'tokenvalue123', encodeURIComponent('Bearer tokenvalue123')]));
+        expect(secrets.filter(secret => secret === 'tokenvalue123')).toHaveLength(1);
     });
 });
 
@@ -78,6 +111,12 @@ describe('parseOtlpHeaders', () => {
 
     it('round-trips with formatOtlpHeaders', () => {
         const headers = { a: '1', b: 'x=y' };
+        expect(parseOtlpHeaders(formatOtlpHeaders(headers))).toEqual(headers);
+    });
+
+    it('encodes percent and comma in values so they round-trip', () => {
+        const headers = { a: '100%', b: 'x,y=z', c: 'Basic%20abc' };
+        expect(formatOtlpHeaders(headers)).toBe('a=100%25,b=x%2Cy=z,c=Basic%2520abc');
         expect(parseOtlpHeaders(formatOtlpHeaders(headers))).toEqual(headers);
     });
 });
