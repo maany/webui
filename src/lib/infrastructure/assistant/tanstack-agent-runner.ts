@@ -16,6 +16,7 @@ import type { ToolError, ToolPolicy } from '@/lib/core/entity/assistant/tool';
 import { computeCost, type TokenUsage } from '@/lib/core/entity/assistant/usage';
 import { CONTEXT_OVERFLOW_ERROR, SESSION_EXPIRED_ERROR } from './runner-errors';
 import { formatUserTurn } from './system-prompt';
+import { maskSensitiveArgs } from './approvals';
 import { REJECTED_BY_USER, buildTanstackTools, createPolicyMiddleware, createToolFilterMiddleware, deniedByPolicy } from './tanstack-tools';
 import { isToolError, type RegisteredTool, type ToolExecutionContext } from './tool-types';
 
@@ -477,13 +478,16 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                             const toolName = toolNames.get(chunk.toolCallId) ?? 'unknown';
                             const args = chunk.input !== undefined ? chunk.input : parseToolContent(toolArgsText.get(chunk.toolCallId) || '{}');
                             const policy = built.builtPolicy.get(toolName) ?? d.policyFor(toolName);
-                            channel.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName, args, policy });
+                            // Execution keeps TanStack's own args; what is stored, shown and emitted never carries sensitive values.
+                            const sensitiveArgs = deps().tools.find(tool => tool.spec.name === toolName)?.spec.sensitiveArgs ?? [];
+                            const shownArgs = maskSensitiveArgs(args, sensitiveArgs);
+                            channel.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName, args: shownArgs, policy });
                             d.emit({
                                 type: 'tool-call-started',
                                 turnId: input.turnId,
                                 toolCallId: chunk.toolCallId,
                                 toolName,
-                                args,
+                                args: shownArgs,
                                 policy,
                                 at: Date.now(),
                             });
