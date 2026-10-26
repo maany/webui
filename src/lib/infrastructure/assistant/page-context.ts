@@ -1,5 +1,5 @@
 import type { PageContext } from '@/lib/core/entity/assistant/page-context';
-import { isSecretFieldName } from '@/lib/core/services/assistant-secret-keys';
+import { isSecretFieldName, normaliseFieldName } from '@/lib/core/services/assistant-secret-keys';
 
 export const PAGE_SUMMARY_MAX_CHARS = 500;
 const TITLE_MAX_CHARS = 200;
@@ -11,17 +11,9 @@ const MAX_PARAMS = 30;
 /** Param names dropped on top of the shared secret-name rule: OAuth codes and generic keys. */
 const PARAM_ONLY_SENSITIVE_KEYS = new Set(['code', 'key']);
 
-function normaliseParamKey(key: string): string {
-    return key
-        .normalize('NFKC')
-        .replace(/\p{Cf}/gu, '')
-        .toLowerCase()
-        .replace(/[-_]/g, '');
-}
-
 /** Credential-like param names: the shared secret-name rule plus code and key. */
 function isSensitiveParamKey(key: string): boolean {
-    return isSecretFieldName(key) || PARAM_ONLY_SENSITIVE_KEYS.has(normaliseParamKey(key));
+    return isSecretFieldName(key) || PARAM_ONLY_SENSITIVE_KEYS.has(normaliseFieldName(key));
 }
 
 const CLOSING_DATA_TAG = /(?:<|&lt;)\s*\/\s*(?:page_context|conversation_summary)\b/i;

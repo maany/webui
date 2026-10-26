@@ -17,6 +17,10 @@ const MAX_ARRAY_ITEMS = 50;
 const MAX_STRING_CHARS = 1_000;
 const MAX_SAMPLE_STRING_CHARS = 200;
 const MAX_DEPTH = 6;
+const MAX_LINE_CHARS = 1_000_000;
+const MAX_MESSAGE_CHARS = 500;
+/** After a read timeout the store may still finish writing the rows already read, for at most this long. */
+const ENGINE_GRACE_MS = 5_000;
 
 export interface FeatureExecutionDeps {
     signal: AbortSignal;
@@ -82,8 +86,8 @@ export function errorCodeForStatus(status: number): ToolErrorCode {
 
 function messageFrom(body: unknown): string | undefined {
     if (!isRecord(body)) return undefined;
-    if (typeof body.message === 'string' && body.message !== '') return body.message;
-    if (typeof body.error === 'string' && body.error !== '') return body.error;
+    if (typeof body.message === 'string' && body.message !== '') return body.message.slice(0, MAX_MESSAGE_CHARS);
+    if (typeof body.error === 'string' && body.error !== '') return body.error.slice(0, MAX_MESSAGE_CHARS);
     return undefined;
 }
 
@@ -145,6 +149,7 @@ interface StreamOutcome {
     notices: string[];
     errorRows: { message: string; errorType?: string }[];
     malformedAfter?: number;
+    lineTooLong?: boolean;
     readFailure?: { timedOut: boolean; message: string };
     rows: number;
 }
@@ -159,6 +164,9 @@ interface StreamFailure {
 function streamFailure(outcome: StreamOutcome): StreamFailure | undefined {
     if (outcome.readFailure) {
         return { code: outcome.readFailure.timedOut ? 'timeout' : 'stream_error', message: outcome.readFailure.message };
+    }
+    if (outcome.lineTooLong) {
+        return { code: 'stream_error', message: `The stream sent a line longer than ${MAX_LINE_CHARS} characters` };
     }
     if (outcome.malformedAfter !== undefined) {
         return { code: 'stream_error', message: `The stream sent a malformed line after ${outcome.malformedAfter} rows` };
@@ -175,11 +183,9 @@ function streamFailure(outcome: StreamOutcome): StreamFailure | undefined {
     return undefined;
 }
 
-const ENVELOPE_KEYS = new Set(['status', 'kind', 'progress', 'notice']);
-
-/** Drops the view model envelope (status, list-dids kind/progress/notice) and an empty message. */
+/** Drops the success status of the view model. Progress and notice envelope rows never get here; data rows keep every other field. */
 function cleanRow(value: JsonRecord): JsonRecord {
-    return Object.fromEntries(Object.entries(value).filter(([key]) => !ENVELOPE_KEYS.has(key)));
+    return Object.fromEntries(Object.entries(value).filter(([key, inner]) => !(key === 'status' && inner === 'success')));
 }
 
 function sampleRow(row: JsonRecord): JsonRecord {
@@ -197,6 +203,10 @@ const STOP = Symbol('stop');
 function handleLine(raw: string, outcome: StreamOutcome): JsonRecord | undefined | typeof STOP {
     const line = raw.trim();
     if (line === '') return undefined;
+    if (line.length > MAX_LINE_CHARS) {
+        outcome.lineTooLong = true;
+        return STOP;
+    }
     let value: unknown;
     try {
         value = JSON.parse(line);
@@ -214,7 +224,8 @@ function handleLine(raw: string, outcome: StreamOutcome): JsonRecord | undefined
     }
     if (value.kind === 'progress') return undefined;
     if (value.kind === 'notice') {
-        if (isRecord(value.notice) && typeof value.notice.message === 'string') outcome.notices.push(value.notice.message);
+        if (isRecord(value.notice) && typeof value.notice.message === 'string')
+            outcome.notices.push(value.notice.message.slice(0, MAX_MESSAGE_CHARS));
         return undefined;
     }
     const row = scrubSecrets(cleanRow(value)) as JsonRecord;
@@ -250,6 +261,7 @@ async function* readNdjsonRows(body: ReadableStream<Uint8Array>, outcome: Stream
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let scanned = 0;
     let finished = false;
     try {
         for (;;) {
@@ -265,13 +277,18 @@ async function* readNdjsonRows(body: ReadableStream<Uint8Array>, outcome: Stream
             }
             if (chunk.done) break;
             buffer += decoder.decode(chunk.value, { stream: true });
-            let newline = buffer.indexOf('\n');
+            let newline = buffer.indexOf('\n', scanned);
             while (newline !== -1) {
                 const result = handleLine(buffer.slice(0, newline), outcome);
                 buffer = buffer.slice(newline + 1);
                 if (result === STOP) return;
                 if (result) yield result;
                 newline = buffer.indexOf('\n');
+            }
+            scanned = buffer.length;
+            if (buffer.length > MAX_LINE_CHARS) {
+                outcome.lineTooLong = true;
+                return;
             }
         }
         buffer += decoder.decode();
@@ -334,7 +351,10 @@ export async function executeFeatureTool(spec: ToolSpec<any>, rawArgs: unknown, 
             return stopped() ?? toolError('unavailable', `Request failed: ${errorMessage(error)}`);
         }
 
-        if (isLoginRedirect(response)) return toolError('session_expired', SESSION_EXPIRED_MESSAGE);
+        if (isLoginRedirect(response)) {
+            await response.body?.cancel().catch(() => undefined);
+            return toolError('session_expired', SESSION_EXPIRED_MESSAGE);
+        }
         if (!response.ok) {
             const body = await readJsonSafely(response);
             return toolError(errorCodeForStatus(response.status), messageFrom(body) ?? `HTTP ${response.status}`, errorTypeFrom(body));
@@ -380,44 +400,103 @@ async function ingestStream(
 ): Promise<RowsToolResult | ToolError> {
     if (!response.body) return toolError('stream_error', 'The server sent no data');
     const outcome: StreamOutcome = { sample: [], notices: [], errorRows: [], rows: 0 };
-    let handle: DataHandle;
-    try {
-        handle = await deps.handles.ingestRows(
-            baseNameFor(spec.name),
-            { toolName: spec.name, args, fetchedAt: (deps.now ?? (() => new Date()))().toISOString() },
-            readNdjsonRows(response.body, outcome, ctx),
-            {
-                rowCap: deps.rowCap ?? defaultRowCap(),
-                signal: deps.signal,
-                ...(deps.tableName !== undefined ? { name: deps.tableName } : {}),
-                sourceError: () => streamFailure(outcome)?.message,
-            },
-        );
-    } catch (error) {
-        if (deps.signal.aborted || isAbortError(error)) return toolError('aborted', 'Stopped by the user');
-        if (error instanceof DataHandleStoreError) return toolError(error.code === 'unavailable' ? 'unavailable' : 'invalid_args', error.message);
-        return toolError('unavailable', `Could not store the rows: ${errorMessage(error)}`);
-    }
+    const source = readNdjsonRows(response.body, outcome, ctx);
 
-    const failure = streamFailure(outcome);
-    if (failure && handle.rowCount === 0) {
-        await deps.handles.drop(handle.name).catch(() => undefined);
-        return toolError(
-            failure.code === 'stream_error' && outcome.errorRows.length > 0 ? 'rucio_error' : failure.code,
-            failure.message,
-            failure.errorType,
-        );
-    }
-    const result: RowsToolResult = {
-        handle: handle.name,
-        rowCount: handle.rowCount,
-        truncated: handle.truncated,
-        columns: handle.columns.map(column => column.name),
-        sample: outcome.sample,
+    // The store gets its own signal: Stop aborts it at once; the timeout aborts it at once too, unless the read itself
+    // timed out, in which case the store gets a short grace period to keep the rows already read.
+    const storeController = new AbortController();
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    let reading = false;
+    const onStop = () => {
+        if (deps.signal.aborted || !reading) storeController.abort();
     };
-    if (failure) result.error = toolError(failure.code, `Stream failed after ${handle.rowCount} rows: ${failure.message}`, failure.errorType);
-    if (outcome.notices.length > 0) result.notices = outcome.notices;
-    return result;
+    ctx.signal.addEventListener('abort', onStop, { once: true });
+    const onReadEnd = () => {
+        reading = false;
+        if (ctx.isTimedOut() && !deps.signal.aborted) graceTimer = setTimeout(() => storeController.abort(), ENGINE_GRACE_MS);
+    };
+    const stoppedError = (): ToolError =>
+        deps.signal.aborted || !ctx.isTimedOut()
+            ? toolError('aborted', 'Stopped by the user')
+            : toolError('timeout', `No answer from ${spec.route?.path} within ${ctx.timeoutMs / 1000}s`);
+
+    try {
+        // Peek at the first row: a failure before any row must not replace an existing table (refresh keeps its old data).
+        let first: IteratorResult<JsonRecord>;
+        try {
+            first = await source.next();
+        } catch (error) {
+            if (deps.signal.aborted || isAbortError(error)) return toolError('aborted', 'Stopped by the user');
+            return toolError('unavailable', `Could not read the stream: ${errorMessage(error)}`);
+        }
+        if (first.done) {
+            const failure = streamFailure(outcome);
+            if (failure) {
+                return toolError(
+                    failure.code === 'stream_error' && outcome.errorRows.length > 0 ? 'rucio_error' : failure.code,
+                    failure.message,
+                    failure.errorType,
+                );
+            }
+        }
+        const rows = (async function* () {
+            try {
+                if (!first.done) {
+                    yield first.value;
+                    for (;;) {
+                        reading = true;
+                        const next = await source.next();
+                        reading = false;
+                        if (next.done) break;
+                        yield next.value;
+                    }
+                }
+            } finally {
+                onReadEnd();
+            }
+        })();
+
+        const aborted = new Promise<never>((_resolve, reject) => {
+            storeController.signal.addEventListener('abort', () => reject(abortError()), { once: true });
+        });
+        aborted.catch(() => undefined);
+        let handle: DataHandle;
+        try {
+            handle = await Promise.race([
+                deps.handles.ingestRows(
+                    baseNameFor(spec.name),
+                    { toolName: spec.name, args, fetchedAt: (deps.now ?? (() => new Date()))().toISOString() },
+                    rows,
+                    {
+                        rowCap: deps.rowCap ?? defaultRowCap(),
+                        signal: storeController.signal,
+                        ...(deps.tableName !== undefined ? { name: deps.tableName } : {}),
+                        sourceError: () => streamFailure(outcome)?.message,
+                    },
+                ),
+                aborted,
+            ]);
+        } catch (error) {
+            if (deps.signal.aborted || storeController.signal.aborted || isAbortError(error)) return stoppedError();
+            if (error instanceof DataHandleStoreError) return toolError(error.code === 'unavailable' ? 'unavailable' : 'invalid_args', error.message);
+            return toolError('unavailable', `Could not store the rows: ${errorMessage(error)}`);
+        }
+
+        const failure = streamFailure(outcome);
+        const result: RowsToolResult = {
+            handle: handle.name,
+            rowCount: handle.rowCount,
+            truncated: handle.truncated,
+            columns: handle.columns.map(column => column.name),
+            sample: outcome.sample,
+        };
+        if (failure) result.error = toolError(failure.code, `Stream failed after ${handle.rowCount} rows: ${failure.message}`, failure.errorType);
+        if (outcome.notices.length > 0) result.notices = outcome.notices;
+        return result;
+    } finally {
+        clearTimeout(graceTimer);
+        ctx.signal.removeEventListener('abort', onStop);
+    }
 }
 
 /** Turns a feature ToolSpec into a RegisteredTool. Phases 4 and 7 use this for their routes too. */

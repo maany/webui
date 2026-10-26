@@ -465,3 +465,109 @@ describe('createFeatureTool', () => {
         await expect(tool.execute({}, ctx)).resolves.toMatchObject({ handle: 'rules_1', rowCount: 1 });
     });
 });
+
+describe('fix round 1', () => {
+    afterEach(() => jest.useRealTimers());
+
+    it('f1: a refresh that fails with no rows keeps the previous table and handle', async () => {
+        const { deps, handles, engine } = setup();
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ id: 'old' })] }));
+        await executeFeatureTool(listRules, {}, { ...deps, tableName: 'rules_7' });
+        fetchMock.mockImplementationOnce(async () =>
+            fakeResponse({ chunks: [JSON.stringify({ status: 'error', errorType: 'gateway_error', message: 'Rucio timed out' })] }),
+        );
+        const result = await executeFeatureTool(listRules, {}, { ...deps, tableName: 'rules_7' });
+        expect(result).toEqual({ error: 'rucio_error', message: 'Rucio timed out', errorType: 'gateway_error' });
+        expect(handles.listHandles()).toHaveLength(1);
+        expect(handles.listHandles()[0]).toMatchObject({ name: 'rules_7', rowCount: 1 });
+        expect(engine.tables.get('rules_7')).toHaveLength(1);
+    });
+
+    it('f1: a refresh that times out before any row keeps the previous table', async () => {
+        jest.useFakeTimers();
+        const { deps, handles } = setup();
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ id: 'old' })] }));
+        const first = executeFeatureTool(listRules, {}, { ...deps, tableName: 'rules_7' });
+        await jest.advanceTimersByTimeAsync(0);
+        await first;
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [], hang: true }));
+        const pending = executeFeatureTool(listRules, {}, { ...deps, tableName: 'rules_7' });
+        await jest.advanceTimersByTimeAsync(FEATURE_TOOL_TIMEOUT_MS);
+        await expect(pending).resolves.toMatchObject({ error: 'timeout' });
+        expect(handles.listHandles()[0]).toMatchObject({ name: 'rules_7', rowCount: 1 });
+    });
+
+    it('f2: a store that never settles cannot extend the call past the timeout', async () => {
+        jest.useFakeTimers();
+        const { deps } = setup();
+        const hung = { ...deps, handles: { ingestRows: () => new Promise(() => undefined) } as never };
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ id: 'a' })] }));
+        const pending = executeFeatureTool(listRules, {}, hung);
+        await jest.advanceTimersByTimeAsync(FEATURE_TOOL_TIMEOUT_MS);
+        await expect(pending).resolves.toMatchObject({ error: 'timeout' });
+    });
+
+    it('f2: Stop aborts a store that never settles', async () => {
+        const { deps, controller } = setup();
+        const hung = { ...deps, handles: { ingestRows: () => new Promise(() => undefined) } as never };
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ id: 'a' })] }));
+        const pending = executeFeatureTool(listRules, {}, hung);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        controller.abort();
+        await expect(pending).resolves.toEqual({ error: 'aborted', message: 'Stopped by the user' });
+    });
+
+    it('f3: a line over 1,000,000 characters stops the read and keeps earlier rows', async () => {
+        const { deps } = setup();
+        const huge = 'x'.repeat(600_000);
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ id: 'a' }), huge, huge, ndjson({ id: 'late' })] }));
+        const result = rows(await executeFeatureTool(listRules, {}, deps));
+        expect(result).toMatchObject({ rowCount: 1, truncated: true, error: { error: 'stream_error' } });
+        expect(result.error?.message).toContain('1000000');
+    });
+
+    it('f4: data rows keep fields named kind, progress and notice', async () => {
+        const { deps } = setup();
+        fetchMock.mockImplementationOnce(async () =>
+            fakeResponse({ chunks: [ndjson({ status: 'success', kind: 'file', progress: 5, notice: 'n', id: 'a' })] }),
+        );
+        const result = rows(await executeFeatureTool(listRules, {}, deps));
+        expect(result.sample[0]).toEqual({ kind: 'file', progress: 5, notice: 'n', id: 'a' });
+    });
+
+    it('f5: cancels the body on a session-expired answer', async () => {
+        const { deps } = setup();
+        const response = fakeResponse({ contentType: 'text/html', chunks: ['<html>Login</html>'] });
+        const cancel = jest.spyOn(response.body as ReadableStream, 'cancel');
+        fetchMock.mockImplementationOnce(async () => response);
+        await executeFeatureTool(listRules, {}, deps);
+        expect(cancel).toHaveBeenCalled();
+    });
+
+    it('f6: caps error-row and notice messages at 500 characters', async () => {
+        const { deps } = setup();
+        fetchMock.mockImplementationOnce(async () =>
+            fakeResponse({
+                chunks: [
+                    ndjson({ id: 'a' }, { kind: 'notice', notice: { message: 'n'.repeat(900) } }, { status: 'error', message: 'e'.repeat(900) }),
+                ],
+            }),
+        );
+        const result = rows(await executeFeatureTool(listRules, {}, deps));
+        expect(result.notices?.[0]).toHaveLength(500);
+        expect(result.error?.message.length).toBeLessThan(600);
+    });
+
+    it('f8: handles CRLF line endings', async () => {
+        const { deps } = setup();
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: ['{"id":"a"}\r\n{"id":"b"}\r\n'] }));
+        await expect(executeFeatureTool(listRules, {}, deps)).resolves.toMatchObject({ rowCount: 2, columns: ['id'] });
+    });
+
+    it('f8: keeps ?, # and / inside one query parameter', async () => {
+        const { deps } = setup();
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ i: 1 })] }));
+        await executeFeatureTool(listRules, { account: 'a?b#c/d&e' }, deps);
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/feature/list-rules?account=a%3Fb%23c%2Fd%26e');
+    });
+});

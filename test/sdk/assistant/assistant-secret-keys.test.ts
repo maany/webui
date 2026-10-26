@@ -1,4 +1,4 @@
-import { isSecretFieldName } from '@/lib/core/services/assistant-secret-keys';
+import { isSecretFieldName, normaliseFieldName } from '@/lib/core/services/assistant-secret-keys';
 
 describe('isSecretFieldName', () => {
     it.each([
@@ -18,6 +18,7 @@ describe('isSecretFieldName', () => {
         'access_token',
         'X-Rucio-Auth-Token',
         'rucioAuthToken',
+        'rucioAuthTokenExpires',
         'db_password',
         'x-api-key',
         'ｐａｓｓｗｏｒｄ',
@@ -28,5 +29,11 @@ describe('isSecretFieldName', () => {
 
     it.each(['key', 'code', 'value', 'name', 'account', 'state', 'tokens_total', 'rse_expression'])('keeps %s', name => {
         expect(isSecretFieldName(name)).toBe(false);
+    });
+});
+
+describe('normaliseFieldName', () => {
+    it('lowercases and strips separators and format characters', () => {
+        expect(normaliseFieldName('X-Rucio_Auth\u200BToken')).toBe('xrucioauthtoken');
     });
 });
