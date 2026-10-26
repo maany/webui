@@ -29,6 +29,9 @@ export const QUERY_KEYS = {
 
     /** Root of every account query (info, attributes, identities, quotas); see `accountKeys` */
     ACCOUNT: ['account'] as const,
+
+    /** Rucio bot operator configuration, used by useAssistantConfig */
+    assistantConfig: ['assistant-config'] as const,
 } as const;
 
 /**
