@@ -5,6 +5,7 @@ import { signOut, useSession } from 'next-auth/react';
 import { usePathname } from 'next/navigation';
 import { AuthType } from '@/lib/core/entity/auth-models';
 import { navigateTo } from './navigate';
+import { runSignOutHooks } from './sign-out-hooks';
 import { ReauthModal } from '@/component-library/features/auth/ReauthModal';
 
 /**
@@ -235,6 +236,8 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
     const manualSignOut = useCallback(async () => {
         isManualSignOutRef.current = true;
         clearRefreshTimer();
+        // Let features clean up first (Rucio bot "clear on logout"). Never blocks for more than 3 s.
+        await runSignOutHooks();
         await signOut({ redirect: false });
         navigateTo('/auth/login?signedOut=true');
     }, [clearRefreshTimer]);
