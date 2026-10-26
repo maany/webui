@@ -52,4 +52,5 @@ export interface Conversation {
     compactedUpToMessageId?: string;
     conversationAllow: string[]; // tool names approved "for this conversation"
     handles: (DataHandleProvenance & { name: string })[];
+    activeTools?: string[]; // tools loaded by find_tools, oldest first
 }

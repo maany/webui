@@ -37,4 +37,5 @@ export interface SqlResult {
     rows: Record<string, unknown>[]; // at most maxRows
     totalRows: number;
     savedAs?: string;
+    rowsOmitted?: boolean; // only on the persisted copy of a message: its rows were stripped before storage
 }
