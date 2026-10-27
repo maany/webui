@@ -12,15 +12,6 @@ import { getTool } from '@/lib/infrastructure/assistant/tool-registry';
 /** Events kept while the telemetry chunk loads; later ones are dropped. */
 export const TELEMETRY_PENDING_EVENT_LIMIT = 500;
 
-/**
- * `ToolSpec.sensitiveArgs` (phase 4), read structurally so this hook does not depend on
- * whether phase 4 has added the optional field yet.
- */
-function readSensitiveArgs(spec: object | undefined): readonly string[] {
-    const value = spec ? (spec as Record<string, unknown>).sensitiveArgs : undefined;
-    return Array.isArray(value) ? value.filter((key): key is string => typeof key === 'string') : [];
-}
-
 /** Telemetry must never break the assistant: a failing event is dropped. */
 function safeHandle(telemetry: AssistantTelemetry, event: AssistantEvent): void {
     try {
@@ -97,7 +88,7 @@ export function useAssistantTelemetry({ config, settings, accountKey }: UseAssis
                         contentLevel: () => contentLevelRef.current,
                         identity: { userId: () => userIdRef.current },
                         secrets: () => secretsRef.current,
-                        sensitiveArgs: toolName => readSensitiveArgs(getTool(toolName)?.spec),
+                        sensitiveArgs: toolName => getTool(toolName)?.spec.sensitiveArgs ?? [],
                     });
                 } catch {
                     pendingRef.current = null;
