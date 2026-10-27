@@ -161,9 +161,9 @@ export const deleteAccountTool = defineWriteTool<DeleteAccountInput>({
 export const addAccountAttributeTool = defineWriteTool<AddAccountAttributeInput>({
     name: 'add_account_attribute',
     domain: 'accounts',
-    description: 'Add a key=value attribute to an account. Setting admin=True makes the account a Rucio admin.',
+    description: 'Add a key=value attribute to an account. High risk: setting admin=True makes the account a Rucio admin.',
     input: AddAccountAttributeSchema,
-    risk: 'write',
+    risk: 'high',
     requires: accountWriteRequires(),
     executor: 'feature',
     output: 'object',
