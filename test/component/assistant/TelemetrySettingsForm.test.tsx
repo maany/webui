@@ -54,7 +54,7 @@ const okExport = jest.fn(async (): Promise<TelemetryTestResult> => ({ ok: true, 
 
 describe('TelemetrySettingsForm', () => {
     it('shows the sink fields after opting in, with the plaintext warning', async () => {
-        const user = userEvent.setup();
+        const user = userEvent.setup({ delay: null });
         const onChangeSpy = jest.fn();
         render(
             <Harness
@@ -75,7 +75,7 @@ describe('TelemetrySettingsForm', () => {
     });
 
     it('edits the sink and switches to OTLP with headers', async () => {
-        const user = userEvent.setup();
+        const user = userEvent.setup({ delay: null });
         const onChangeSpy = jest.fn();
         render(
             <Harness
@@ -86,8 +86,11 @@ describe('TelemetrySettingsForm', () => {
             />,
         );
         await user.click(screen.getByRole('radio', { name: 'OTLP endpoint' }));
-        await user.type(screen.getByLabelText('OTLP traces URL'), 'https://otel.example.org/v1/traces');
-        await user.type(screen.getByLabelText('Headers'), 'x-team=ddm');
+        // Paste instead of typing: per-keystroke typing re-renders the whole form for every character and is the slow part under load.
+        await user.click(screen.getByLabelText('OTLP traces URL'));
+        await user.paste('https://otel.example.org/v1/traces');
+        await user.click(screen.getByLabelText('Headers'));
+        await user.paste('x-team=ddm');
         expect(onChangeSpy).toHaveBeenLastCalledWith({
             enabled: true,
             contentLevel: 'metadata',
@@ -113,7 +116,7 @@ describe('TelemetrySettingsForm', () => {
     });
 
     it('shares traces with the deployment only after opting in, and opts out again', async () => {
-        const user = userEvent.setup();
+        const user = userEvent.setup({ delay: null });
         const onChangeSpy = jest.fn();
         render(<Harness config={config({ operatorSink: true })} initial={enabledLangfuse} onTestExport={okExport} onChangeSpy={onChangeSpy} />);
         const share = screen.getByRole('checkbox', { name: 'Share traces with this deployment' });
@@ -139,7 +142,7 @@ describe('TelemetrySettingsForm', () => {
     });
 
     it('lets the user pick full content when the cap allows it', async () => {
-        const user = userEvent.setup();
+        const user = userEvent.setup({ delay: null });
         const onChangeSpy = jest.fn();
         render(<Harness config={config()} initial={enabledLangfuse} onTestExport={okExport} onChangeSpy={onChangeSpy} />);
         await user.click(screen.getByRole('radio', { name: /Full content/ }));
@@ -163,7 +166,7 @@ describe('TelemetrySettingsForm', () => {
     });
 
     it('sends a test span and shows the hint for the result', async () => {
-        const user = userEvent.setup();
+        const user = userEvent.setup({ delay: null });
         const onTestExport = jest.fn(async (): Promise<TelemetryTestResult> => ({ ok: false, reason: 'network' }));
         render(<Harness config={config()} initial={enabledLangfuse} onTestExport={onTestExport} />);
         await user.click(screen.getByRole('button', { name: 'Test export' }));
