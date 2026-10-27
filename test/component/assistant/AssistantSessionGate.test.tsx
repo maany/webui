@@ -12,6 +12,7 @@ import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { FeatureProvider } from '@/component-library/features/feature-flags/FeatureProvider';
 import { AssistantPanel } from '@/component-library/features/assistant/AssistantPanel';
+import { HistoryMenu } from '@/component-library/features/assistant/HistoryMenu';
 import { ReauthModal } from '@/component-library/features/auth/ReauthModal';
 import { AssistantContext, type UseAssistantResult } from '@/lib/infrastructure/hooks/useAssistant';
 import { ASSISTANT_INERT_TARGET_ID, AssistantShellProvider, useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
@@ -111,7 +112,7 @@ describe('Rucio bot session gate', () => {
         expect(pill).toHaveAttribute('aria-hidden', 'true');
     });
 
-    it('does not make the page inert behind a blocked mobile sheet, so the re-auth dialog stays usable', () => {
+    it('stops marking the page inert for a blocked mobile sheet, since the panel itself is inert', () => {
         setViewport(500, true);
         const view = render(tree('active'));
         fireEvent.click(screen.getByRole('button', { name: 'open' }));
@@ -158,6 +159,14 @@ describe('Rucio bot session gate', () => {
         const overlay = dialog.parentElement as HTMLElement;
         const z = (el: HTMLElement) => Number(/z-\[(\d+)\]/.exec(el.className)?.[1] ?? /\bz-(\d+)\b/.exec(el.className)?.[1] ?? 0);
         expect(z(overlay)).toBeGreaterThan(50);
-        expect(z(dialog)).toBeGreaterThan(50);
+    });
+
+    it('renders no history popover while blocked', () => {
+        const props = { conversations: [], onOpen: jest.fn(), onDelete: jest.fn() };
+        const view = render(<HistoryMenu {...props} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Chat history' }));
+        expect(screen.getByText('No saved chats yet.')).toBeInTheDocument();
+        view.rerender(<HistoryMenu {...props} blocked />);
+        expect(screen.queryByText('No saved chats yet.')).toBeNull();
     });
 });

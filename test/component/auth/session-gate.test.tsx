@@ -104,7 +104,7 @@ describe('session gate', () => {
         expect(screen.getByTestId('gate')).toHaveTextContent('signed-out');
     });
 
-    it('is active again after a successful re-auth', async () => {
+    it('stays blocked after a successful re-auth until the page reloads', async () => {
         mockSession(makeUser());
         // jsdom cannot redefine window.location; its reload only reports "not implemented", which is silenced here.
         const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -126,7 +126,33 @@ describe('session gate', () => {
         await act(async () => {
             fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
         });
-        expect(screen.getByTestId('gate')).toHaveTextContent('active');
+        // The dialog stays up until the reload brings a fresh monitor (and an active gate) back.
+        expect(screen.getByTestId('gate')).toHaveTextContent('reauth-required');
+        expect(screen.getByRole('heading', { name: /session expired/i })).toBeInTheDocument();
         consoleError.mockRestore();
+    });
+
+    it('is signed-out on natural expiry (unauthenticated after authenticated)', async () => {
+        mockSession(makeUser({ rucioAuthTokenExpires: new Date(Date.now() + 3_600_000).toISOString() }));
+        const view = renderMonitor();
+        (useSession as jest.Mock).mockReturnValue({ data: null, status: 'unauthenticated', update: jest.fn() });
+        await act(async () => {
+            view.rerender(
+                <SessionMonitorProvider>
+                    <GateProbe />
+                </SessionMonitorProvider>,
+            );
+        });
+        expect(screen.getByTestId('gate')).toHaveTextContent('signed-out');
+    });
+
+    it('is signed-out when a userpass session expires with no identity to re-auth', async () => {
+        mockSession(makeUser({ rucioIdentity: undefined as unknown as string }));
+        renderMonitor();
+        await act(async () => {
+            jest.advanceTimersByTime(30_001);
+        });
+        expect(screen.queryByRole('heading', { name: /session expired/i })).toBeNull();
+        expect(screen.getByTestId('gate')).toHaveTextContent('signed-out');
     });
 });

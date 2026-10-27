@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
@@ -161,10 +161,12 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     stopRef.current = assistant.stop;
     const statusRef = useRef(assistant.status);
     statusRef.current = assistant.status;
-    useEffect(() => {
+    // Layout effect so no frame runs between the gate closing and the stop. Also reruns when a turn starts
+    // while the gate is closed (a send that was still saving when it flipped).
+    useLayoutEffect(() => {
         if (gateActive) return;
-        if (statusRef.current === 'streaming' || statusRef.current === 'awaiting-approval') stopRef.current();
-    }, [gateActive]);
+        if (assistant.status === 'streaming' || assistant.status === 'awaiting-approval') stopRef.current();
+    }, [gateActive, assistant.status]);
 
     messagesRef.current = assistant.messages;
     conversationAllowRef.current = assistant.conversation?.conversationAllow ?? [];

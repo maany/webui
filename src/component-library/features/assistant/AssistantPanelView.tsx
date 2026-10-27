@@ -192,6 +192,7 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
                     onOpen={props.onOpenConversation}
                     onDelete={props.onDeleteConversation}
                     onRename={props.onRenameConversation}
+                    blocked={props.blocked}
                 />
                 <Link
                     href="/assistant/settings"

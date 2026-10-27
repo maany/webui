@@ -32,6 +32,7 @@ import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/i
 import { getAssistantDataHandleStore } from '@/lib/infrastructure/assistant/duckdb';
 import type { AgentRunner, RunnerUpdate } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
 import { FEATURE_REGISTRY, type FeatureFlagMap, type FeatureKey } from '@/lib/core/entity/feature-config';
+import { MAY_HAVE_LANDED } from '@/lib/infrastructure/assistant/tool-error';
 import { makeNoopHandles } from 'test/fixtures/assistant-fixtures';
 
 const allFlags = (): FeatureFlagMap => {
@@ -92,5 +93,49 @@ describe('AssistantProvider session gate', () => {
             await current.send('still there?');
         });
         expect(current.messages.filter(message => message.role === 'user')).toHaveLength(1);
+    });
+
+    it('closes a running write tool as "may have landed" when the gate stops the turn', async () => {
+        (getAssistantDataHandleStore as jest.Mock).mockReturnValue(makeNoopHandles());
+        const repository = new InMemoryConversationRepository();
+        const runner: AgentRunner = {
+            async *run(input): AsyncGenerator<RunnerUpdate> {
+                yield { type: 'tool-call', toolCallId: 'call-1', toolName: 'create_rule', args: {}, policy: 'allow' };
+                await new Promise<void>(resolve => input.signal.addEventListener('abort', () => resolve()));
+                // The stream dies mid-tool: the controller closes the running write call itself, like after Stop.
+                throw new Error('aborted');
+            },
+            resolveApproval: jest.fn(),
+        };
+        let current!: UseAssistantResult;
+        const Probe = () => {
+            current = React.useContext(AssistantContext) as UseAssistantResult;
+            return null;
+        };
+        const tree = (status: SessionGateStatus) => (
+            <SessionGateContext.Provider value={{ status }}>
+                <QueryClientProvider client={new QueryClient()}>
+                    <FeatureProvider features={allFlags()}>
+                        <AssistantShellProvider>
+                            <AssistantProvider
+                                overrides={{ repository: Promise.resolve({ repository, persistent: true }), createRunner: () => runner }}
+                            >
+                                <Probe />
+                            </AssistantProvider>
+                        </AssistantShellProvider>
+                    </FeatureProvider>
+                </QueryClientProvider>
+            </SessionGateContext.Provider>
+        );
+        const view = render(tree('active'));
+        act(() => {
+            void current.send('make a rule');
+        });
+        await waitFor(() => expect(current.status).toBe('streaming'));
+        view.rerender(tree('signed-out'));
+        await waitFor(() => expect(current.status).toBe('idle'));
+        const call = current.messages.flatMap(message => message.parts).find(part => part.type === 'tool-call');
+        expect(call).toMatchObject({ status: 'error' });
+        expect(call).toMatchObject({ error: { error: 'aborted', message: expect.stringContaining(MAY_HAVE_LANDED) } });
     });
 });

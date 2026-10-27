@@ -297,8 +297,6 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
                             // Reload so server-rendered pages re-fetch with the fresh
                             // Rucio token in the cookie. Avoids subtle staleness in any
                             // RSC tree that read auth-derived data before re-auth.
-                            setSignedOut(false);
-                            setExpiredReauth(null);
                             window.location.reload();
                         }}
                     />

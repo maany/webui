@@ -13,12 +13,16 @@ export interface HistoryMenuProps {
     onOpen(id: string): void;
     onDelete(id: string): void | Promise<void>;
     onRename?(id: string, title: string): void | Promise<void>;
+    /** The session is not active: the popover closes and cannot be opened. */
+    blocked?: boolean;
 }
 
-export function HistoryMenu({ conversations, currentId, onOpen, onDelete, onRename }: HistoryMenuProps) {
+export function HistoryMenu({ conversations, currentId, onOpen, onDelete, onRename, blocked }: HistoryMenuProps) {
     const [open, setOpen] = useState(false);
     const [deleteFailed, setDeleteFailed] = useState(false);
     const rename = useInlineRename(onRename);
+    // The popover is portaled outside the inert panel, so it must not outlive the block.
+    const showPopover = open && !blocked;
 
     const remove = async (id: string) => {
         setDeleteFailed(false);
@@ -30,7 +34,7 @@ export function HistoryMenu({ conversations, currentId, onOpen, onDelete, onRena
     };
     return (
         <Popover.Root
-            open={open}
+            open={showPopover}
             onOpenChange={next => {
                 if (next) setDeleteFailed(false);
                 setOpen(next);

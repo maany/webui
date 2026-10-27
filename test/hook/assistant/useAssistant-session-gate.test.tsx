@@ -62,7 +62,7 @@ function setup(script: 'finish' | 'approval' = 'finish') {
         summarize: jest.fn().mockResolvedValue({ text: '' }),
     });
     const hook = renderHook(() => useAssistantController(deps()));
-    return { hook, repository, resolveSpy, runSpy, createRunner, resolveProvider, setActive: (value: boolean) => (active = value) };
+    return { hook, repository, resolveSpy, runner, runSpy, createRunner, resolveProvider, setActive: (value: boolean) => (active = value) };
 }
 
 afterEach(() => {
@@ -138,5 +138,64 @@ describe('useAssistantController session gate', () => {
         expect(runSpy).toHaveBeenCalledTimes(2);
         const texts = hook.result.current.messages.filter(m => m.role === 'user').map(m => (m.parts[0] as { text: string }).text);
         expect(texts).toEqual(['first', 'second']);
+    });
+
+    it('does not start the runner when the gate closes while send is still saving', async () => {
+        const { hook, repository, runSpy, createRunner, setActive } = setup();
+        const original = repository.saveMessage.bind(repository);
+        let release: () => void = () => undefined;
+        jest.spyOn(repository, 'saveMessage').mockImplementation(async message => {
+            await new Promise<void>(resolve => {
+                release = resolve;
+            });
+            await original(message);
+        });
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('hello');
+        });
+        await waitFor(() => expect(repository.saveMessage).toHaveBeenCalled());
+        setActive(false);
+        await act(async () => {
+            release();
+            await sending;
+        });
+        expect(runSpy).not.toHaveBeenCalled();
+        expect(createRunner).not.toHaveBeenCalled();
+        expect(hook.result.current.status).toBe('idle');
+    });
+
+    it('does not resume the runner when the gate closes while an approval decision is saving', async () => {
+        const { hook, repository, resolveSpy, setActive } = setup('approval');
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('delete r1');
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals).toHaveLength(1));
+        const original = repository.saveMessage.bind(repository);
+        let release: () => void = () => undefined;
+        let held = false;
+        jest.spyOn(repository, 'saveMessage').mockImplementation(async message => {
+            if (!held && message.parts.some(part => part.type === 'approval')) {
+                held = true;
+                await new Promise<void>(resolve => {
+                    release = resolve;
+                });
+            }
+            await original(message);
+        });
+        let deciding!: Promise<void>;
+        act(() => {
+            deciding = hook.result.current.resolveApproval('call-1', 'approved', 'once');
+        });
+        await waitFor(() => expect(repository.saveMessage).toHaveBeenCalled());
+        setActive(false);
+        await act(async () => {
+            release();
+            await deciding;
+            hook.result.current.stop();
+            await sending;
+        });
+        expect(resolveSpy).not.toHaveBeenCalledWith('call-1', true);
     });
 });

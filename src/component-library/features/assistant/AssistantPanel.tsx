@@ -56,7 +56,7 @@ export function AssistantPanel() {
     }, [open, isMobile, width]);
 
     // The full-screen sheet is modal in effect: the page behind it must not take focus or clicks.
-    // Skipped while blocked: the re-auth dialog must stay usable, and the panel itself is already inert.
+    // Skipped while blocked: the panel is already inert and covered, so inerting the page as well adds nothing.
     const sheetOpen = open && isMobile && !blocked;
     useEffect(() => {
         if (!sheetOpen) return;

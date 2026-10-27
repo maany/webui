@@ -416,6 +416,12 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 release(token);
                 return;
             }
+            // The session closed while this turn was still saving: nothing may start behind the covered panel.
+            if (depsRef.current.sessionActive?.() === false) {
+                release(token);
+                setStatusState('idle');
+                return;
+            }
             const controller = new AbortController();
             abortRef.current = controller;
             setStatusState('streaming');
@@ -900,7 +906,8 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     abortRef.current === controller &&
                     !controller.signal.aborted &&
                     runnerRef.current === runner &&
-                    generationRef.current === generation;
+                    generationRef.current === generation &&
+                    depsRef.current.sessionActive?.() !== false;
                 // The conversation grant exists only between a successful save and the resume; every other exit takes it back.
                 const toolName = pending.toolName;
                 const conversationId = decided.conversationId;
