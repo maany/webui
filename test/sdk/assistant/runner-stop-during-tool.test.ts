@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { fakeText } from '@tanstack/ai/testing';
 import type { AssistantEvent } from '@/lib/core/entity/assistant/events';
-import type { ToolRisk } from '@/lib/core/entity/assistant/tool';
+import type { ToolPolicy, ToolRisk } from '@/lib/core/entity/assistant/tool';
 import { createAgentRunner, type RunnerUpdate } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
 import { applyRunnerUpdate, createAssistantMessage } from '@/lib/infrastructure/assistant/message-reducer';
 import type { RegisteredTool } from '@/lib/infrastructure/assistant/tool-types';
@@ -32,13 +32,20 @@ function setup(risk: ToolRisk, stopAt: StopAt) {
         return new Promise((_, reject) => ctx.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
     });
     const tool: RegisteredTool<any> = { ...base, spec: { ...base.spec, sensitiveArgs: ['token'] } };
+    const policies: Record<string, ToolPolicy> = { secret_tool: 'allow' };
+    // Reading the live policy runs this first, so a test can stop the turn at that exact moment.
+    let onPolicyRead: (policy: ToolPolicy) => void = () => undefined;
     const fake = fakeText();
     fake.setResponses([{ toolCalls: [{ name: 'secret_tool', input: { id: '1', token: 's3cret' } }] }, { text: 'done' }]);
     const runner = createAgentRunner(
         () => ({
             provider: { providerId: 'p', kind: 'openai-compatible', model: 'fake', via: 'direct' },
             tools: [tool],
-            policyFor: () => 'allow',
+            policyFor: name => {
+                const policy = policies[name] ?? 'deny';
+                onPolicyRead(policy);
+                return policy;
+            },
             systemPrompt: 's',
             emit: event => events.push(event),
             makeToolContext: makeToolContextFactory(controller.signal),
@@ -50,7 +57,10 @@ function setup(risk: ToolRisk, stopAt: StopAt) {
         collectUpdates(
             runner.run({ conversationId: 'conv-1', turnId: 't', history: [], userMessage: makeUserMessage('go'), signal: controller.signal }),
         );
-    return { run, events, executed };
+    const watchPolicy = (watch: (policy: ToolPolicy) => void) => {
+        onPolicyRead = watch;
+    };
+    return { run, events, executed, fake, controller, policies, watchPolicy };
 }
 
 const finalMessage = (updates: RunnerUpdate[]) => updates.reduce(applyRunnerUpdate, createAssistantMessage('conv-1'));
@@ -99,6 +109,51 @@ describe('a tool call that starts before Stop', () => {
         const part = finalMessage(updates).parts.find(item => item.type === 'tool-call');
         expect(part).toMatchObject({ status: 'error', error: { error: 'aborted' } });
         expect(part && part.type === 'tool-call' ? part.error?.message : '').not.toContain('may still have been applied');
+    });
+
+    it('keeps the text the model wrote before a tool call ahead of that call', async () => {
+        clock = forceClientYields();
+        const { run, fake } = setup('write', 'never');
+        fake.setResponses([
+            { text: 'Let me change that.', toolCalls: [{ name: 'secret_tool', input: { id: '1', token: 's3cret' } }] },
+            { text: 'Done.' },
+        ]);
+        const updates = await run();
+        expect(finalMessage(updates).parts.map(part => (part.type === 'text' ? `text:${part.text}` : part.type))).toEqual([
+            'text:Let me change that.',
+            'tool-call',
+            'text:Done.',
+        ]);
+    });
+
+    it('never warns that a refused call may have landed when Stop lands as it is refused', async () => {
+        clock = forceClientYields();
+        const { run, fake, controller, policies, executed, watchPolicy } = setup('write', 'never');
+        fake.setResponses([
+            () => {
+                // The tools for this call were built as allow, so the call is refused as now needing approval.
+                policies.secret_tool = 'ask';
+                watchPolicy(policy => policy === 'ask' && controller.abort());
+                return { toolCalls: [{ name: 'secret_tool', input: { id: '1', token: 's3cret' } }] };
+            },
+            { text: 'never' },
+        ]);
+        const updates = await run();
+        expect(executed).toEqual([]);
+        expect(updates[updates.length - 1]).toEqual({ type: 'finished', status: 'stopped' });
+        expect(JSON.stringify(updates)).not.toContain('may still have been applied');
+        expect(JSON.stringify(finalMessage(updates))).not.toContain('may still have been applied');
+    });
+
+    it('closes a call the client never delivered when the turn ends in an error', async () => {
+        clock = forceClientYields();
+        const { run, fake } = setup('write', 'never');
+        fake.setResponses([{ toolCalls: [{ name: 'secret_tool', input: { id: '1', token: 's3cret' } }] }, { error: 'model fell over' }]);
+        const updates = await run();
+        expect(updates[updates.length - 1]).toMatchObject({ type: 'finished', status: 'error' });
+        const part = finalMessage(updates).parts.find(candidate => candidate.type === 'tool-call');
+        expect(part && part.type === 'tool-call' ? part.result : undefined).toBeDefined();
+        expect(JSON.stringify(updates)).not.toContain('s3cret');
     });
 
     it('announces a call that finishes normally exactly once', async () => {

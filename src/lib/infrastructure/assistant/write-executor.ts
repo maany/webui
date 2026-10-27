@@ -1,6 +1,6 @@
 import type { HttpMethod } from '@/lib/core/entity/assistant/tool';
 import { SESSION_EXPIRED_MESSAGE, errorCodeForStatus, scrubSecrets, trimForModel } from './feature-executor';
-import { toolError } from './tool-error';
+import { MAY_HAVE_LANDED, toolError } from './tool-error';
 
 /** Writes give up after 60s. The change may still land on the server, so the error says so. */
 export const WRITE_TIMEOUT_MS = 60_000;
@@ -30,7 +30,6 @@ export interface WriteRequestOptions {
     timeoutMs?: number;
 }
 
-export const MAY_HAVE_LANDED = 'The change may still have been applied, so check its state before retrying.';
 const sessionExpired = () => toolError('session_expired', SESSION_EXPIRED_MESSAGE);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
