@@ -5,6 +5,8 @@ export interface AssistantConversationRepositoryPort {
     listConversations(accountKey: string): Promise<Conversation[]>; // newest first
     getConversation(id: string): Promise<Conversation | undefined>;
     saveConversation(conversation: Conversation): Promise<void>;
+    // changes only the title in one atomic step; false (and no write) when the conversation does not exist
+    renameConversation(id: string, title: string): Promise<boolean>;
     deleteConversation(id: string): Promise<void>; // also deletes its messages
     deleteAll(accountKey: string): Promise<void>; // every conversation of one account
     deleteAllAccounts(): Promise<void>; // every conversation of every account

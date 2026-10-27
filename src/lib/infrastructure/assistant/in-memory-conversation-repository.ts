@@ -22,6 +22,13 @@ export class InMemoryConversationRepository implements AssistantConversationRepo
         this.conversations.set(conversation.id, conversation);
     }
 
+    async renameConversation(id: string, title: string): Promise<boolean> {
+        const existing = this.conversations.get(id);
+        if (!existing) return false;
+        this.conversations.set(id, { ...existing, title });
+        return true;
+    }
+
     async deleteConversation(id: string): Promise<void> {
         this.conversations.delete(id);
         for (const message of Array.from(this.messages.values())) {

@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { Conversation } from '@/lib/core/entity/assistant/conversation';
 import { CONVERSATION_TITLE_MAX_CHARS, normalizeConversationTitle } from '@/lib/core/services/assistant-conversation-title';
 
+export const renameErrorId = (id: string) => `rename-error-${id}`;
 export const RENAME_ERROR = 'Could not rename this chat.';
 
 /** Inline rename state shared by the history menu and the storage settings list. */
@@ -86,7 +87,9 @@ export function RenameInput({
         <input
             ref={inputRef}
             type="text"
-            aria-label="Chat title"
+            aria-label={`Title for ${conversation.title}`}
+            aria-invalid={rename.failed ? true : undefined}
+            aria-describedby={rename.failed ? renameErrorId(conversation.id) : undefined}
             maxLength={CONVERSATION_TITLE_MAX_CHARS * 2}
             value={rename.draft}
             className={className}

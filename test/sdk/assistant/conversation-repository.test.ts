@@ -39,6 +39,15 @@ describe.each(repositories)('%s', (_name, open) => {
         expect((await repository.getConversation('c3'))?.accountKey).toBe('jdoe@def');
     });
 
+    it('renames a conversation atomically, changing only the title, and reports a missing row', async () => {
+        const original = { ...makeConversation('c1', 'root@def', '2026-10-20T00:00:00.000Z'), conversationAllow: ['do_write'] };
+        await repository.saveConversation(original);
+        expect(await repository.renameConversation('c1', 'New title')).toBe(true);
+        expect(await repository.getConversation('c1')).toEqual({ ...original, title: 'New title' });
+        expect(await repository.renameConversation('missing', 'x')).toBe(false);
+        expect(await repository.getConversation('missing')).toBeUndefined();
+    });
+
     it('stores messages oldest first, replaces by id and deletes them with the conversation', async () => {
         await repository.saveConversation(makeConversation('c1', 'root@def'));
         await repository.saveMessage(message('m2', 'c1', '2026-10-25T10:00:02.000Z'));

@@ -120,4 +120,59 @@ describe('renameConversation', () => {
         expect(stored.map(message => message.role)).toEqual(['user', 'assistant']);
         expect(stored[1].parts).toEqual([{ type: 'text', text: 'partial done' }]);
     });
+
+    it('renames with a title-only write, so it never rewrites other fields', async () => {
+        const { hook, repository } = setup();
+        const saved = jest.spyOn(repository, 'saveConversation');
+        await repository.saveConversation(makeConversation('c1', 'root@def'));
+        saved.mockClear();
+        await act(async () => {
+            await hook.result.current.renameConversation?.('c1', 'Atomic');
+        });
+        expect(saved).not.toHaveBeenCalled();
+        expect((await repository.getConversation('c1'))?.title).toBe('Atomic');
+    });
+
+    it('does not resurrect a conversation deleted while its rename reads', async () => {
+        const { hook, repository } = setup();
+        await repository.saveConversation(makeConversation('c1', 'root@def'));
+        const realGet = repository.getConversation.bind(repository);
+        let releaseGet: () => void = () => undefined;
+        jest.spyOn(repository, 'getConversation').mockImplementationOnce(async id => {
+            const row = await realGet(id);
+            await new Promise<void>(resolve => (releaseGet = resolve));
+            return row;
+        });
+        let renaming!: Promise<void>;
+        act(() => {
+            renaming = hook.result.current.renameConversation!('c1', 'Late') as Promise<void>;
+        });
+        await act(async () => {
+            await hook.result.current.deleteConversation('c1');
+            releaseGet();
+            await renaming.catch(() => undefined);
+        });
+        expect(await repository.getConversation('c1')).toBeUndefined();
+    });
+
+    it('surfaces an error when the open conversation is not stored yet', async () => {
+        let releaseSave: () => void = () => undefined;
+        const { hook, repository } = setup();
+        const realSave = repository.saveConversation.bind(repository);
+        jest.spyOn(repository, 'saveConversation').mockImplementationOnce(async conversation => {
+            await new Promise<void>(resolve => (releaseSave = resolve));
+            await realSave(conversation);
+        });
+        act(() => {
+            void hook.result.current.send('first');
+        });
+        await waitFor(() => expect(hook.result.current.conversation).toBeDefined());
+        const id = hook.result.current.conversation!.id;
+        await act(async () => {
+            await expect(hook.result.current.renameConversation!(id, 'Too early')).rejects.toThrow();
+        });
+        await act(async () => {
+            releaseSave();
+        });
+    });
 });

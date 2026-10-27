@@ -5,7 +5,7 @@ import * as Popover from '@radix-ui/react-popover';
 import { HiOutlineClock, HiOutlinePencil, HiOutlineTrash } from 'react-icons/hi';
 import type { Conversation } from '@/lib/core/entity/assistant/conversation';
 import { cn } from '@/component-library/utils';
-import { RENAME_ERROR, RenameInput, useInlineRename } from './InlineRename';
+import { RENAME_ERROR, RenameInput, renameErrorId, useInlineRename } from './InlineRename';
 
 export interface HistoryMenuProps {
     conversations: Conversation[];
@@ -57,7 +57,11 @@ export function HistoryMenu({ conversations, currentId, onOpen, onDelete, onRena
                         </p>
                     )}
                     {rename.failed && (
-                        <p role="alert" className="px-3 py-2 text-xs text-base-error-700 dark:text-base-error-300">
+                        <p
+                            id={rename.editingId ? renameErrorId(rename.editingId) : undefined}
+                            role="alert"
+                            className="px-3 py-2 text-xs text-base-error-700 dark:text-base-error-300"
+                        >
                             {RENAME_ERROR}
                         </p>
                     )}

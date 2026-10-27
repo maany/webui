@@ -396,4 +396,12 @@ describe('withToolState state maintenance', () => {
         expect((await inner.getConversation('c1'))?.handles).toEqual([]);
         expect((await inner.getConversation('c2'))?.handles.map(h => h.name)).toEqual(['rules_2']);
     });
+
+    it('forwards renameConversation to the repository unchanged', async () => {
+        const inner = new InMemoryConversationRepository();
+        await inner.saveConversation(makeConversation('c1', 'root@def'));
+        const wrapped = withToolState(inner, () => undefined);
+        expect(await wrapped.renameConversation('c1', 'Renamed')).toBe(true);
+        expect((await inner.getConversation('c1'))?.title).toBe('Renamed');
+    });
 });

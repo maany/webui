@@ -375,14 +375,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 if (!text) return history;
                 if (signal.aborted || !isCurrent()) return history;
                 const live = conversationRef.current?.id === current.id ? conversationRef.current : current;
-                // A rename may have landed while the summary was written, so the stored title wins over a stale copy.
-                const storedTitle = live === current ? (await repository.getConversation(current.id))?.title : undefined;
-                const updated: Conversation = {
-                    ...live,
-                    ...(storedTitle ? { title: storedTitle } : {}),
-                    compactedSummary: text,
-                    compactedUpToMessageId: plan.upToMessageId,
-                };
+                const updated: Conversation = { ...live, compactedSummary: text, compactedUpToMessageId: plan.upToMessageId };
                 setConversation(updated);
                 if (!deletedRef.current.has(current.id)) await repository.saveConversation(updated);
                 depsRef.current.bus.emit({ type: 'compaction', conversationId: current.id, upToMessageId: plan.upToMessageId, at: Date.now() });
@@ -1095,12 +1088,31 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             const accountKey = depsRef.current.accountKey;
             if (!accountKey || deletedRef.current.has(id)) return;
             const { repository } = await depsRef.current.repository;
-            const latest = await repository.getConversation(id);
-            if (!latest || latest.accountKey !== accountKey || deletedRef.current.has(id)) return;
+            const stored = await repository.getConversation(id);
+            if (!stored && conversationRef.current?.id === id && !deletedRef.current.has(id)) throw new Error('This chat is not saved yet.');
+            if (!stored || stored.accountKey !== accountKey || deletedRef.current.has(id)) return;
             // Shown first: a running turn merges the open conversation into its own saves, so it keeps the title.
             const open = conversationRef.current;
+            const previousTitle = open?.id === id ? open.title : undefined;
             if (open?.id === id) setConversation({ ...open, title });
-            await repository.saveConversation({ ...latest, title });
+            const undo = () => {
+                const now = conversationRef.current;
+                if (previousTitle !== undefined && now?.id === id && now.title === title) setConversation({ ...now, title: previousTitle });
+            };
+            let renamed: boolean;
+            try {
+                // Title-only atomic write: it cannot clobber a concurrent save or bring back a deleted row.
+                renamed = await repository.renameConversation(id, title);
+            } catch (renameError) {
+                undo();
+                throw renameError;
+            }
+            if (!renamed) {
+                undo();
+                // The open chat's first save may still be running: say so instead of pretending it worked.
+                if (open?.id === id && !deletedRef.current.has(id)) throw new Error('This chat is not saved yet.');
+                return;
+            }
             await refreshConversations();
         },
         [refreshConversations, setConversation],

@@ -147,6 +147,19 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
         );
     }
 
+    async renameConversation(id: string, title: string): Promise<boolean> {
+        return this.run(
+            async db => {
+                const tx = db.transaction('conversations', 'readwrite');
+                const existing = await tx.store.get(id);
+                if (existing) await tx.store.put({ ...existing, title });
+                await tx.done;
+                return Boolean(existing);
+            },
+            memory => memory.renameConversation(id, title),
+        );
+    }
+
     async deleteConversation(id: string): Promise<void> {
         await this.run(
             async db => {

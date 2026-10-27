@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { Button } from '@/component-library/atoms/form/button';
 import type { Conversation } from '@/lib/core/entity/assistant/conversation';
@@ -11,7 +11,7 @@ import { createConversationRepository } from '@/lib/infrastructure/assistant/ind
 import { toAccountKey } from '@/lib/infrastructure/assistant/page-context';
 import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { formatBytes } from '../format';
-import { RENAME_ERROR, RenameInput, useInlineRename } from '../InlineRename';
+import { RENAME_ERROR, RenameInput, renameErrorId, useInlineRename } from '../InlineRename';
 import { normalizeConversationTitle } from '@/lib/core/services/assistant-conversation-title';
 import { HiOutlinePencil } from 'react-icons/hi';
 
@@ -155,7 +155,11 @@ export function AssistantStorageView(props: AssistantStorageViewProps) {
                                         </p>
                                     )}
                                     {rename.editingId === conversation.id && rename.failed && (
-                                        <p role="alert" className="text-xs text-base-error-700 dark:text-base-error-300">
+                                        <p
+                                            id={renameErrorId(conversation.id)}
+                                            role="alert"
+                                            className="text-xs text-base-error-700 dark:text-base-error-300"
+                                        >
                                             {RENAME_ERROR}
                                         </p>
                                     )}
@@ -401,6 +405,7 @@ export function AssistantStorageSection({
 
     // Deletes go through the mounted assistant controller when there is one, so a chat that is
     // streaming in the panel is not saved again by its own turn.
+    const deletingRef = useRef(new Set<string>());
     const requireStore = () => {
         if (!store) throw new Error('store not open');
         return store;
@@ -474,8 +479,13 @@ export function AssistantStorageSection({
             error={error}
             onDelete={id =>
                 void runDelete(async () => {
-                    if (shell.conversationControls) await shell.conversationControls.deleteConversation(id);
-                    else await requireStore().repository.deleteConversation(id);
+                    deletingRef.current.add(id);
+                    try {
+                        if (shell.conversationControls) await shell.conversationControls.deleteConversation(id);
+                        else await requireStore().repository.deleteConversation(id);
+                    } finally {
+                        deletingRef.current.delete(id);
+                    }
                 }, 'Could not delete this chat.')
             }
             onRename={async (id, title) => {
@@ -483,10 +493,13 @@ export function AssistantStorageSection({
                 else {
                     const clean = normalizeConversationTitle(title);
                     if (!clean) throw new Error('empty title');
+                    if (!accountKey) throw new Error('no account');
+                    // A chat being deleted is skipped; the title-only write also never recreates a missing row.
+                    if (deletingRef.current.has(id)) return;
                     const repository = requireStore().repository;
                     const latest = await repository.getConversation(id);
-                    if (!latest || (accountKey && latest.accountKey !== accountKey)) return;
-                    await repository.saveConversation({ ...latest, title: clean });
+                    if (!latest || latest.accountKey !== accountKey || deletingRef.current.has(id)) return;
+                    await repository.renameConversation(id, clean);
                 }
                 shell.notifyStorageChanged();
                 await reload();

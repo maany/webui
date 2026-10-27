@@ -67,13 +67,36 @@ describe('AssistantStorageSection', () => {
         await seed(repository);
         renderSection();
         fireEvent.click(await screen.findByRole('button', { name: 'Rename Conversation c1' }));
-        const input = screen.getByRole('textbox', { name: 'Chat title' });
+        const input = screen.getByRole('textbox', { name: /^Title for Conversation c[12]$/ });
         fireEvent.change(input, { target: { value: '  New \n name ' } });
         fireEvent.keyDown(input, { key: 'Enter' });
         await waitFor(() => expect(notifyStorageChanged).toHaveBeenCalled());
         const stored = await repository.getConversation('c1');
         expect(stored?.title).toBe('New name');
         expect(stored?.updatedAt).toBe('2026-10-24T08:00:00.000Z');
+    });
+
+    it('does not resurrect a chat whose delete started while its rename was reading', async () => {
+        const { repository } = setup();
+        await seed(repository);
+        const realGet = repository.getConversation.bind(repository);
+        let releaseGet: () => void = () => undefined;
+        jest.spyOn(repository, 'getConversation').mockImplementation(async id => {
+            const row = await realGet(id);
+            if (id === 'c1') await new Promise<void>(resolve => (releaseGet = resolve));
+            return row;
+        });
+        renderSection();
+        fireEvent.click(await screen.findByRole('button', { name: 'Rename Conversation c1' }));
+        const input = screen.getByRole('textbox', { name: 'Title for Conversation c1' });
+        fireEvent.change(input, { target: { value: 'Late' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await waitFor(() => expect(repository.getConversation).toHaveBeenCalled());
+        fireEvent.click(screen.getByRole('button', { name: 'Delete Conversation c1' }));
+        await waitFor(async () => expect(await realGet('c1')).toBeUndefined());
+        releaseGet();
+        await new Promise(resolve => setTimeout(resolve, 20));
+        expect(await realGet('c1')).toBeUndefined();
     });
 
     it('renames through the registered conversation controls when present', async () => {
@@ -87,7 +110,7 @@ describe('AssistantStorageSection', () => {
         await seed(repository);
         renderSection();
         fireEvent.click(await screen.findByRole('button', { name: 'Rename Conversation c1' }));
-        const input = screen.getByRole('textbox', { name: 'Chat title' });
+        const input = screen.getByRole('textbox', { name: /^Title for Conversation c[12]$/ });
         fireEvent.change(input, { target: { value: 'Via controls' } });
         fireEvent.keyDown(input, { key: 'Enter' });
         await waitFor(() => expect(conversationControls.renameConversation).toHaveBeenCalledWith('c1', 'Via controls'));

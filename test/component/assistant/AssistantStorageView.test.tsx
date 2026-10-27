@@ -178,14 +178,14 @@ describe('AssistantStorageView', () => {
         const onRename = jest.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('disk full'));
         render(<AssistantStorageView {...props({ onRename })} />);
         fireEvent.click(screen.getByRole('button', { name: 'Rename Conversation c1' }));
-        const input = screen.getByRole('textbox', { name: 'Chat title' });
+        const input = screen.getByRole('textbox', { name: /^Title for Conversation c[12]$/ });
         fireEvent.change(input, { target: { value: 'Quota question' } });
         fireEvent.keyDown(input, { key: 'Enter' });
         await waitFor(() => expect(onRename).toHaveBeenCalledWith('c1', 'Quota question'));
-        await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Chat title' })).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.queryByRole('textbox', { name: /^Title for Conversation c[12]$/ })).not.toBeInTheDocument());
 
         fireEvent.click(screen.getByRole('button', { name: 'Rename Conversation c2' }));
-        const second = screen.getByRole('textbox', { name: 'Chat title' });
+        const second = screen.getByRole('textbox', { name: /^Title for Conversation c[12]$/ });
         fireEvent.change(second, { target: { value: 'Fails' } });
         fireEvent.keyDown(second, { key: 'Enter' });
         expect(await screen.findByText('Could not rename this chat.')).toBeInTheDocument();
@@ -195,8 +195,8 @@ describe('AssistantStorageView', () => {
         const onRename = jest.fn();
         render(<AssistantStorageView {...props({ onRename })} />);
         fireEvent.click(screen.getByRole('button', { name: 'Rename Conversation c1' }));
-        fireEvent.keyDown(screen.getByRole('textbox', { name: 'Chat title' }), { key: 'Escape' });
+        fireEvent.keyDown(screen.getByRole('textbox', { name: /^Title for Conversation c[12]$/ }), { key: 'Escape' });
         expect(onRename).not.toHaveBeenCalled();
-        expect(screen.queryByRole('textbox', { name: 'Chat title' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('textbox', { name: /^Title for Conversation c[12]$/ })).not.toBeInTheDocument();
     });
 });

@@ -105,6 +105,7 @@ export function withToolState(
                 handles: mergeRecords(state, conversation.handles),
             });
         },
+        renameConversation: (id, title) => repository.renameConversation(id, title),
         deleteConversation: id => {
             states.delete(id);
             return repository.deleteConversation(id);
