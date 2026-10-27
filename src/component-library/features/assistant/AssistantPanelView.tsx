@@ -45,6 +45,8 @@ export interface AssistantPanelViewProps {
     onRenameConversation?(id: string, title: string): void | Promise<void>;
     onClose(): void;
     onRestore(): void;
+    /** The Rucio session is not active (re-auth dialog or signed out): the panel is covered and cannot be used. */
+    blocked?: boolean;
     /** Rendered when there are no messages (phase 3 adds starter prompts). */
     emptyState?: React.ReactNode;
 }
@@ -108,6 +110,8 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
             <button
                 type="button"
                 onClick={props.onRestore}
+                inert={props.blocked}
+                aria-hidden={props.blocked ? true : undefined}
                 className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-full bg-brand-600 px-4 py-3 text-neutral-0 shadow-lg"
                 style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
             >
@@ -138,6 +142,8 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
         // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
         <aside
             aria-label="Rucio bot"
+            inert={props.blocked}
+            aria-hidden={props.blocked ? true : undefined}
             className={cn(
                 'fixed z-50 flex flex-col bg-neutral-0 dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100',
                 isMobile ? 'inset-0' : 'top-0 bottom-0 right-0 border-l border-neutral-200 dark:border-neutral-800 shadow-xl',

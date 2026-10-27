@@ -11,6 +11,7 @@ import { createPageActionRegistry } from '@/lib/infrastructure/assistant/page-ac
 import { loadAssistantSettings } from '@/lib/infrastructure/assistant/settings-storage';
 import { useCommandPaletteOpen } from '@/lib/infrastructure/hooks/useCommandPalette';
 import { registerSignOutHook } from '@/lib/infrastructure/auth/sign-out-hooks';
+import { useSessionGate } from '@/lib/infrastructure/auth/session-gate';
 
 export type AssistantPanelState = 'closed' | 'open' | 'minimized';
 
@@ -130,6 +131,10 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
     const [storageVersion, setStorageVersion] = useState(0);
 
     const panelStateRef = useRef<AssistantPanelState>('closed');
+    // Read through a ref so open and toggle stay stable. While the session is not active the panel refuses to open.
+    const gate = useSessionGate();
+    const gateActiveRef = useRef(true);
+    gateActiveRef.current = gate.status === 'active';
     const openerRef = useRef<HTMLElement | null>(null);
 
     // The element that had focus when the panel opened gets it back when the panel closes.
@@ -138,12 +143,14 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
         openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
     }, []);
     const open = useCallback(() => {
+        if (!gateActiveRef.current) return;
         if (panelStateRef.current === 'closed') rememberOpener();
         setHasOpened(true);
         setPanelState('open');
     }, [rememberOpener]);
     const close = useCallback(() => setPanelState('closed'), []);
     const toggle = useCallback(() => {
+        if (!gateActiveRef.current) return;
         if (panelStateRef.current === 'closed') rememberOpener();
         setHasOpened(true);
         setPanelState(state => (state === 'open' ? 'closed' : 'open'));

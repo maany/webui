@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { useSessionGate } from '@/lib/infrastructure/auth/session-gate';
 import { useAssistant } from '@/lib/infrastructure/hooks/useAssistant';
 import { ASSISTANT_INERT_TARGET_ID, ASSISTANT_MOBILE_QUERY, useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { useAssistantSettings } from '@/lib/infrastructure/hooks/useAssistantSettings';
@@ -28,6 +29,7 @@ function useIsMobile(): boolean {
 export function AssistantPanel() {
     const assistant = useAssistant();
     const shell = useAssistantPanel();
+    const blocked = useSessionGate().status !== 'active';
     const { settings } = useAssistantSettings();
     const isMobile = useIsMobile();
     const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
@@ -54,7 +56,8 @@ export function AssistantPanel() {
     }, [open, isMobile, width]);
 
     // The full-screen sheet is modal in effect: the page behind it must not take focus or clicks.
-    const sheetOpen = open && isMobile;
+    // Skipped while blocked: the re-auth dialog must stay usable, and the panel itself is already inert.
+    const sheetOpen = open && isMobile && !blocked;
     useEffect(() => {
         if (!sheetOpen) return;
         const target = document.getElementById(ASSISTANT_INERT_TARGET_ID);
@@ -95,6 +98,7 @@ export function AssistantPanel() {
             onRenameConversation={assistant.renameConversation}
             onClose={shell.close}
             onRestore={shell.open}
+            blocked={blocked}
             emptyState={
                 <StarterPrompts
                     onSelect={text => void assistant.send(text)}

@@ -25,6 +25,7 @@ import { completeText, createAgentRunner } from '@/lib/infrastructure/assistant/
 import { allTools, getTool } from '@/lib/infrastructure/assistant/tool-registry';
 import { ASSISTANT_DATA_TOOLS_PROMPT } from '@/lib/infrastructure/assistant/tools';
 import { AssistantContext, useAssistantController, type AssistantControllerDeps } from '@/lib/infrastructure/hooks/useAssistant';
+import { useSessionGate } from '@/lib/infrastructure/auth/session-gate';
 import { useAssistantConfig } from '@/lib/infrastructure/hooks/useAssistantConfig';
 import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { useDataHandleLifecycle } from '@/lib/infrastructure/hooks/useDataHandleLifecycle';
@@ -57,6 +58,9 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     const router = useRouter();
     const queryClient = useQueryClient();
     const shell = useAssistantPanel();
+    const gateActive = useSessionGate().status === 'active';
+    const gateActiveRef = useRef(gateActive);
+    gateActiveRef.current = gateActive;
     const [bus] = useState(createAssistantEventBus);
     const assistantSkills = useAssistantSkills(bus);
     // find_tools active set per conversation, persisted as Conversation.activeTools by withToolState.
@@ -104,6 +108,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
 
     const deps: AssistantControllerDeps = {
         accountKey,
+        sessionActive: () => gateActiveRef.current,
         repository,
         resolveProvider: () => {
             const resolved = resolveActiveProvider(settingsRef.current, configRef.current, ASSISTANT_RELAY_BASE_URL, lookupModel);
@@ -150,6 +155,16 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
         summarize: overrides?.summarize ?? (input => completeText(input)),
     };
     const assistant = useAssistantController(deps);
+
+    // The session left `active` (re-auth dialog or sign-out): stop a running turn the same way the Stop button does.
+    const stopRef = useRef(assistant.stop);
+    stopRef.current = assistant.stop;
+    const statusRef = useRef(assistant.status);
+    statusRef.current = assistant.status;
+    useEffect(() => {
+        if (gateActive) return;
+        if (statusRef.current === 'streaming' || statusRef.current === 'awaiting-approval') stopRef.current();
+    }, [gateActive]);
 
     messagesRef.current = assistant.messages;
     conversationAllowRef.current = assistant.conversation?.conversationAllow ?? [];

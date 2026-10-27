@@ -1,12 +1,13 @@
 'use client';
 
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { signOut, useSession } from 'next-auth/react';
 import { usePathname } from 'next/navigation';
 import { AuthType } from '@/lib/core/entity/auth-models';
 import { navigateTo } from './navigate';
 import { runSignOutHooks } from './sign-out-hooks';
 import { ReauthModal } from '@/component-library/features/auth/ReauthModal';
+import { SessionGateContext, type SessionGateValue } from './session-gate';
 
 // Automatic sign-outs must not leave the user waiting on a slow hook.
 const AUTO_SIGN_OUT_HOOK_TIMEOUT_MS = 1000;
@@ -79,6 +80,8 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
      *; the modal is the user's exit path (success → reload, cancel → redirect).
      */
     const [expiredReauth, setExpiredReauth] = useState<{ identity: string; account: string; vo: string } | null>(null);
+    /** Set on the automatic sign-out paths so the session gate reports `signed-out`. */
+    const [signedOut, setSignedOut] = useState(false);
     const expiredReauthRef = useRef<typeof expiredReauth>(null);
     useEffect(() => {
         expiredReauthRef.current = expiredReauth;
@@ -137,6 +140,7 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
                     // capture identity (e.g. no session.user), fall back to the
                     // signOut-and-redirect path.
                     if (captureUserpassReauth()) return;
+                    setSignedOut(true);
                     await runSignOutHooks(AUTO_SIGN_OUT_HOOK_TIMEOUT_MS);
                     signOut({ redirect: false });
                     return;
@@ -156,6 +160,7 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
                     // 'unauthenticated'. Without this, NextAuth's own JWT maxAge
                     // keeps the session alive regardless of rucioAuthTokenExpires,
                     // and the unauthenticated watcher would never fire.
+                    setSignedOut(true);
                     await runSignOutHooks(AUTO_SIGN_OUT_HOOK_TIMEOUT_MS);
                     signOut({ redirect: false });
                     return;
@@ -186,6 +191,7 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
                         // of redirecting. Falls back to redirect if identity capture
                         // fails (e.g. partial session shape).
                         if (captureUserpassReauth()) return;
+                        setSignedOut(true);
                         runSignOutHooks(AUTO_SIGN_OUT_HOOK_TIMEOUT_MS)
                             .then(() => signOut({ redirect: false }))
                             .then(() => {
@@ -223,6 +229,7 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
 
         // Natural expiry: clear any stale NextAuth client-side state, then
         // redirect to the login page with the ?expired=true flag.
+        setSignedOut(true);
         // Use window.location.href (full page load) so the browser sends the
         // new request only after the Set-Cookie: delete from signOut has been
         // committed to the cookie jar; router.push can race against it.
@@ -257,6 +264,7 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
     const handleExpiredCancel = useCallback(() => {
         const captured = expiredReauth;
         setExpiredReauth(null);
+        setSignedOut(true);
         runSignOutHooks(AUTO_SIGN_OUT_HOOK_TIMEOUT_MS)
             .then(() => signOut({ redirect: false }))
             .then(() => {
@@ -268,28 +276,39 @@ export function SessionMonitorProvider({ children }: { children: ReactNode }) {
         void captured;
     }, [expiredReauth, pathname]);
 
+    const gate = useMemo<SessionGateValue>(
+        () => ({ status: expiredReauth ? 'reauth-required' : signedOut ? 'signed-out' : 'active' }),
+        [expiredReauth, signedOut],
+    );
+
     return (
-        <SessionMonitorContext.Provider value={{ manualSignOut }}>
-            {children}
-            {expiredReauth && (
-                <ReauthModal
-                    isOpen={true}
-                    mode="expired"
-                    targetAccount={expiredReauth.account}
-                    rucioIdentity={expiredReauth.identity}
-                    shortVOName={expiredReauth.vo}
-                    onClose={handleExpiredCancel}
-                    onSuccess={() => {
-                        // Reload so server-rendered pages re-fetch with the fresh
-                        // Rucio token in the cookie. Avoids subtle staleness in any
-                        // RSC tree that read auth-derived data before re-auth.
-                        window.location.reload();
-                    }}
-                />
-            )}
-        </SessionMonitorContext.Provider>
+        <SessionGateContext.Provider value={gate}>
+            <SessionMonitorContext.Provider value={{ manualSignOut }}>
+                {children}
+                {expiredReauth && (
+                    <ReauthModal
+                        isOpen={true}
+                        mode="expired"
+                        targetAccount={expiredReauth.account}
+                        rucioIdentity={expiredReauth.identity}
+                        shortVOName={expiredReauth.vo}
+                        onClose={handleExpiredCancel}
+                        onSuccess={() => {
+                            // Reload so server-rendered pages re-fetch with the fresh
+                            // Rucio token in the cookie. Avoids subtle staleness in any
+                            // RSC tree that read auth-derived data before re-auth.
+                            setSignedOut(false);
+                            setExpiredReauth(null);
+                            window.location.reload();
+                        }}
+                    />
+                )}
+            </SessionMonitorContext.Provider>
+        </SessionGateContext.Provider>
     );
 }
+
+export { useSessionGate, type SessionGateStatus, type SessionGateValue } from './session-gate';
 
 // ─── Public hook ──────────────────────────────────────────────────────────────
 

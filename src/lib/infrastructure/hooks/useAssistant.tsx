@@ -92,6 +92,8 @@ export interface UseAssistantResult {
 }
 
 export interface AssistantControllerDeps {
+    /** False while the Rucio session is not usable (re-auth dialog, signed out). Absent means active. Read at call time. */
+    sessionActive?(): boolean;
     /** `${account}@${vo}` of the active session account, undefined when signed out. */
     accountKey: string | undefined;
     repository: Promise<{ repository: AssistantConversationRepositoryPort; persistent: boolean }>;
@@ -720,6 +722,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
 
     const send = useCallback(
         async (text: string, options: { attachPageContext?: boolean } = {}) => {
+            if (depsRef.current.sessionActive?.() === false) return;
             const trimmed = text.trim();
             if (!trimmed || busyRef.current || deletingAllRef.current) return;
             const token = {};
@@ -786,6 +789,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     );
 
     const retry = useCallback(async () => {
+        if (depsRef.current.sessionActive?.() === false) return;
         if (busyRef.current || deletingAllRef.current) return;
         const current = conversationRef.current;
         const all = messagesRef.current;
@@ -1027,6 +1031,8 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     // Tracked so the end-of-turn save can wait for decisions still saving or revoking a grant.
     const resolveApproval = useCallback(
         (toolCallId: string, decision: 'approved' | 'rejected', scope: 'once' | 'conversation'): Promise<void> => {
+            // Refused without deciding: the pending approval stays and is expired by stop().
+            if (depsRef.current.sessionActive?.() === false) return Promise.resolve();
             const decision$ = decideApproval(toolCallId, decision, scope);
             decisionsRef.current.add(decision$);
             const done = () => {
