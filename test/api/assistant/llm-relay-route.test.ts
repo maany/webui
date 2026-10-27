@@ -15,7 +15,7 @@ if (typeof (global.Response as { json?: unknown }).json !== 'function') {
 import { auth } from '@/lib/infrastructure/auth/auth';
 import { GET, POST } from '@/app/api/assistant/llm/[...path]/route';
 import { relayRateLimiter } from '@/lib/infrastructure/assistant/relay-rate-limiter';
-import { RELAY_MAX_BODY_BYTES } from '@/lib/infrastructure/assistant/llm-relay';
+import { RELAY_MAX_BODY_BYTES, RELAY_MAX_RESPONSE_BYTES, guardBody, relayLlmRequest } from '@/lib/infrastructure/assistant/llm-relay';
 
 const authMock = auth as unknown as jest.Mock;
 const UPSTREAM_STREAM = 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n';
@@ -26,6 +26,7 @@ const ENV_KEYS = [
     'ASSISTANT_DEFAULT_API_KEY',
     'ASSISTANT_DEFAULT_MODEL',
     'ASSISTANT_RELAY_RATE_LIMIT',
+    'ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS',
 ];
 
 const signInAs = (account: string) =>
@@ -309,5 +310,119 @@ describe('/api/assistant/llm/[...path]', () => {
         jest.spyOn(console, 'error').mockImplementation(() => undefined);
         upstream.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/' } }));
         expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(502);
+    });
+
+    describe('request size and upstream limits', () => {
+        const MB = 1024 * 1024;
+        // jsdom's Request polyfill buffers bodies, so real web streams are fed to relayLlmRequest through a request-like object.
+        const streamRequest = (body: ReadableStream<Uint8Array>, headers: Record<string, string> = {}, signal?: AbortSignal) =>
+            ({
+                method: 'POST',
+                headers: new Headers({ 'content-type': 'application/json', ...headers }),
+                body,
+                signal: signal ?? new AbortController().signal,
+            } as unknown as NextRequest);
+        const drain = async (stream: ReadableStream<Uint8Array>) => {
+            const reader = stream.getReader();
+            let total = 0;
+            let errored = false;
+            try {
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    total += value.byteLength;
+                }
+            } catch {
+                errored = true;
+            }
+            return { total, errored };
+        };
+
+        it('returns 413 for a chunked body over the cap without buffering the rest', async () => {
+            const chunk = new Uint8Array(MB);
+            let sent = 0;
+            let cancelled = false;
+            const stream = new ReadableStream<Uint8Array>({
+                pull(controller) {
+                    sent += 1;
+                    controller.enqueue(chunk);
+                    if (sent >= 100) controller.close();
+                },
+                cancel() {
+                    cancelled = true;
+                },
+            });
+            const res = await relayLlmRequest(streamRequest(stream), ['chat', 'completions']);
+            expect(res.status).toBe(413);
+            expect(upstream).not.toHaveBeenCalled();
+            expect(cancelled).toBe(true);
+            expect(sent).toBeLessThanOrEqual(RELAY_MAX_BODY_BYTES / MB + 2);
+        });
+
+        it.each(['abc', 'NaN', '-5', '1.5'])('rejects a non-numeric or invalid content-length %p', async value => {
+            const res = await POST(post(COMPLETIONS_URL, BODY, { 'content-length': value }), ctx('chat', 'completions'));
+            expect([400, 413]).toContain(res.status);
+            expect(upstream).not.toHaveBeenCalled();
+        });
+
+        it('answers 504 when the upstream sends no headers within the timeout', async () => {
+            process.env.ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS = '50';
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            upstream.mockImplementationOnce(
+                (_url: string, init: RequestInit) =>
+                    new Promise((_resolve, reject) => {
+                        init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+                    }),
+            );
+            const res = await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'));
+            expect(res.status).toBe(504);
+            expect(await res.json()).toEqual({ error: 'upstream_timeout' });
+        });
+
+        // jsdom's Response cannot wrap a web stream, so the stream guard that the relay puts on the upstream body is tested directly.
+        it('cuts off a response body over the size cap and cancels the upstream', async () => {
+            const chunk = new Uint8Array(MB);
+            let sent = 0;
+            let cancelled = false;
+            const body = new ReadableStream<Uint8Array>({
+                pull(controller) {
+                    sent += 1;
+                    controller.enqueue(chunk);
+                    if (sent >= RELAY_MAX_RESPONSE_BYTES / MB + 10) controller.close();
+                },
+                cancel() {
+                    cancelled = true;
+                },
+            });
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            const onDone = jest.fn();
+            const { total, errored } = await drain(guardBody(body, 5000, RELAY_MAX_RESPONSE_BYTES, onDone));
+            expect(total).toBeLessThanOrEqual(RELAY_MAX_RESPONSE_BYTES);
+            expect(errored).toBe(true);
+            expect(cancelled).toBe(true);
+            expect(onDone).toHaveBeenCalledTimes(1);
+        });
+
+        it('cancels an upstream body that goes idle', async () => {
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            let cancelled = false;
+            let first = true;
+            const body = new ReadableStream<Uint8Array>({
+                pull(controller) {
+                    if (first) {
+                        first = false;
+                        controller.enqueue(new TextEncoder().encode('data: hi\n\n'));
+                        return;
+                    }
+                    return new Promise(() => undefined);
+                },
+                cancel() {
+                    cancelled = true;
+                },
+            });
+            const { errored } = await drain(guardBody(body, 50, RELAY_MAX_RESPONSE_BYTES, () => undefined));
+            expect(errored).toBe(true);
+            expect(cancelled).toBe(true);
+        });
     });
 });

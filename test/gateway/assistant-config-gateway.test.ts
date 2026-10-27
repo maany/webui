@@ -50,6 +50,7 @@ describe('AssistantConfigGateway', () => {
                 'ASSISTANT_TELEMETRY_USER_SALT',
                 'ASSISTANT_PRICES_JSON',
                 'ASSISTANT_RELAY_RATE_LIMIT',
+                'ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS',
             ].sort(),
         );
     });
@@ -250,7 +251,19 @@ describe('AssistantConfigGateway', () => {
             baseURL: 'https://llm.example.org/v1',
             apiKey: 'sk-operator-secret',
             rateLimitPerMinute: 30,
+            upstreamTimeoutMs: 120000,
         });
+    });
+
+    it.each([
+        ['5000', 5000],
+        ['abc', 120000],
+        ['-1', 120000],
+        ['0', 120000],
+        ['99999999999', 120000],
+    ])('reads ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS=%p as %p', async (raw, expected) => {
+        setEnv({ ASSISTANT_DEFAULT_BASE_URL: 'https://llm.example.org/v1', ASSISTANT_DEFAULT_MODEL: 'm', ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS: raw });
+        await expect(gateway().getRelayConfig()).resolves.toMatchObject({ upstreamTimeoutMs: expected });
     });
 
     it.each([

@@ -11,6 +11,8 @@ export interface AssistantRelayConfig {
     baseURL: string;
     apiKey?: string;
     rateLimitPerMinute: number;
+    /** ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS: time to upstream headers and max idle gap in the response body (default 120000) */
+    upstreamTimeoutMs: number;
 }
 
 /**

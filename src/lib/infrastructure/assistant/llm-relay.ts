@@ -9,6 +9,7 @@ import type { AssistantRelayConfig } from '@/lib/core/port/secondary/assistant-c
 import { getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
 import { relayRateLimiter } from './relay-rate-limiter';
 import { ANTHROPIC_API_VERSION } from './provider-kinds';
+import { parseContentLength, readCappedBody } from './read-capped-body';
 
 /** The only upstream paths the relay forwards, per operator provider kind. */
 export const RELAY_ALLOWED_PATHS: Record<AssistantRelayConfig['kind'], Record<string, 'GET' | 'POST'>> = {
@@ -17,6 +18,7 @@ export const RELAY_ALLOWED_PATHS: Record<AssistantRelayConfig['kind'], Record<st
 };
 
 export const RELAY_MAX_BODY_BYTES = 10 * 1024 * 1024;
+export const RELAY_MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 
 const PASSTHROUGH_RESPONSE_HEADERS = ['content-type', 'retry-after'];
 
@@ -36,6 +38,52 @@ function buildUpstreamUrl(baseURL: string, subpath: string): string | undefined 
     } catch {
         return undefined;
     }
+}
+
+/**
+ * Pipes the upstream body through, erroring the stream and cancelling upstream when no chunk arrives
+ * for idleMs or the total exceeds maxBytes. onDone runs once the stream ends, errors or is cancelled.
+ */
+export function guardBody(source: ReadableStream<Uint8Array>, idleMs: number, maxBytes: number, onDone: () => void): ReadableStream<Uint8Array> {
+    const reader = source.getReader();
+    let total = 0;
+    let finished = false;
+    const finish = () => {
+        if (!finished) {
+            finished = true;
+            onDone();
+        }
+    };
+    return new ReadableStream<Uint8Array>({
+        async pull(controller) {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+                const idle = new Promise<never>((_, reject) => {
+                    timer = setTimeout(() => reject(new Error('idle')), idleMs);
+                });
+                const { done, value } = await Promise.race([reader.read(), idle]);
+                if (done) {
+                    finish();
+                    controller.close();
+                    return;
+                }
+                total += value.byteLength;
+                if (total > maxBytes) throw new Error('too_large');
+                controller.enqueue(value);
+            } catch (error) {
+                console.error('[assistant relay] upstream body aborted');
+                await reader.cancel().catch(() => undefined);
+                finish();
+                controller.error(error);
+            } finally {
+                clearTimeout(timer);
+            }
+        },
+        async cancel(reason) {
+            await reader.cancel(reason).catch(() => undefined);
+            finish();
+        },
+    });
 }
 
 function hasOwnPath(paths: Record<string, 'GET' | 'POST'>, subpath: string): boolean {
@@ -77,10 +125,17 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
     if (method === 'POST') {
         const contentType = request.headers.get('content-type') ?? '';
         if (contentType.split(';')[0].trim().toLowerCase() !== 'application/json') return reply(415, 'unsupported_media_type');
-        const declaredLength = Number(request.headers.get('content-length') ?? '0');
-        if (declaredLength > RELAY_MAX_BODY_BYTES) return reply(413, 'payload_too_large');
-        body = await request.text();
-        if (Buffer.byteLength(body) >= RELAY_MAX_BODY_BYTES) return reply(413, 'payload_too_large');
+        const declaredLength = parseContentLength(request.headers.get('content-length'));
+        if (declaredLength === null) return reply(400, 'invalid_content_length');
+        if (declaredLength !== undefined && declaredLength >= RELAY_MAX_BODY_BYTES) return reply(413, 'payload_too_large');
+        let bytes: Uint8Array | undefined;
+        try {
+            bytes = await readCappedBody(request, RELAY_MAX_BODY_BYTES - 1);
+        } catch {
+            return reply(400, 'unreadable_body');
+        }
+        if (!bytes) return reply(413, 'payload_too_large');
+        body = new TextDecoder().decode(bytes);
     }
 
     const headers = new Headers({ accept: request.headers.get('accept') ?? 'application/json' });
@@ -92,20 +147,43 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
         headers.set('authorization', `Bearer ${relay.apiKey}`);
     }
 
+    const timeoutMs = relay.upstreamTimeoutMs;
+    const controller = new AbortController();
+    let timedOut = false;
+    const onClientAbort = () => controller.abort();
+    // Some runtimes (jsdom) expose no request signal.
+    const clientSignal: AbortSignal | undefined = request.signal ?? undefined;
+    if (clientSignal?.aborted) controller.abort();
+    else clientSignal?.addEventListener('abort', onClientAbort, { once: true });
+    const headerTimer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, timeoutMs);
+    const cleanup = () => {
+        clearTimeout(headerTimer);
+        clientSignal?.removeEventListener('abort', onClientAbort);
+    };
+
     let upstream: Response;
     try {
         upstream = await fetch(upstreamUrl, {
             method,
             headers,
             body,
-            signal: request.signal,
+            signal: controller.signal,
             redirect: 'manual',
             cache: 'no-store',
         });
     } catch {
+        cleanup();
+        if (timedOut) {
+            console.error('[assistant relay] upstream timed out');
+            return reply(504, 'upstream_timeout');
+        }
         console.error('[assistant relay] upstream request failed');
         return reply(502, 'upstream_unreachable');
     }
+    clearTimeout(headerTimer);
 
     if (upstream.status >= 300 && upstream.status < 400) {
         console.error('[assistant relay] upstream answered with a redirect, not following it');
@@ -114,6 +192,7 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
         } catch {
             // the connection is released best-effort
         }
+        cleanup();
         return reply(502, 'upstream_redirect');
     }
 
@@ -122,5 +201,14 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
         const value = upstream.headers.get(name);
         if (value !== null) responseHeaders.set(name, value);
     });
-    return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
+    if (!upstream.body || typeof upstream.body.getReader !== 'function') {
+        // No body, or a runtime whose body is not a web stream (jsdom test polyfill): nothing to guard.
+        cleanup();
+        return new Response(upstream.body ?? null, { status: upstream.status, headers: responseHeaders });
+    }
+    const guarded = guardBody(upstream.body, timeoutMs, RELAY_MAX_RESPONSE_BYTES, () => {
+        cleanup();
+        controller.abort();
+    });
+    return new Response(guarded, { status: upstream.status, headers: responseHeaders });
 }
