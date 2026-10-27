@@ -62,6 +62,37 @@ describe('AssistantStorageSection', () => {
         await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete Conversation c1' })).not.toBeInTheDocument());
     });
 
+    it('renames through the repository when the assistant is not mounted', async () => {
+        const { repository, notifyStorageChanged } = setup();
+        await seed(repository);
+        renderSection();
+        fireEvent.click(await screen.findByRole('button', { name: 'Rename Conversation c1' }));
+        const input = screen.getByRole('textbox', { name: 'Chat title' });
+        fireEvent.change(input, { target: { value: '  New \n name ' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await waitFor(() => expect(notifyStorageChanged).toHaveBeenCalled());
+        const stored = await repository.getConversation('c1');
+        expect(stored?.title).toBe('New name');
+        expect(stored?.updatedAt).toBe('2026-10-24T08:00:00.000Z');
+    });
+
+    it('renames through the registered conversation controls when present', async () => {
+        const conversationControls = {
+            deleteConversation: jest.fn(),
+            renameConversation: jest.fn().mockResolvedValue(undefined),
+            deleteAll: jest.fn(),
+            deleteAllAccounts: jest.fn(),
+        };
+        const { repository } = setup({ conversationControls });
+        await seed(repository);
+        renderSection();
+        fireEvent.click(await screen.findByRole('button', { name: 'Rename Conversation c1' }));
+        const input = screen.getByRole('textbox', { name: 'Chat title' });
+        fireEvent.change(input, { target: { value: 'Via controls' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await waitFor(() => expect(conversationControls.renameConversation).toHaveBeenCalledWith('c1', 'Via controls'));
+    });
+
     it('uses the registered conversation controls when present', async () => {
         const conversationControls = {
             deleteConversation: jest.fn().mockResolvedValue(undefined),

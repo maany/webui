@@ -42,6 +42,7 @@ export interface AssistantPanelViewProps {
     onNewChat(): void;
     onOpenConversation(id: string): void;
     onDeleteConversation(id: string): void | Promise<void>;
+    onRenameConversation?(id: string, title: string): void | Promise<void>;
     onClose(): void;
     onRestore(): void;
     /** Rendered when there are no messages (phase 3 adds starter prompts). */
@@ -184,6 +185,7 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
                     currentId={props.conversation?.id}
                     onOpen={props.onOpenConversation}
                     onDelete={props.onDeleteConversation}
+                    onRename={props.onRenameConversation}
                 />
                 <Link
                     href="/assistant/settings"

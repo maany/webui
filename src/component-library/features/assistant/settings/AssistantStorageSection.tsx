@@ -11,6 +11,9 @@ import { createConversationRepository } from '@/lib/infrastructure/assistant/ind
 import { toAccountKey } from '@/lib/infrastructure/assistant/page-context';
 import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { formatBytes } from '../format';
+import { RENAME_ERROR, RenameInput, useInlineRename } from '../InlineRename';
+import { normalizeConversationTitle } from '@/lib/core/services/assistant-conversation-title';
+import { HiOutlinePencil } from 'react-icons/hi';
 
 export interface AssistantStorageViewProps {
     conversations: Conversation[];
@@ -23,6 +26,8 @@ export interface AssistantStorageViewProps {
     onRetentionChange(next: RetentionSettings): void;
     onExport(id: string, format: 'md' | 'json'): void;
     onDelete(id: string): void;
+    /** Renames a chat; a rejection shows an inline error. Hidden when absent. */
+    onRename?(id: string, title: string): void | Promise<void>;
     onDeleteAll(): void;
     onFreeMemory(): void;
     /** Accounts other than the current one that have chats in this browser. Hidden when empty. */
@@ -98,6 +103,7 @@ export function AssistantStorageView(props: AssistantStorageViewProps) {
     const [confirmEverything, setConfirmEverything] = useState(false);
     const { retention } = props;
     const otherAccounts = props.otherAccounts ?? [];
+    const rename = useInlineRename(props.onRename);
     return (
         <section aria-labelledby="assistant-conversations-heading" className="space-y-6">
             <div className="space-y-2">
@@ -126,7 +132,33 @@ export function AssistantStorageView(props: AssistantStorageViewProps) {
                         {props.conversations.map(conversation => (
                             <li key={conversation.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center">
                                 <div className="flex-1 min-w-0">
-                                    <p className="truncate text-sm font-medium">{conversation.title}</p>
+                                    {rename.editingId === conversation.id ? (
+                                        <RenameInput
+                                            conversation={conversation}
+                                            rename={rename}
+                                            className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-0 dark:bg-neutral-900 px-2 py-1 text-sm"
+                                        />
+                                    ) : (
+                                        <p className="flex items-center gap-1 text-sm font-medium">
+                                            <span className="truncate">{conversation.title}</span>
+                                            {props.onRename && (
+                                                <button
+                                                    type="button"
+                                                    ref={rename.registerPencil(conversation.id)}
+                                                    className="shrink-0 p-1 rounded text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                                                    aria-label={`Rename ${conversation.title}`}
+                                                    onClick={() => rename.start(conversation)}
+                                                >
+                                                    <HiOutlinePencil className="h-4 w-4" />
+                                                </button>
+                                            )}
+                                        </p>
+                                    )}
+                                    {rename.editingId === conversation.id && rename.failed && (
+                                        <p role="alert" className="text-xs text-base-error-700 dark:text-base-error-300">
+                                            {RENAME_ERROR}
+                                        </p>
+                                    )}
                                     <p className="text-xs text-neutral-500">
                                         {conversation.updatedAt.slice(0, 10)} · {formatBytes(props.sizes[conversation.id] ?? 0)}
                                     </p>
@@ -446,6 +478,19 @@ export function AssistantStorageSection({
                     else await requireStore().repository.deleteConversation(id);
                 }, 'Could not delete this chat.')
             }
+            onRename={async (id, title) => {
+                if (shell.conversationControls?.renameConversation) await shell.conversationControls.renameConversation(id, title);
+                else {
+                    const clean = normalizeConversationTitle(title);
+                    if (!clean) throw new Error('empty title');
+                    const repository = requireStore().repository;
+                    const latest = await repository.getConversation(id);
+                    if (!latest || (accountKey && latest.accountKey !== accountKey)) return;
+                    await repository.saveConversation({ ...latest, title: clean });
+                }
+                shell.notifyStorageChanged();
+                await reload();
+            }}
             onDeleteAll={() =>
                 void runDelete(async () => {
                     if (shell.conversationControls) await shell.conversationControls.deleteAll(accountKey);

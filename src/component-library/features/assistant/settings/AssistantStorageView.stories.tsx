@@ -33,6 +33,7 @@ const meta: Meta<typeof AssistantStorageView> = {
         onRetentionChange: fn(),
         onExport: fn(),
         onDelete: fn(),
+        onRename: fn(),
         onDeleteAll: fn(),
         onFreeMemory: fn(),
     },

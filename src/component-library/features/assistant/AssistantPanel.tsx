@@ -92,6 +92,7 @@ export function AssistantPanel() {
             onNewChat={assistant.newConversation}
             onOpenConversation={id => void assistant.openConversation(id)}
             onDeleteConversation={id => assistant.deleteConversation(id)}
+            onRenameConversation={assistant.renameConversation}
             onClose={shell.close}
             onRestore={shell.open}
             emptyState={

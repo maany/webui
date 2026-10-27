@@ -1,7 +1,7 @@
 jest.mock('next-auth/react', () => ({ useSession: () => ({ data: null }) }));
 
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AssistantStorageView, type AssistantStorageViewProps } from '@/component-library/features/assistant/settings/AssistantStorageSection';
 import { makeConversation } from 'test/fixtures/assistant-fixtures';
 
@@ -172,5 +172,31 @@ describe('AssistantStorageView', () => {
             fireEvent.click(screen.getByRole('button', { name: 'Delete everything' }));
             expect(p.onDeleteAllAccounts).toHaveBeenCalledTimes(1);
         });
+    });
+
+    it('renames a chat inline and shows an error when it fails', async () => {
+        const onRename = jest.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('disk full'));
+        render(<AssistantStorageView {...props({ onRename })} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Rename Conversation c1' }));
+        const input = screen.getByRole('textbox', { name: 'Chat title' });
+        fireEvent.change(input, { target: { value: 'Quota question' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await waitFor(() => expect(onRename).toHaveBeenCalledWith('c1', 'Quota question'));
+        await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Chat title' })).not.toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole('button', { name: 'Rename Conversation c2' }));
+        const second = screen.getByRole('textbox', { name: 'Chat title' });
+        fireEvent.change(second, { target: { value: 'Fails' } });
+        fireEvent.keyDown(second, { key: 'Enter' });
+        expect(await screen.findByText('Could not rename this chat.')).toBeInTheDocument();
+    });
+
+    it('cancels a rename with Escape', () => {
+        const onRename = jest.fn();
+        render(<AssistantStorageView {...props({ onRename })} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Rename Conversation c1' }));
+        fireEvent.keyDown(screen.getByRole('textbox', { name: 'Chat title' }), { key: 'Escape' });
+        expect(onRename).not.toHaveBeenCalled();
+        expect(screen.queryByRole('textbox', { name: 'Chat title' })).not.toBeInTheDocument();
     });
 });

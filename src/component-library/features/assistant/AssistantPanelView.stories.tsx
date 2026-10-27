@@ -79,6 +79,7 @@ const meta: Meta<typeof AssistantPanelView> = {
         onNewChat: fn(),
         onOpenConversation: fn(),
         onDeleteConversation: fn(),
+        onRenameConversation: fn(),
         onClose: fn(),
         onRestore: fn(),
     },
