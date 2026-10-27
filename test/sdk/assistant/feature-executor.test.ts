@@ -461,7 +461,7 @@ describe('createFeatureTool', () => {
         fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ i: 1 })] }));
         const tool = createFeatureTool(listRules);
         expect(tool.spec).toBe(listRules);
-        const ctx = { signal: controller.signal, handles } as unknown as Parameters<typeof tool.execute>[1];
+        const ctx = { signal: controller.signal, handles, accountKey: 'jdoe@def' } as unknown as Parameters<typeof tool.execute>[1];
         await expect(tool.execute({}, ctx)).resolves.toMatchObject({ handle: 'rules_1', rowCount: 1 });
     });
 });
@@ -629,5 +629,57 @@ describe('fix round 2', () => {
         fetchMock.mockImplementationOnce(async () => fakeResponse({ status: 500, chunks: [JSON.stringify({ message: 'm'.repeat(900) })] }));
         const result = (await executeFeatureTool(getRule, { id: 'r1' }, deps)) as { message: string };
         expect(result.message).toHaveLength(500);
+    });
+});
+
+describe('account binding for reads', () => {
+    it('sends the expected account header when deps carry an account', async () => {
+        const { deps } = setup();
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [JSON.stringify({ status: 'success', id: 'r1' })] }));
+        await executeFeatureTool(getRule, { id: 'r1' }, { ...deps, expectedAccount: 'jdoe@def' });
+        const init = fetchMock.mock.calls[0][1] as RequestInit;
+        expect(init.headers).toMatchObject({ Accept: 'application/json, text/event-stream', 'x-rucio-assistant-account': 'jdoe@def' });
+    });
+
+    it('sends the header on POST row routes too', async () => {
+        const { deps } = setup();
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ i: 1 })] }));
+        await executeFeatureTool(listQuotas, { requestedDIDs: [{ scope: 'user', name: 'f' }] }, { ...deps, expectedAccount: 'jdoe@def' });
+        const init = fetchMock.mock.calls[0][1] as RequestInit;
+        expect(init.headers).toMatchObject({ 'Content-Type': 'application/json', 'x-rucio-assistant-account': 'jdoe@def' });
+    });
+
+    it('maps a 409 account_mismatch to a denied ToolError that says nothing was read', async () => {
+        const { deps, handles } = setup();
+        fetchMock.mockImplementationOnce(async () =>
+            fakeResponse({ status: 409, chunks: [JSON.stringify({ status: 'error', errorType: 'account_mismatch', message: 'server text' })] }),
+        );
+        const result = (await executeFeatureTool(listRules, {}, { ...deps, expectedAccount: 'jdoe@def' })) as {
+            error: string;
+            message: string;
+            errorType?: string;
+        };
+        expect(result.error).toBe('denied_by_policy');
+        expect(result.errorType).toBe('account_mismatch');
+        expect(result.message).toBe('The signed-in account changed after this request started. Ask again to read as the current account.');
+        expect(handles.listHandles()).toEqual([]);
+    });
+
+    it('createFeatureTool forwards ctx.accountKey as the expected account', async () => {
+        const { handles, controller } = setup();
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ i: 1 })] }));
+        const tool = createFeatureTool(listRules);
+        const ctx = { signal: controller.signal, handles, accountKey: 'jdoe@def' } as unknown as Parameters<typeof tool.execute>[1];
+        await tool.execute({}, ctx);
+        expect((fetchMock.mock.calls[0][1] as RequestInit).headers).toMatchObject({ 'x-rucio-assistant-account': 'jdoe@def' });
+    });
+
+    it('createFeatureTool fails closed without sending when ctx.accountKey is missing', async () => {
+        const { handles, controller } = setup();
+        const tool = createFeatureTool(listRules);
+        const ctx = { signal: controller.signal, handles, accountKey: '' } as unknown as Parameters<typeof tool.execute>[1];
+        const result = await tool.execute({}, ctx);
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ error: 'denied_by_policy' });
     });
 });

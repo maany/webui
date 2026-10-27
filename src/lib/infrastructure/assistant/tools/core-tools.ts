@@ -5,6 +5,7 @@ import { searchToolSpecs } from '@/lib/core/services/assistant-tool-search';
 import { HANDLE_NAME_PATTERN } from '@/lib/infrastructure/assistant/duckdb/duckdb-data-handle-store';
 import { refreshHandle } from '@/lib/infrastructure/assistant/refresh-handle';
 import { capSqlResultForModel, SQL_MAX_ROWS_FOR_MODEL, sqlErrorToToolError } from '@/lib/infrastructure/assistant/sql-support';
+import { toolError } from '@/lib/infrastructure/assistant/tool-error';
 import { allTools } from '@/lib/infrastructure/assistant/tool-registry';
 import type { RegisteredTool } from '@/lib/infrastructure/assistant/tool-types';
 
@@ -134,14 +135,18 @@ export const refreshHandleSpec: ToolSpec<RefreshHandleArgs> = {
 
 export const refreshHandleTool: RegisteredTool<RefreshHandleArgs> = {
     spec: refreshHandleSpec,
-    execute: (args, ctx) =>
-        refreshHandle(args.handle, {
+    execute: (args, ctx) => {
+        // Fail closed: a refresh re-runs reads, which must be bound to the account that asked
+        if (!ctx.accountKey) return Promise.resolve(toolError('denied_by_policy', 'The signed-in account is unknown, so nothing was read.'));
+        return refreshHandle(args.handle, {
             records: ctx.handleRecords?.() ?? [],
             handles: ctx.handles,
             signal: ctx.signal,
+            expectedAccount: ctx.accountKey,
             isToolVisible: ctx.isToolVisible,
             toolPolicy: ctx.toolPolicy,
-        }),
+        });
+    },
 };
 
 export const CORE_DATA_TOOLS: RegisteredTool<any>[] = [findToolsTool, runSqlTool, refreshHandleTool];

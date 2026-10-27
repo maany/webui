@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { NextResponse } from 'next/server';
+import { rejectAssistantAccountMismatch } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { getSession } from '@/lib/infrastructure/auth/nextauth-session-utils';
 import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
@@ -14,6 +15,10 @@ import { SiteHeaderViewModel } from '@/lib/infrastructure/data/view-model/site-h
 export async function GET() {
     try {
         const session = await getSession();
+        if (session?.user) {
+            const mismatch = await rejectAssistantAccountMismatch(session.user);
+            if (mismatch) return mismatch;
+        }
 
         // Create a mock IronSession-compatible object for the use case
         // The use case expects IronSession format, so we adapt NextAuth session to it

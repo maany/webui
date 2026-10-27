@@ -13,6 +13,8 @@ export interface RefreshHandleDeps {
     handles: AssistantDataHandleStorePort;
     signal: AbortSignal;
     fetchImpl?: typeof fetch;
+    /** `account@vo` the re-run read is sent as; omitted for user-initiated refreshes outside a turn. */
+    expectedAccount?: string;
     lookupTool?: (name: string) => RegisteredTool<any> | undefined;
     /** Live visibility check; a tool that is not visible is never re-run. */
     isToolVisible?: (name: string) => boolean;
@@ -88,6 +90,7 @@ export async function refreshHandle(
         signal: deps.signal,
         handles: deps.handles,
         fetchImpl: deps.fetchImpl,
+        expectedAccount: deps.expectedAccount,
         tableName: name,
     });
     return result as RowsToolResult | ToolError;

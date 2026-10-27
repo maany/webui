@@ -187,6 +187,13 @@ describe('refresh_handle', () => {
         expect(handles.listHandles().map(handle => handle.name)).toEqual(['rules_1']);
     });
 
+    it('sends the context account with the re-run read', async () => {
+        const { ctx } = setup([{ name: 'rules_1', toolName: 'list_rules', args: {}, fetchedAt: 'x' }]);
+        fetchMock.mockImplementationOnce(async () => fakeResponse({ chunks: [ndjson({ id: 'a' })] }));
+        await refreshHandleTool.execute({ handle: 'rules_1' }, { ...ctx, accountKey: 'jdoe@def' });
+        expect((fetchMock.mock.calls[0][1] as RequestInit).headers).toMatchObject({ 'x-rucio-assistant-account': 'jdoe@def' });
+    });
+
     it('refreshes the sources of a saved query first', async () => {
         const records: HandleRecord[] = [
             { name: 'rules_1', toolName: 'list_rules', args: {}, fetchedAt: 'x' },

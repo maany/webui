@@ -303,16 +303,24 @@ async function readAssistantAccountHeader(): Promise<string | null> {
     }
 }
 
+/**
+ * Assistant requests carry the account they were started or approved under. Returns the 409 response to send
+ * when the session account differs, or null to proceed. Every assistant-facing route must call this (or go through
+ * executeAuthenticatedController, which does) before touching Rucio.
+ */
+export async function rejectAssistantAccountMismatch(user: { rucioAccount?: string; rucioVO?: string }): Promise<NextResponse | null> {
+    if (!isAccountMismatch(await readAssistantAccountHeader(), toAccountKey(user.rucioAccount, user.rucioVO))) return null;
+    return NextResponse.json({ status: 'error', errorType: ACCOUNT_MISMATCH_ERROR_TYPE, message: ACCOUNT_MISMATCH_MESSAGE }, { status: 409 });
+}
+
 export async function executeAuthenticatedController<TParams extends TAuthenticatedControllerParameters>(
     controller: BaseController<TParams, any>,
     parameters: Omit<TParams, 'response' | 'session' | 'rucioAuthToken'>,
     streaming: boolean = false,
 ): Promise<NextResponse | Response> {
     return withAuthenticatedSession(async (user: SessionUser, token: string) => {
-        // A write approved in the assistant is bound to the account active at approval time
-        if (isAccountMismatch(await readAssistantAccountHeader(), toAccountKey(user.rucioAccount, user.rucioVO))) {
-            return NextResponse.json({ status: 'error', errorType: ACCOUNT_MISMATCH_ERROR_TYPE, message: ACCOUNT_MISMATCH_MESSAGE }, { status: 409 });
-        }
+        const mismatch = await rejectAssistantAccountMismatch(user);
+        if (mismatch) return mismatch;
         try {
             const session = await getSession();
             const responseAdapter = streaming ? new StreamingResponseAdapter() : new ControllerResponseAdapter();

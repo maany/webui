@@ -6,6 +6,7 @@ import { abortError, errorMessage, isAbortError } from '@/lib/infrastructure/ass
 import { DataHandleStoreError } from '@/lib/infrastructure/assistant/duckdb/duckdb-data-handle-store';
 import { defaultRowCap } from '@/lib/infrastructure/assistant/row-cap';
 import { isSecretFieldName } from '@/lib/core/services/assistant-secret-keys';
+import { ACCOUNT_CHANGED_READ_MESSAGE, ACCOUNT_MISMATCH_ERROR_TYPE, ASSISTANT_ACCOUNT_HEADER } from '@/lib/infrastructure/assistant/account-binding';
 import { toolError } from '@/lib/infrastructure/assistant/tool-error';
 
 export const FEATURE_TOOL_TIMEOUT_MS = 60_000;
@@ -32,6 +33,8 @@ export interface FeatureExecutionDeps {
     /** Exact handle name to (re)create; refresh uses it to keep the name the model already knows. */
     tableName?: string;
     now?: () => Date;
+    /** `account@vo` the request runs as; the server refuses it when the session account differs. */
+    expectedAccount?: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -342,7 +345,11 @@ export async function executeFeatureTool(spec: ToolSpec<any>, rawArgs: unknown, 
         try {
             response = await fetchImpl(url, {
                 ...init,
-                headers: { Accept: 'application/json, text/event-stream', ...(init.headers as Record<string, string> | undefined) },
+                headers: {
+                    Accept: 'application/json, text/event-stream',
+                    ...(init.headers as Record<string, string> | undefined),
+                    ...(deps.expectedAccount ? { [ASSISTANT_ACCOUNT_HEADER]: deps.expectedAccount } : {}),
+                },
                 credentials: 'same-origin',
                 redirect: 'manual',
                 cache: 'no-store',
@@ -358,6 +365,10 @@ export async function executeFeatureTool(spec: ToolSpec<any>, rawArgs: unknown, 
         }
         if (!response.ok) {
             const body = await readJsonSafely(response);
+            if (response.status === 409 && errorTypeFrom(body) === ACCOUNT_MISMATCH_ERROR_TYPE) {
+                // The server refused before calling Rucio, so nothing was read
+                return toolError('denied_by_policy', ACCOUNT_CHANGED_READ_MESSAGE, ACCOUNT_MISMATCH_ERROR_TYPE);
+            }
             return toolError(errorCodeForStatus(response.status), messageFrom(body) ?? `HTTP ${response.status}`, errorTypeFrom(body));
         }
 
@@ -510,6 +521,10 @@ async function ingestStream(
 export function createFeatureTool<I>(spec: ToolSpec<I>): RegisteredTool<I> {
     return {
         spec,
-        execute: (args, ctx) => executeFeatureTool(spec as ToolSpec<any>, args, { signal: ctx.signal, handles: ctx.handles }),
+        execute: async (args, ctx) => {
+            // Fail closed: without the account the server cannot check the session still matches it
+            if (!ctx.accountKey) return toolError('denied_by_policy', 'The signed-in account is unknown, so nothing was read.');
+            return executeFeatureTool(spec as ToolSpec<any>, args, { signal: ctx.signal, handles: ctx.handles, expectedAccount: ctx.accountKey });
+        },
     };
 }
