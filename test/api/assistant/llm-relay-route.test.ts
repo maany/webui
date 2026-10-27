@@ -324,6 +324,18 @@ describe('/api/assistant/llm/[...path]', () => {
                     }),
             );
         const tick = () => new Promise(resolve => setTimeout(resolve, 10));
+        // The jsdom Response polyfill exposes no web stream body, so hand the relay a minimal upstream that has one.
+        const streamingUpstream = (init: RequestInit, firstChunk: boolean) =>
+            ({
+                status: 200,
+                headers: new Headers(),
+                body: new ReadableStream<Uint8Array>({
+                    start(c) {
+                        if (firstChunk) c.enqueue(new Uint8Array(1));
+                        init.signal?.addEventListener('abort', () => c.error(new Error('aborted')));
+                    },
+                }),
+            } as unknown as Response);
 
         it('answers 429 too_many_streams once the account has the maximum in flight', async () => {
             process.env.ASSISTANT_LLM_MAX_CONCURRENT_STREAMS = '2';
@@ -425,6 +437,83 @@ describe('/api/assistant/llm/[...path]', () => {
             global.fetch = upstream as unknown as typeof fetch;
             delete process.env.ASSISTANT_LLM_UPSTREAM_MAX_MS;
             expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(200);
+        });
+
+        it('releases the slot when the total deadline fires while the consumer is not pulling', async () => {
+            process.env.ASSISTANT_LLM_MAX_CONCURRENT_STREAMS = '1';
+            process.env.ASSISTANT_LLM_UPSTREAM_MAX_MS = '40';
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            global.fetch = (async (_url: string, init: RequestInit) => streamingUpstream(init, true)) as unknown as typeof fetch;
+            const res = await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'));
+            expect(res.status).toBe(200);
+            // never read the body: no pull is pending when the deadline fires
+            await new Promise(resolve => setTimeout(resolve, 120));
+            delete process.env.ASSISTANT_LLM_UPSTREAM_MAX_MS;
+            global.fetch = upstream as unknown as typeof fetch;
+            expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(200);
+        });
+
+        it('releases the slot when the client aborts while the consumer is not pulling, and the stream then ends', async () => {
+            process.env.ASSISTANT_LLM_MAX_CONCURRENT_STREAMS = '1';
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            global.fetch = (async (_url: string, init: RequestInit) => streamingUpstream(init, true)) as unknown as typeof fetch;
+            const abort = new AbortController();
+            const res = await POST(
+                new NextRequest(COMPLETIONS_URL, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(BODY),
+                    signal: abort.signal,
+                }),
+                ctx('chat', 'completions'),
+            );
+            expect(res.status).toBe(200);
+            abort.abort();
+            await tick();
+            global.fetch = upstream as unknown as typeof fetch;
+            expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(200);
+        });
+
+        it('ends the stream on the next read after the deadline fired with no pull pending', async () => {
+            const controller = new AbortController();
+            const source = new ReadableStream<Uint8Array>({
+                pull(c) {
+                    c.enqueue(new Uint8Array(1));
+                },
+            });
+            let done = 0;
+            const guarded = guardBody(source, 5000, 1 << 20, () => (done += 1), controller.signal);
+            await tick();
+            controller.abort();
+            const reader = guarded.getReader();
+            const outcome = await Promise.race([
+                (async () => {
+                    for (;;) if ((await reader.read()).done) return 'ended';
+                })().catch(() => 'errored'),
+                new Promise(resolve => setTimeout(() => resolve('hung'), 500)),
+            ]);
+            expect(['ended', 'errored']).toContain(outcome);
+            expect(done).toBe(1);
+        });
+
+        it('keeps the deadline listener count bounded across many pulls', async () => {
+            const controller = new AbortController();
+            const add = jest.spyOn(controller.signal, 'addEventListener');
+            const remove = jest.spyOn(controller.signal, 'removeEventListener');
+            let n = 0;
+            const source = new ReadableStream<Uint8Array>({
+                pull(c) {
+                    if (n++ < 200) c.enqueue(new Uint8Array(1));
+                    else c.close();
+                },
+            });
+            const guarded = guardBody(source, 5000, 1 << 20, () => undefined, controller.signal);
+            const reader = guarded.getReader();
+            while (!(await reader.read()).done);
+            const added = add.mock.calls.filter(c => c[0] === 'abort').length;
+            const removed = remove.mock.calls.filter(c => c[0] === 'abort').length;
+            expect(added).toBeGreaterThan(100);
+            expect(added - removed).toBeLessThanOrEqual(1);
         });
 
         it('releases the slot when the response body ends, is cancelled by the client, goes idle or hits the cap', async () => {

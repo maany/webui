@@ -501,6 +501,25 @@ describe('operator relay session handling', () => {
         }
         expect(describeRunError('session_expired', { relay: true })).toBe('Your session has expired. Log in again.');
     });
+
+    it('surfaces the relay too_many_streams 429 with its own wording, other 429s keep the rate limit wording', async () => {
+        const wording = 'Too many assistant replies are running for this account. Wait for one to finish and try again.';
+        const fetchImpl = jest.fn(
+            async () =>
+                new Response(JSON.stringify({ error: 'too_many_streams', message: wording }), {
+                    status: 429,
+                    headers: { 'content-type': 'application/json' },
+                }),
+        );
+        const updates = await runThroughRelay(fetchImpl as unknown as typeof fetch);
+        const last = finished(updates);
+        const error = last.type === 'finished' ? last.error ?? '' : '';
+        expect(error).toContain('429');
+        expect(describeRunError(error, { relay: true })).toBe(wording);
+        expect(describeRunError('429 {"error":"too_many_streams"}')).toBe(wording);
+        expect(describeRunError('429 {"error":"rate_limited"}', { relay: true })).toMatch(/rate limiting requests/);
+        expect(describeRunError('429 Too Many Requests')).toMatch(/rate limiting requests/);
+    });
 });
 
 describe('end to end with real tools', () => {

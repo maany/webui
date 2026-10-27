@@ -7,6 +7,8 @@ export const SESSION_EXPIRED_ERROR = 'session_expired';
 /** `finished.error` value when the browser could not save the conversation mid-turn, so the turn was stopped. */
 export const TURN_SAVE_FAILED_ERROR = 'turn_save_failed';
 
+const TOO_MANY_STREAMS_TEXT = 'Too many assistant replies are running for this account. Wait for one to finish and try again.';
+
 const SESSION_EXPIRED_TEXT = 'Your session has expired. Log in again.';
 
 /** Short, user-facing hint for a provider error message. */
@@ -20,6 +22,7 @@ export function describeRunError(error: string, options: { relay?: boolean } = {
         return 'Rucio bot could not save this conversation in the browser, so it stopped the turn. Free up browser storage, then press Retry.';
     if (error === CONTEXT_OVERFLOW_ERROR)
         return 'The conversation is too long for this model. Start a new chat or pick a model with a larger context window.';
+    if (/too_many_streams/.test(error)) return TOO_MANY_STREAMS_TEXT;
     if (/\b429\b|rate.?limit/i.test(error)) return `The provider is rate limiting requests. Wait a moment, then press Retry. (${error})`;
     if (/\b401\b|invalid.*key|unauthori[sz]ed|authentication/i.test(error))
         return `The provider rejected the API key. Check it in Rucio bot settings. (${error})`;

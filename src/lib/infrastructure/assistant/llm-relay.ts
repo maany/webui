@@ -63,6 +63,7 @@ export function guardBody(
     return new ReadableStream<Uint8Array>({
         async pull(controller) {
             let timer: ReturnType<typeof setTimeout> | undefined;
+            let onAbort: (() => void) | undefined;
             try {
                 const idle = new Promise<never>((_, reject) => {
                     timer = setTimeout(() => reject(new Error('idle')), idleMs);
@@ -70,7 +71,10 @@ export function guardBody(
                 const aborted = new Promise<never>((_, reject) => {
                     if (!deadline) return;
                     if (deadline.aborted) reject(new Error('deadline'));
-                    else deadline.addEventListener('abort', () => reject(new Error('deadline')), { once: true });
+                    else {
+                        onAbort = () => reject(new Error('deadline'));
+                        deadline.addEventListener('abort', onAbort, { once: true });
+                    }
                 });
                 aborted.catch(() => undefined);
                 const { done, value } = await Promise.race([reader.read(), idle, aborted]);
@@ -91,6 +95,7 @@ export function guardBody(
                 controller.error(error);
             } finally {
                 clearTimeout(timer);
+                if (onAbort) deadline?.removeEventListener('abort', onAbort);
             }
         },
         async cancel(reason) {
@@ -176,7 +181,11 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
     const timeoutMs = relay.upstreamTimeoutMs;
     const controller = new AbortController();
     let timedOut = false;
-    const onClientAbort = () => controller.abort();
+    // cleanup() is idempotent and declared below; the handlers only run after it exists.
+    const onClientAbort = () => {
+        controller.abort();
+        cleanup();
+    };
     // Some runtimes (jsdom) expose no request signal.
     const clientSignal: AbortSignal | undefined = request.signal ?? undefined;
     if (clientSignal?.aborted) controller.abort();
@@ -186,9 +195,11 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
         controller.abort();
     }, timeoutMs);
     // Total deadline: bounds an upstream that keeps the connection alive by dripping chunks.
+    // Frees the slot even when the consumer is backpressured and no pull is pending to notice the abort.
     const deadlineTimer = setTimeout(() => {
         timedOut = true;
         controller.abort();
+        cleanup();
     }, relay.upstreamMaxMs);
     const cleanup = () => {
         clearTimeout(headerTimer);
