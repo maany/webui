@@ -13,8 +13,15 @@ import { ALL_FLAGS_ON, SAMPLE_WRITE_ARGS, flagsWithout } from 'test/fixtures/ass
 
 const FEATURE_DIR = path.resolve(__dirname, '../../../src/app/api/feature');
 const EM_DASH = String.fromCharCode(0x2014);
-// add-account-attribute is high risk because admin=True makes the account a Rucio admin.
-const HIGH_RISK = ['declare-bad-replicas', 'delete-account', 'delete-account-identity', 'add-account-identity', 'add-account-attribute'];
+// add-account-attribute and update-account-attribute are high risk because admin=True makes the account a Rucio admin.
+const HIGH_RISK = [
+    'declare-bad-replicas',
+    'delete-account',
+    'delete-account-identity',
+    'add-account-identity',
+    'add-account-attribute',
+    'update-account-attribute',
+];
 
 interface RouteInfo {
     dir: string;

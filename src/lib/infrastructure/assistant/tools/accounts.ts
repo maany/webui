@@ -174,9 +174,9 @@ export const addAccountAttributeTool = defineWriteTool<AddAccountAttributeInput>
 export const updateAccountAttributeTool = defineWriteTool<UpdateAccountAttributeInput>({
     name: 'update_account_attribute',
     domain: 'accounts',
-    description: 'Change the value of an existing account attribute.',
+    description: 'Change the value of an existing account attribute. High risk: setting admin=True makes the account a Rucio admin.',
     input: UpdateAccountAttributeSchema,
-    risk: 'write',
+    risk: 'high',
     requires: accountWriteRequires(),
     executor: 'feature',
     output: 'object',

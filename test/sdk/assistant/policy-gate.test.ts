@@ -6,7 +6,7 @@ import { createPolicyFor, type PolicyCaps } from '@/lib/infrastructure/assistant
 import { describePolicyReason } from '@/lib/infrastructure/assistant/policy-reason';
 import { registerTools, resetToolRegistryForTests } from '@/lib/infrastructure/assistant/tool-registry';
 import type { RegisteredTool } from '@/lib/infrastructure/assistant/tool-types';
-import { addAccountAttributeTool } from '@/lib/infrastructure/assistant/tools/accounts';
+import { addAccountAttributeTool, updateAccountAttributeTool } from '@/lib/infrastructure/assistant/tools/accounts';
 import { ALL_FLAGS_ON, flagsWithout } from 'test/fixtures/assistant-write-fixtures';
 
 function tool(name: string, risk: ToolSpec['risk'], domain: ToolSpec['domain'], requires: ToolSpec['requires']): RegisteredTool<unknown> {
@@ -95,6 +95,15 @@ describe('createPolicyFor with the phase 4 options', () => {
         state.conversationAllow = ['add_account_attribute'];
         expect(addAccountAttributeTool.spec.risk).toBe('high');
         expect(gate()('add_account_attribute')).toBe('ask');
+    });
+
+    it('always asks before updating an account attribute (admin=True promotes the account), whatever the prefs, caps or scope', () => {
+        registerTools([updateAccountAttributeTool as RegisteredTool<unknown>]);
+        state.config = { writePolicyCap: 'allow', highRiskPolicyCap: 'ask' };
+        state.prefs = { update_account_attribute: 'allow' };
+        state.conversationAllow = ['update_account_attribute'];
+        expect(updateAccountAttributeTool.spec.risk).toBe('high');
+        expect(gate()('update_account_attribute')).toBe('ask');
     });
 
     it('denies tools that are not visible', () => {
