@@ -40,6 +40,32 @@ export class SlidingWindowRateLimiter {
     }
 }
 
+/**
+ * In-memory cap on requests in flight per key. tryAcquire returns a release function (safe to call
+ * more than once) or undefined when the key already holds max slots. One instance per server process.
+ */
+export class ConcurrencyLimiter {
+    private readonly active = new Map<string, number>();
+
+    tryAcquire(key: string, max: number): (() => void) | undefined {
+        const current = this.active.get(key) ?? 0;
+        if (current >= max) return undefined;
+        this.active.set(key, current + 1);
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            const left = (this.active.get(key) ?? 1) - 1;
+            if (left <= 0) this.active.delete(key);
+            else this.active.set(key, left);
+        };
+    }
+
+    reset(): void {
+        this.active.clear();
+    }
+}
+
 /** Shared by every relay request in this server process. */
 export const relayRateLimiter = new SlidingWindowRateLimiter();
 
@@ -57,3 +83,6 @@ export function createRelayRateLimiter(limitPerMinute: number): { check(sessionK
         },
     };
 }
+
+/** Streams in flight per account, shared by every relay request in this server process. */
+export const relayStreamLimiter = new ConcurrencyLimiter();

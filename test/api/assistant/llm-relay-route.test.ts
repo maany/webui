@@ -14,7 +14,7 @@ if (typeof (global.Response as { json?: unknown }).json !== 'function') {
 
 import { auth } from '@/lib/infrastructure/auth/auth';
 import { GET, POST } from '@/app/api/assistant/llm/[...path]/route';
-import { relayRateLimiter } from '@/lib/infrastructure/assistant/relay-rate-limiter';
+import { relayRateLimiter, relayStreamLimiter } from '@/lib/infrastructure/assistant/relay-rate-limiter';
 import { RELAY_MAX_BODY_BYTES, RELAY_MAX_RESPONSE_BYTES, guardBody, relayLlmRequest } from '@/lib/infrastructure/assistant/llm-relay';
 
 const authMock = auth as unknown as jest.Mock;
@@ -28,6 +28,7 @@ const ENV_KEYS = [
     'ASSISTANT_RELAY_RATE_LIMIT',
     'ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS',
     'ASSISTANT_LLM_UPSTREAM_MAX_MS',
+    'ASSISTANT_LLM_MAX_CONCURRENT_STREAMS',
 ];
 
 const signInAs = (account: string) =>
@@ -57,6 +58,7 @@ const sentHeaders = () => new Headers(lastCall()[1].headers);
 describe('/api/assistant/llm/[...path]', () => {
     beforeEach(() => {
         relayRateLimiter.reset();
+        relayStreamLimiter.reset();
         process.env.FEATURE_ASSISTANT = 'true';
         process.env.ASSISTANT_DEFAULT_PROVIDER_KIND = 'openai-compatible';
         process.env.ASSISTANT_DEFAULT_BASE_URL = 'https://llm.example.org/v1/';
@@ -311,6 +313,153 @@ describe('/api/assistant/llm/[...path]', () => {
         jest.spyOn(console, 'error').mockImplementation(() => undefined);
         upstream.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/' } }));
         expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(502);
+    });
+
+    describe('concurrent stream cap', () => {
+        const hang = () =>
+            jest.fn(
+                (_url: string, init: RequestInit) =>
+                    new Promise<Response>((_resolve, reject) => {
+                        init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+                    }),
+            );
+        const tick = () => new Promise(resolve => setTimeout(resolve, 10));
+
+        it('answers 429 too_many_streams once the account has the maximum in flight', async () => {
+            process.env.ASSISTANT_LLM_MAX_CONCURRENT_STREAMS = '2';
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            const hung = hang();
+            global.fetch = hung as unknown as typeof fetch;
+            const abort = new AbortController();
+            const mk = () =>
+                new NextRequest(COMPLETIONS_URL, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(BODY),
+                    signal: abort.signal,
+                });
+            const first = POST(mk(), ctx('chat', 'completions'));
+            const second = POST(mk(), ctx('chat', 'completions'));
+            await tick();
+            const res = await POST(mk(), ctx('chat', 'completions'));
+            expect(res.status).toBe(429);
+            expect(await res.json()).toEqual({
+                error: 'too_many_streams',
+                message: 'Too many assistant replies are running for this account. Wait for one to finish and try again.',
+            });
+            expect(hung).toHaveBeenCalledTimes(2);
+            abort.abort();
+            await Promise.all([first, second]);
+        });
+
+        it('counts accounts separately', async () => {
+            process.env.ASSISTANT_LLM_MAX_CONCURRENT_STREAMS = '1';
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            global.fetch = hang() as unknown as typeof fetch;
+            const abort = new AbortController();
+            const mk = () =>
+                new NextRequest(COMPLETIONS_URL, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(BODY),
+                    signal: abort.signal,
+                });
+            const first = POST(mk(), ctx('chat', 'completions'));
+            await tick();
+            signInAs('alice');
+            global.fetch = upstream as unknown as typeof fetch;
+            expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(200);
+            abort.abort();
+            await first;
+        });
+
+        it('releases the slot after a completed response', async () => {
+            process.env.ASSISTANT_LLM_MAX_CONCURRENT_STREAMS = '1';
+            const statuses: number[] = [];
+            for (let i = 0; i < 3; i++) statuses.push((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status);
+            expect(statuses).toEqual([200, 200, 200]);
+        });
+
+        it('releases the slot after an upstream error and an upstream non-OK response', async () => {
+            process.env.ASSISTANT_LLM_MAX_CONCURRENT_STREAMS = '1';
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            upstream.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
+            expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(502);
+            upstream.mockResolvedValueOnce(new Response('{"error":"x"}', { status: 500 }));
+            expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(500);
+            upstream.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'https://evil.example' } }));
+            expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(502);
+            expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(200);
+        });
+
+        it('releases the slot when the client aborts before headers', async () => {
+            process.env.ASSISTANT_LLM_MAX_CONCURRENT_STREAMS = '1';
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            global.fetch = hang() as unknown as typeof fetch;
+            const abort = new AbortController();
+            const pending = POST(
+                new NextRequest(COMPLETIONS_URL, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(BODY),
+                    signal: abort.signal,
+                }),
+                ctx('chat', 'completions'),
+            );
+            await tick();
+            abort.abort();
+            await pending;
+            global.fetch = upstream as unknown as typeof fetch;
+            expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(200);
+        });
+
+        it('releases the slot when the header timeout or the total deadline passes', async () => {
+            process.env.ASSISTANT_LLM_MAX_CONCURRENT_STREAMS = '1';
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            global.fetch = hang() as unknown as typeof fetch;
+            process.env.ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS = '30';
+            expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(504);
+            delete process.env.ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS;
+            process.env.ASSISTANT_LLM_UPSTREAM_MAX_MS = '30';
+            expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(504);
+            global.fetch = upstream as unknown as typeof fetch;
+            delete process.env.ASSISTANT_LLM_UPSTREAM_MAX_MS;
+            expect((await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'))).status).toBe(200);
+        });
+
+        it('releases the slot when the response body ends, is cancelled by the client, goes idle or hits the cap', async () => {
+            const limiter = relayStreamLimiter;
+            const cases: Array<(guarded: ReadableStream<Uint8Array>) => Promise<unknown>> = [
+                async g => {
+                    const r = g.getReader();
+                    while (!(await r.read()).done);
+                },
+                async g => {
+                    const r = g.getReader();
+                    await r.read();
+                    await r.cancel();
+                },
+            ];
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            for (const consume of cases) {
+                const release = limiter.tryAcquire('k', 1) as () => void;
+                const body = new ReadableStream<Uint8Array>({
+                    pull(c) {
+                        c.enqueue(new Uint8Array(4));
+                    },
+                });
+                let calls = 0;
+                const guarded = guardBody(body, 5000, 8, () => {
+                    calls += 1;
+                    release();
+                });
+                // the 8 byte cap errors the endless stream for the first case; cancel covers the second
+                await consume(guarded).catch(() => undefined);
+                expect(calls).toBe(1);
+                expect(limiter.tryAcquire('k', 1)).toBeDefined();
+                limiter.reset();
+            }
+        });
     });
 
     describe('request size and upstream limits', () => {

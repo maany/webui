@@ -1,4 +1,4 @@
-import { createRelayRateLimiter, SlidingWindowRateLimiter } from '@/lib/infrastructure/assistant/relay-rate-limiter';
+import { ConcurrencyLimiter, createRelayRateLimiter, SlidingWindowRateLimiter } from '@/lib/infrastructure/assistant/relay-rate-limiter';
 
 describe('SlidingWindowRateLimiter', () => {
     let now = 0;
@@ -62,5 +62,40 @@ describe('createRelayRateLimiter', () => {
         const limiter = createRelayRateLimiter(1);
         expect(limiter.check('s1')).toBe(true);
         expect(limiter.check('s1')).toBe(false);
+    });
+});
+
+describe('ConcurrencyLimiter', () => {
+    it('hands out slots up to the max per key and refuses beyond it', () => {
+        const l = new ConcurrencyLimiter();
+        expect(l.tryAcquire('a', 2)).toBeDefined();
+        expect(l.tryAcquire('a', 2)).toBeDefined();
+        expect(l.tryAcquire('a', 2)).toBeUndefined();
+        expect(l.tryAcquire('b', 2)).toBeDefined();
+    });
+
+    it('frees a slot on release', () => {
+        const l = new ConcurrencyLimiter();
+        const release = l.tryAcquire('a', 1) as () => void;
+        expect(l.tryAcquire('a', 1)).toBeUndefined();
+        release();
+        expect(l.tryAcquire('a', 1)).toBeDefined();
+    });
+
+    it('ignores a second call to the same release', () => {
+        const l = new ConcurrencyLimiter();
+        const release = l.tryAcquire('a', 2) as () => void;
+        l.tryAcquire('a', 2);
+        release();
+        release();
+        expect(l.tryAcquire('a', 2)).toBeDefined();
+        expect(l.tryAcquire('a', 2)).toBeUndefined();
+    });
+
+    it('forgets everything on reset', () => {
+        const l = new ConcurrencyLimiter();
+        l.tryAcquire('a', 1);
+        l.reset();
+        expect(l.tryAcquire('a', 1)).toBeDefined();
     });
 });

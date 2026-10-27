@@ -15,6 +15,8 @@ export interface AssistantRelayConfig {
     upstreamTimeoutMs: number;
     /** ASSISTANT_LLM_UPSTREAM_MAX_MS: total deadline for one relayed request, headers plus body (default 600000) */
     upstreamMaxMs: number;
+    /** ASSISTANT_LLM_MAX_CONCURRENT_STREAMS: relayed requests one account may have in flight at once (default 3) */
+    maxConcurrentStreams: number;
 }
 
 /**

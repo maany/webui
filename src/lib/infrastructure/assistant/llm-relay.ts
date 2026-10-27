@@ -7,7 +7,7 @@ import type FeatureConfigGatewayOutputPort from '@/lib/core/port/secondary/featu
 import type AssistantConfigGatewayOutputPort from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
 import type { AssistantRelayConfig } from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
 import { getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
-import { relayRateLimiter } from './relay-rate-limiter';
+import { relayRateLimiter, relayStreamLimiter } from './relay-rate-limiter';
 import { ANTHROPIC_API_VERSION } from './provider-kinds';
 import { parseContentLength, readCappedBody } from './read-capped-body';
 
@@ -132,7 +132,8 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
         return reply(502, 'upstream_misconfigured');
     }
 
-    const decision = relayRateLimiter.hit(`${user.rucioIdentity}|${user.rucioAccount}@${user.rucioVO}`, relay.rateLimitPerMinute);
+    const accountKey = `${user.rucioIdentity}|${user.rucioAccount}@${user.rucioVO}`;
+    const decision = relayRateLimiter.hit(accountKey, relay.rateLimitPerMinute);
     if (!decision.allowed) return reply(429, 'rate_limited', { 'Retry-After': String(decision.retryAfterSeconds) });
 
     let body: string | undefined;
@@ -161,6 +162,17 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
         headers.set('authorization', `Bearer ${relay.apiKey}`);
     }
 
+    const releaseSlot = relayStreamLimiter.tryAcquire(accountKey, relay.maxConcurrentStreams);
+    if (!releaseSlot) {
+        return NextResponse.json(
+            {
+                error: 'too_many_streams',
+                message: 'Too many assistant replies are running for this account. Wait for one to finish and try again.',
+            },
+            { status: 429 },
+        );
+    }
+
     const timeoutMs = relay.upstreamTimeoutMs;
     const controller = new AbortController();
     let timedOut = false;
@@ -182,6 +194,8 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
         clearTimeout(headerTimer);
         clearTimeout(deadlineTimer);
         clientSignal?.removeEventListener('abort', onClientAbort);
+        // Every exit path ends in cleanup(); the release is idempotent.
+        releaseSlot();
     };
 
     let upstream: Response;

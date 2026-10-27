@@ -52,6 +52,7 @@ describe('AssistantConfigGateway', () => {
                 'ASSISTANT_RELAY_RATE_LIMIT',
                 'ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS',
                 'ASSISTANT_LLM_UPSTREAM_MAX_MS',
+                'ASSISTANT_LLM_MAX_CONCURRENT_STREAMS',
             ].sort(),
         );
     });
@@ -254,6 +255,7 @@ describe('AssistantConfigGateway', () => {
             rateLimitPerMinute: 30,
             upstreamTimeoutMs: 120000,
             upstreamMaxMs: 600000,
+            maxConcurrentStreams: 3,
         });
     });
 
@@ -276,6 +278,17 @@ describe('AssistantConfigGateway', () => {
     ])('reads ASSISTANT_LLM_UPSTREAM_MAX_MS=%p as %p', async (raw, expected) => {
         setEnv({ ASSISTANT_DEFAULT_BASE_URL: 'https://llm.example.org/v1', ASSISTANT_DEFAULT_MODEL: 'm', ASSISTANT_LLM_UPSTREAM_MAX_MS: raw });
         await expect(gateway().getRelayConfig()).resolves.toMatchObject({ upstreamMaxMs: expected });
+    });
+
+    it.each([
+        ['5', 5],
+        ['abc', 3],
+        ['0', 3],
+        ['-2', 3],
+        ['99999999999', 3],
+    ])('reads ASSISTANT_LLM_MAX_CONCURRENT_STREAMS=%p as %p', async (raw, expected) => {
+        setEnv({ ASSISTANT_DEFAULT_BASE_URL: 'https://llm.example.org/v1', ASSISTANT_DEFAULT_MODEL: 'm', ASSISTANT_LLM_MAX_CONCURRENT_STREAMS: raw });
+        await expect(gateway().getRelayConfig()).resolves.toMatchObject({ maxConcurrentStreams: expected });
     });
 
     it.each([
