@@ -30,12 +30,13 @@ export default function Page() {
         name: RULE_CREATE_PREFILL_ACTION,
         description: RULE_CREATE_PREFILL_DESCRIPTION,
         schema: RuleCreatePrefillSchema,
-        apply: async args => {
+        apply: async (args, context) => {
             if (stageIndex.current === SUBMISSION_STAGE) {
                 throw toolError('unavailable', 'The wizard shows a submitted rule. Ask the user to reload the create rule page to start a new one.');
             }
             const id = ++prefillCount.current;
-            const result = await resolveRuleCreatePrefill(args);
+            const result = await resolveRuleCreatePrefill(args, context);
+            if (context?.signal?.aborted) throw toolError('aborted', 'The turn was stopped before the wizard was filled.');
             if (id !== prefillCount.current) throw toolError('aborted', 'A newer prefill replaced this one.');
             if (stageIndex.current === SUBMISSION_STAGE) {
                 throw toolError('unavailable', 'The wizard shows a submitted rule. Ask the user to reload the create rule page to start a new one.');

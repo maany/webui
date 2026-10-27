@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { createPageActionTool, PageActionResult } from '@/lib/infrastructure/assistant/tools/page/page-action';
 import { createPageTools, PAGE_TOOL_NAMES, registerPageTools } from '@/lib/infrastructure/assistant/tools/page';
 import { MOBILE_MEDIA_QUERY } from '@/lib/infrastructure/assistant/tools/page/page-tool-utils';
+import { createPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-registry';
 import { allTools, getTool } from '@/lib/infrastructure/assistant/tool-registry';
 import { FakePageActionRegistry } from 'test/fixtures/fake-page-action-registry';
 import { makeTestToolContext } from 'test/fixtures/page-tool-context';
@@ -105,6 +106,29 @@ describe('page_action tool', () => {
         await tool.execute({ name: 'rules.filter', args: { state: 'OK' } }, makeTestToolContext({ pages: pageWithFilter(), minimizePanel }));
         expect(minimizePanel).toHaveBeenCalledTimes(1);
         Object.defineProperty(window, 'matchMedia', { writable: true, configurable: true, value: original });
+    });
+});
+
+describe('page_action tool context', () => {
+    it('hands the turn signal and account to the action', async () => {
+        const registry = new FakePageActionRegistry();
+        const apply = jest.fn(async () => 'ok');
+        registry.register({ name: 'rule_create.prefill', description: 'Prefill', schema: z.object({}), apply });
+        const controller = new AbortController();
+        await tool.execute(
+            { name: 'rule_create.prefill', args: {} },
+            makeTestToolContext({ pages: registry, signal: controller.signal, accountKey: 'jdoe@def' }),
+        );
+        expect(apply).toHaveBeenCalledWith({}, { signal: controller.signal, expectedAccount: 'jdoe@def' });
+    });
+
+    it('lets a real registry carry the context to apply', async () => {
+        const registry = createPageActionRegistry();
+        const apply = jest.fn(async () => 'ok');
+        registry.register({ name: 'rule_create.prefill', description: 'Prefill', schema: z.object({}), apply });
+        const controller = new AbortController();
+        await registry.invoke('rule_create.prefill', {}, { signal: controller.signal, expectedAccount: 'a@def' });
+        expect(apply).toHaveBeenCalledWith({}, { signal: controller.signal, expectedAccount: 'a@def' });
     });
 });
 

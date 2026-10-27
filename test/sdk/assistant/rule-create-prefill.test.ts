@@ -6,6 +6,7 @@ import {
 } from '@/lib/infrastructure/assistant/page-actions/rule-create-prefill';
 import { CreateRuleGrouping } from '@/lib/infrastructure/data/view-model/rule';
 import { DIDType } from '@/lib/core/entity/rucio';
+import { ACCOUNT_CHANGED_READ_MESSAGE, ASSISTANT_ACCOUNT_HEADER } from '@/lib/infrastructure/assistant/account-binding';
 import { loginPageResponse, ndjsonResponse } from 'test/fixtures/ndjson-response';
 
 const didRow = (name: string, bytes: number) => ({
@@ -41,6 +42,11 @@ const fetchMockFn = jest.fn(async (url: string, _init?: RequestInit) => {
     throw new Error(`unexpected fetch ${url}`);
 });
 
+const ACCOUNT = 'jdoe@def';
+const resolveWithAccount = (
+    args: Parameters<typeof resolveRuleCreatePrefill>[0],
+    context: Parameters<typeof resolveRuleCreatePrefill>[1] = { expectedAccount: ACCOUNT },
+) => resolveRuleCreatePrefill(args, context);
 const originalFetch = global.fetch;
 
 beforeEach(() => {
@@ -59,7 +65,7 @@ afterAll(() => {
 
 describe('resolveRuleCreatePrefill', () => {
     it('fetches full DID and quota view models and lands on the summary', async () => {
-        const result = await resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' }));
+        const result = await resolveWithAccount(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' }));
 
         expect(fetchMockFn.mock.calls[0][0]).toBe('/api/feature/list-dids?query=user.jdoe%3Afile1&type=All');
         const quotaCall = fetchMockFn.mock.calls[1];
@@ -76,7 +82,7 @@ describe('resolveRuleCreatePrefill', () => {
     });
 
     it('picks only the named RSEs and stops on the RSE step when none has quota', async () => {
-        const result = await resolveRuleCreatePrefill(
+        const result = await resolveWithAccount(
             RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1', rses: ['DESY'] }),
         );
         expect(result.parameters.rses.map(rse => rse.rse)).toEqual(['DESY']);
@@ -86,7 +92,7 @@ describe('resolveRuleCreatePrefill', () => {
     });
 
     it('accepts an approval request with a comment', async () => {
-        const result = await resolveRuleCreatePrefill(
+        const result = await resolveWithAccount(
             RuleCreatePrefillSchema.parse({
                 dids: ['user.jdoe:file1'],
                 rseExpression: 'tier=1',
@@ -100,15 +106,13 @@ describe('resolveRuleCreatePrefill', () => {
     });
 
     it('stops on the options step when the options are invalid', async () => {
-        const result = await resolveRuleCreatePrefill(
-            RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1', copies: 3 }),
-        );
+        const result = await resolveWithAccount(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1', copies: 3 }));
         expect(result.activeIndex).toBe(RULE_CREATE_STEPS.OPTIONS);
         expect(result.summary).toContain('copies');
     });
 
     it('maps the options', async () => {
-        const result = await resolveRuleCreatePrefill(
+        const result = await resolveWithAccount(
             RuleCreatePrefillSchema.parse({
                 dids: ['user.jdoe:file1', 'user.jdoe:file2', 'user.jdoe:file1'],
                 rseExpression: 'tier=1',
@@ -131,39 +135,35 @@ describe('resolveRuleCreatePrefill', () => {
     });
 
     it('reports unknown DIDs and RSEs', async () => {
-        await expect(
-            resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:missing'], rseExpression: 'tier=1' })),
-        ).rejects.toEqual({
+        await expect(resolveWithAccount(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:missing'], rseExpression: 'tier=1' }))).rejects.toEqual({
             error: 'not_found',
             message: 'DID user.jdoe:missing was not found.',
         });
         await expect(
-            resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1', rses: ['NOWHERE'] })),
+            resolveWithAccount(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1', rses: ['NOWHERE'] })),
         ).rejects.toMatchObject({ error: 'not_found' });
         quotas = [];
-        await expect(
-            resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=9' })),
-        ).rejects.toMatchObject({
-            error: 'not_found',
-        });
+        await expect(resolveWithAccount(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=9' }))).rejects.toMatchObject(
+            {
+                error: 'not_found',
+            },
+        );
     });
 
     it('refuses expressions that match too many RSEs', async () => {
         quotas = Array.from({ length: MAX_PREFILL_RSES + 1 }, (_, index) => quotaRow(`RSE${index}`, 5000));
-        await expect(
-            resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: '*' })),
-        ).rejects.toMatchObject({
+        await expect(resolveWithAccount(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: '*' }))).rejects.toMatchObject({
             error: 'invalid_args',
         });
     });
 
     it('turns a login redirect into session_expired', async () => {
         fetchMockFn.mockImplementationOnce(async () => loginPageResponse());
-        await expect(
-            resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' })),
-        ).rejects.toMatchObject({
-            error: 'session_expired',
-        });
+        await expect(resolveWithAccount(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' }))).rejects.toMatchObject(
+            {
+                error: 'session_expired',
+            },
+        );
     });
 
     it('rejects wildcards, empty lists and zero copies in the schema', () => {
@@ -175,45 +175,45 @@ describe('resolveRuleCreatePrefill', () => {
 
     it('turns a malformed line into stream_error', async () => {
         fetchMockFn.mockImplementationOnce(async () => ({ ...ndjsonResponse([]), text: async () => '{not json' } as Response));
-        await expect(
-            resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' })),
-        ).rejects.toMatchObject({ error: 'stream_error' });
+        await expect(resolveWithAccount(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' }))).rejects.toMatchObject(
+            { error: 'stream_error' },
+        );
     });
 
     it('turns a line that is not an object into stream_error', async () => {
         for (const line of ['null', '42', '"text"']) {
             fetchMockFn.mockImplementationOnce(async () => ({ ...ndjsonResponse([]), text: async () => line } as Response));
             await expect(
-                resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' })),
+                resolveWithAccount(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' })),
             ).rejects.toMatchObject({ error: 'stream_error' });
         }
     });
 
     it('turns a 200 text/html reply without the redirect flag into session_expired', async () => {
         fetchMockFn.mockImplementationOnce(async () => ndjsonResponse([], { contentType: 'text/html', redirected: false }));
-        await expect(
-            resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' })),
-        ).rejects.toMatchObject({ error: 'session_expired' });
+        await expect(resolveWithAccount(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' }))).rejects.toMatchObject(
+            { error: 'session_expired' },
+        );
     });
 
     it('maps 401 to unauthorized and 403 to forbidden', async () => {
         const args = RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' });
         fetchMockFn.mockImplementationOnce(async () => ndjsonResponse([], { status: 401 }));
-        await expect(resolveRuleCreatePrefill(args)).rejects.toMatchObject({ error: 'unauthorized' });
+        await expect(resolveWithAccount(args)).rejects.toMatchObject({ error: 'unauthorized' });
         fetchMockFn.mockImplementationOnce(async () => ndjsonResponse([], { status: 403 }));
-        await expect(resolveRuleCreatePrefill(args)).rejects.toMatchObject({ error: 'forbidden' });
+        await expect(resolveWithAccount(args)).rejects.toMatchObject({ error: 'forbidden' });
     });
 
-    it('gives aborted when the signal is already aborted', async () => {
-        fetchMockFn.mockImplementationOnce(async (_url: string, init?: RequestInit) => {
-            if (init?.signal?.aborted) throw new DOMException('aborted', 'AbortError');
-            return ndjsonResponse([]);
-        });
+    it('gives aborted without fetching when the signal is already aborted', async () => {
         const controller = new AbortController();
         controller.abort();
         await expect(
-            resolveRuleCreatePrefill(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' }), controller.signal),
+            resolveWithAccount(RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' }), {
+                signal: controller.signal,
+                expectedAccount: ACCOUNT,
+            }),
         ).rejects.toMatchObject({ error: 'aborted' });
+        expect(fetchMockFn).not.toHaveBeenCalled();
     });
 
     it('limits the schema to 20 DIDs, 50 RSEs and a 500 character expression', () => {
@@ -225,5 +225,56 @@ describe('resolveRuleCreatePrefill', () => {
         expect(RuleCreatePrefillSchema.safeParse({ dids: dids(1), rseExpression: 'tier=1', rses: rses(51) }).success).toBe(false);
         expect(RuleCreatePrefillSchema.safeParse({ dids: dids(1), rseExpression: 'x'.repeat(500) }).success).toBe(true);
         expect(RuleCreatePrefillSchema.safeParse({ dids: dids(1), rseExpression: 'x'.repeat(501) }).success).toBe(false);
+    });
+});
+
+describe('resolveRuleCreatePrefill account binding', () => {
+    const args = RuleCreatePrefillSchema.parse({ dids: ['user.jdoe:file1'], rseExpression: 'tier=1' });
+    const headerOf = (call: [string, RequestInit?]) => (call[1]?.headers as Record<string, string> | undefined)?.[ASSISTANT_ACCOUNT_HEADER];
+
+    it('sends the expected account on the DID and quota requests', async () => {
+        await resolveRuleCreatePrefill(args, { expectedAccount: ACCOUNT });
+        expect(fetchMockFn).toHaveBeenCalledTimes(2);
+        for (const call of fetchMockFn.mock.calls) expect(headerOf(call as [string, RequestInit?])).toBe(ACCOUNT);
+    });
+
+    it('fails closed without an account and fetches nothing', async () => {
+        await expect(resolveRuleCreatePrefill(args, {})).rejects.toMatchObject({ error: 'denied_by_policy' });
+        await expect(resolveRuleCreatePrefill(args)).rejects.toMatchObject({ error: 'denied_by_policy' });
+        expect(fetchMockFn).not.toHaveBeenCalled();
+    });
+
+    it('maps a 409 account_mismatch to denied_by_policy with the changed-account message', async () => {
+        fetchMockFn.mockImplementationOnce(async () => {
+            const response = ndjsonResponse([{ status: 'error', errorType: 'account_mismatch' }], { status: 409, contentType: 'application/json' });
+            return response;
+        });
+        await expect(resolveRuleCreatePrefill(args, { expectedAccount: ACCOUNT })).rejects.toEqual({
+            error: 'denied_by_policy',
+            message: ACCOUNT_CHANGED_READ_MESSAGE,
+            errorType: 'account_mismatch',
+        });
+    });
+
+    it('does not treat another 409 as an account change', async () => {
+        fetchMockFn.mockImplementationOnce(async () => ndjsonResponse([], { status: 409 }));
+        await expect(resolveRuleCreatePrefill(args, { expectedAccount: ACCOUNT })).rejects.toMatchObject({ error: 'rucio_error' });
+    });
+
+    it('passes the signal to both fetches', async () => {
+        const controller = new AbortController();
+        await resolveRuleCreatePrefill(args, { expectedAccount: ACCOUNT, signal: controller.signal });
+        for (const call of fetchMockFn.mock.calls) expect((call as [string, RequestInit?])[1]?.signal).toBe(controller.signal);
+    });
+
+    it('gives aborted instead of a result when the signal aborts while the fetches run', async () => {
+        const controller = new AbortController();
+        fetchMockFn.mockImplementationOnce(async (url: string) => {
+            controller.abort();
+            return ndjsonResponse(dids[new URLSearchParams(url.split('?')[1]).get('query') ?? ''] ?? []);
+        });
+        await expect(resolveRuleCreatePrefill(args, { expectedAccount: ACCOUNT, signal: controller.signal })).rejects.toMatchObject({
+            error: 'aborted',
+        });
     });
 });

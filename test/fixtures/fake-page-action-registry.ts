@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type {
     AssistantPageActionRegistryPort,
+    PageActionContext,
     PageActionInfo,
     PageActionRegistration,
 } from '@/lib/core/port/secondary/assistant-page-action-registry-port';
@@ -43,12 +44,12 @@ export class FakePageActionRegistry implements AssistantPageActionRegistryPort {
         }));
     }
 
-    async invoke(name: string, args: unknown): Promise<string> {
+    async invoke(name: string, args: unknown, context?: PageActionContext): Promise<string> {
         const action = this.actions.get(name);
         if (!action) throw { error: 'not_found', message: `This page has no action named ${name}.` };
         const parsed = action.schema.safeParse(args);
         if (!parsed.success) throw { error: 'invalid_args', message: z.prettifyError(parsed.error) };
-        return action.apply(parsed.data);
+        return action.apply(parsed.data, context);
     }
 
     waitForActions(timeoutMs: number): Promise<PageActionInfo[]> {

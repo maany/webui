@@ -29,7 +29,7 @@ describe('page action registry', () => {
             { name: 'rule_create.prefill', description: 'Prefill', inputJsonSchema: expect.objectContaining({ type: 'object' }), risk: 'read' },
         ]);
         await expect(registry.invoke('rule_create.prefill', { dids: ['user.root:a'], copies: '2' })).resolves.toBe('prefilled 1 DIDs, 2 copies');
-        expect(apply).toHaveBeenCalledWith({ dids: ['user.root:a'], copies: 2 });
+        expect(apply).toHaveBeenCalledWith({ dids: ['user.root:a'], copies: 2 }, undefined);
         unregister();
         expect(registry.list()).toEqual([]);
     });

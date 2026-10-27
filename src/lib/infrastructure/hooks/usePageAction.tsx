@@ -32,7 +32,7 @@ export function usePageAction<I>(action: PageActionRegistration<I>, options: Use
             name,
             description,
             schema: latest.current.schema,
-            apply: (args: I) => latest.current.apply(args),
+            apply: (args: I, context) => latest.current.apply(args, context),
             ...(risk ? { risk } : {}),
         });
     }, [registry, enabled, name, description, risk]);

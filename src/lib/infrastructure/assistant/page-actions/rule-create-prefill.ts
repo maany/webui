@@ -11,6 +11,7 @@ import {
     hasOptionsErrors,
 } from '@/component-library/pages/Rule/create/create-rule-validation';
 import { isToolError, toolError } from '@/lib/infrastructure/assistant/page-tool-errors';
+import type { PageActionContext } from '@/lib/core/port/secondary/assistant-page-action-registry-port';
 import { fetchNdjsonRows } from './fetch-ndjson';
 
 export const RULE_CREATE_PREFILL_ACTION = 'rule_create.prefill';
@@ -82,14 +83,17 @@ function plural(count: number, one: string, many: string): string {
     return `${count} ${count === 1 ? one : many}`;
 }
 
-async function fetchDID(did: string, signal?: AbortSignal): Promise<ListDIDsViewModel> {
+async function fetchDID(did: string, context: PageActionContext): Promise<ListDIDsViewModel> {
     const separator = did.indexOf(':');
     const scope = did.slice(0, separator);
     const name = did.slice(separator + 1);
     const query = new URLSearchParams({ query: `${scope}:${name}`, type: DIDType.ALL });
     let rows: ListDIDsViewModel[];
     try {
-        rows = await fetchNdjsonRows<ListDIDsViewModel>(`/api/feature/list-dids?${query.toString()}`, { signal });
+        rows = await fetchNdjsonRows<ListDIDsViewModel>(`/api/feature/list-dids?${query.toString()}`, {
+            signal: context.signal,
+            expectedAccount: context.expectedAccount,
+        });
     } catch (thrown) {
         if (isToolError(thrown) && thrown.error === 'not_found') throw toolError('not_found', `DID ${did} was not found.`);
         throw thrown;
@@ -99,14 +103,15 @@ async function fetchDID(did: string, signal?: AbortSignal): Promise<ListDIDsView
     return match;
 }
 
-async function fetchQuotas(rseExpression: string, dids: ListDIDsViewModel[], signal?: AbortSignal): Promise<RSEAccountUsageLimitViewModel[]> {
+async function fetchQuotas(rseExpression: string, dids: ListDIDsViewModel[], context: PageActionContext): Promise<RSEAccountUsageLimitViewModel[]> {
     let rows: RSEAccountUsageLimitViewModel[];
     try {
         rows = await fetchNdjsonRows<RSEAccountUsageLimitViewModel>('/api/feature/list-account-rse-quotas', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ rseExpression, requestedDIDs: dids }),
-            signal,
+            signal: context.signal,
+            expectedAccount: context.expectedAccount,
         });
     } catch (thrown) {
         if (isToolError(thrown) && thrown.error === 'not_found') return [];
@@ -158,13 +163,18 @@ function describePrefill(parameters: CreateRuleParameters, step: number): string
 }
 
 /** Fetches what the wizard stores (full view models with sizes and quotas) and builds its state. */
-export async function resolveRuleCreatePrefill(args: RuleCreatePrefillArgs, signal?: AbortSignal): Promise<RuleCreatePrefillResult> {
+export async function resolveRuleCreatePrefill(args: RuleCreatePrefillArgs, context: PageActionContext = {}): Promise<RuleCreatePrefillResult> {
+    // Fail closed: without the account the server cannot check the session still matches it
+    if (!context.expectedAccount) throw toolError('denied_by_policy', 'The signed-in account is unknown, so nothing was read.');
+    const aborted = () => toolError('aborted', 'The request was stopped.');
+    if (context.signal?.aborted) throw aborted();
     const dids: ListDIDsViewModel[] = [];
     for (const did of [...new Set(args.dids)]) {
-        dids.push(await fetchDID(did, signal));
+        dids.push(await fetchDID(did, context));
     }
 
-    const rses = selectRSEs(await fetchQuotas(args.rseExpression, dids, signal), args);
+    const rses = selectRSEs(await fetchQuotas(args.rseExpression, dids, context), args);
+    if (context.signal?.aborted) throw aborted();
 
     const parameters: CreateRuleParameters = {
         ...getEmptyCreateRuleParameters(),

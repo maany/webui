@@ -9,11 +9,17 @@ export interface PageActionInfo {
     risk?: ToolRisk;
 }
 
+/** What the running turn gives an action: its abort signal and the `account@vo` the turn started under. */
+export interface PageActionContext {
+    signal?: AbortSignal;
+    expectedAccount?: string;
+}
+
 export interface PageActionRegistration<I = unknown> {
     name: string;
     description: string;
     schema: z.ZodType<I>;
-    apply(args: I): Promise<string>; // short human/model readable outcome
+    apply(args: I, context?: PageActionContext): Promise<string>; // short human/model readable outcome
     risk?: ToolRisk; // defaults to 'read'; a write or high action is refused by the page_action tool
 }
 
@@ -23,6 +29,6 @@ export interface AssistantPageActionRegistryPort {
     setDescriber(describe: (() => string) | null): void;
     describe(): string | undefined;
     list(): PageActionInfo[];
-    invoke(name: string, args: unknown): Promise<string>; // throws ToolError-shaped error on invalid args / unknown action
+    invoke(name: string, args: unknown, context?: PageActionContext): Promise<string>; // throws ToolError-shaped error on invalid args / unknown action
     waitForActions(timeoutMs: number): Promise<PageActionInfo[]>; // resolves on first registration after a navigation or timeout
 }

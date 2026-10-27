@@ -56,7 +56,7 @@ export function createPageActionRegistry(): AssistantPageActionRegistryPort {
             }
         },
         list,
-        async invoke(name, args) {
+        async invoke(name, args, context) {
             const action = actions.get(name);
             if (!action) {
                 const notFound: ToolError = { error: 'not_found', message: `This page has no action named ${name}.` };
@@ -72,7 +72,7 @@ export function createPageActionRegistry(): AssistantPageActionRegistryPort {
                 const invalid: ToolError = { error: 'invalid_args', message: z.prettifyError(parsed.error) };
                 throw invalid;
             }
-            return action.apply(parsed.data);
+            return action.apply(parsed.data, context);
         },
         waitForActions(timeoutMs) {
             return new Promise<PageActionInfo[]>(resolve => {

@@ -47,7 +47,7 @@ describe('usePageAction', () => {
         rerender({ apply: second });
 
         await expect(registry.invoke('demo.search', { query: 'x' })).resolves.toBe('second');
-        expect(second).toHaveBeenCalledWith({ query: 'x' });
+        expect(second).toHaveBeenCalledWith({ query: 'x' }, undefined);
         expect(first).not.toHaveBeenCalled();
         expect(registry.registerCount).toBe(1);
     });

@@ -41,7 +41,7 @@ export function createPageActionTool(): RegisteredTool<PageActionInput> {
             if (info && (info.risk ?? 'read') !== 'read')
                 return toolError('denied_by_policy', 'This page action changes data and cannot run from Rucio bot yet.');
             try {
-                const outcome = await ctx.pages.invoke(input.name, input.args ?? {});
+                const outcome = await ctx.pages.invoke(input.name, input.args ?? {}, { signal: ctx.signal, expectedAccount: ctx.accountKey });
                 if (isMobileViewport()) ctx.minimizePanel?.();
                 const result: PageActionResult = { action: input.name, outcome, actions: ctx.pages.list() };
                 return result;
