@@ -60,7 +60,12 @@ function mockHooks({
             : [],
         resolveApproval,
     } as unknown as UseAssistantResult;
-    jest.mocked(useAssistantConfig).mockReturnValue({ config: { ...DEFAULT_ASSISTANT_CONFIG, writePolicyCap }, isLoading: false, ...configState });
+    jest.mocked(useAssistantConfig).mockReturnValue({
+        config: { ...DEFAULT_ASSISTANT_CONFIG, writePolicyCap },
+        isLoading: false,
+        isLoaded: true,
+        ...configState,
+    });
     jest.mocked(useAssistantSettings).mockReturnValue({ settings: { toolPolicies: {} }, update: jest.fn() } as never);
 }
 
@@ -143,6 +148,30 @@ describe('ToolApprovalSlot', () => {
             />,
         );
         expect(screen.getByText('Approved')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    });
+
+    it('says an approved call did not run when its approval could not be saved', () => {
+        mockHooks({ pending: false });
+        const denied: ToolCallPart = {
+            ...part('denied'),
+            error: { error: 'rejected_by_user', message: 'The approval could not be recorded, so the action did not run. Try again.' },
+        };
+        renderInPanel(
+            <ToolApprovalSlot
+                part={denied}
+                approval={{
+                    type: 'approval',
+                    toolCallId: 'call_1',
+                    decision: 'approved',
+                    scope: 'once',
+                    approver: 'jdoe@def',
+                    at: '2026-10-25T12:00:00.000Z',
+                }}
+            />,
+        );
+        expect(screen.getByText('The approval could not be recorded, so the action did not run. Try again.')).toBeInTheDocument();
+        expect(screen.queryByText('You approved this action.')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
     });
 

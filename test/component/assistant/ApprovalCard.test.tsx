@@ -56,6 +56,15 @@ describe('ApprovalCard', () => {
         expect(onResolve).toHaveBeenCalledWith('approved', 'conversation');
     });
 
+    it('hides "Allow for this conversation" itself for high risk and for invalid arguments', () => {
+        const { rerender } = render(<ApprovalCard {...base} risk="high" allowConversationScope onResolve={jest.fn()} />);
+        expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+        rerender(<ApprovalCard {...base} allowConversationScope invalidArgsMessage="copies must be a number" onResolve={jest.fn()} />);
+        expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+        rerender(<ApprovalCard {...base} allowConversationScope onResolve={jest.fn()} />);
+        expect(screen.getByRole('checkbox')).toBeInTheDocument();
+    });
+
     it('a rejection is always once', () => {
         const onResolve = jest.fn();
         render(<ApprovalCard {...base} allowConversationScope onResolve={onResolve} />);

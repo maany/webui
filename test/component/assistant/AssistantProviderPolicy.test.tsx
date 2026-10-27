@@ -6,9 +6,10 @@ const mockProvider = {
     via: 'relay',
     contextWindow: 100_000,
 };
-const mockState: { config: object; isLoading: boolean; error?: Error; isReady: boolean; role: string } = {
+const mockState: { config: object; isLoading: boolean; isLoaded: boolean; error?: Error; isReady: boolean; role: string } = {
     config: {},
     isLoading: false,
+    isLoaded: true,
     isReady: true,
     role: 'admin',
 };
@@ -20,7 +21,7 @@ jest.mock('next/navigation', () => ({
 }));
 jest.mock('@/lib/infrastructure/hooks/usePermissions', () => ({ usePermissions: () => ({ isReady: mockState.isReady }) }));
 jest.mock('@/lib/infrastructure/hooks/useAssistantConfig', () => ({
-    useAssistantConfig: () => ({ config: mockState.config, isLoading: mockState.isLoading, error: mockState.error }),
+    useAssistantConfig: () => ({ config: mockState.config, isLoading: mockState.isLoading, isLoaded: mockState.isLoaded, error: mockState.error }),
 }));
 jest.mock('@/lib/core/services/assistant-provider', () => ({ resolveActiveProvider: () => mockProvider }));
 jest.mock('@/lib/infrastructure/assistant/duckdb', () => ({ getAssistantDataHandleStore: jest.fn() }));
@@ -97,6 +98,7 @@ describe('AssistantProvider live policy for writes', () => {
         localStorage.clear();
         mockState.config = DEFAULT_ASSISTANT_CONFIG;
         mockState.isLoading = false;
+        mockState.isLoaded = true;
         mockState.error = undefined;
         mockState.isReady = true;
         mockState.role = 'admin';
@@ -106,12 +108,24 @@ describe('AssistantProvider live policy for writes', () => {
         mockState.isLoading = true;
         const { policyFor } = await startTurn(flagsWith());
         expect(policyFor('create_rule')).toBe('deny');
+        expect(policyFor('list_rules')).toBe('allow');
+        expect(policyFor('delete_account')).toBe('deny');
     });
 
     it('denies a write tool when the operator config failed to load', async () => {
         mockState.error = new Error('down');
         const { policyFor } = await startTurn(flagsWith());
         expect(policyFor('create_rule')).toBe('deny');
+        expect(policyFor('list_rules')).toBe('allow');
+        expect(policyFor('delete_account')).toBe('deny');
+    });
+
+    it('denies a write tool when the config query is paused: not loading and no data yet', async () => {
+        mockState.isLoaded = false;
+        const { policyFor } = await startTurn(flagsWith());
+        expect(policyFor('create_rule')).toBe('deny');
+        expect(policyFor('list_rules')).toBe('allow');
+        expect(policyFor('delete_account')).toBe('deny');
     });
 
     it('asks for a write tool once the config is loaded with the ask cap', async () => {

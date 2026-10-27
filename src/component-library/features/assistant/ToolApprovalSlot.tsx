@@ -84,6 +84,7 @@ export function ToolApprovalSlot({ part, approval }: ToolApprovalSlotProps) {
                 sensitiveArgs={spec?.sensitiveArgs}
                 allowConversationScope={false}
                 decision={decision}
+                decisionNote={decision === 'approved' && part.status === 'denied' ? part.error?.message : undefined}
             />
         );
     }

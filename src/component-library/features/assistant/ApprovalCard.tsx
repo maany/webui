@@ -27,6 +27,8 @@ export interface ApprovalCardProps {
     invalidArgsMessage?: string;
     /** Set for a decided or expired call: the card is read-only. */
     decision?: ApprovalCardDecision;
+    /** Replaces the standard note of a decided card, e.g. when an approved call did not run. */
+    decisionNote?: string;
     onResolve?: (decision: 'approved' | 'rejected', scope: 'once' | 'conversation') => void;
     className?: string;
 }
@@ -52,6 +54,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
     sensitiveArgs,
     invalidArgsMessage,
     decision,
+    decisionNote,
     onResolve,
     className,
 }) => {
@@ -63,6 +66,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
     const pending = decision === undefined;
     const highRisk = risk === 'high';
     const invalid = invalidArgsMessage !== undefined;
+    const offerConversationScope = allowConversationScope && !highRisk && !invalid;
 
     React.useEffect(() => {
         if (pending) rootRef.current?.scrollIntoView?.({ block: 'nearest' });
@@ -73,7 +77,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
     const resolve = (choice: 'approved' | 'rejected') => {
         if (submitted || !onResolve) return;
         setSubmitted(true);
-        onResolve(choice, choice === 'approved' && allowConversationScope && allowConversation ? 'conversation' : 'once');
+        onResolve(choice, choice === 'approved' && offerConversationScope && allowConversation ? 'conversation' : 'once');
     };
 
     const title = invalid
@@ -123,10 +127,10 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
             {policyReason && !invalid && <p className="text-sm text-neutral-600 dark:text-neutral-400">{policyReason}</p>}
 
             {decision ? (
-                <p className="text-sm text-neutral-600 dark:text-neutral-400">{DECISION_COPY[decision].note}</p>
+                <p className="text-sm text-neutral-600 dark:text-neutral-400">{decisionNote ?? DECISION_COPY[decision].note}</p>
             ) : (
                 <>
-                    {allowConversationScope && !invalid && (
+                    {offerConversationScope && (
                         <div className="flex min-h-11 items-center gap-3">
                             <Checkbox
                                 id={scopeId}

@@ -47,7 +47,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     const { data: session } = useSession();
     const accountKey = toAccountKey(session?.user?.rucioAccount, session?.user?.rucioVO);
     const role = session?.user?.role;
-    const { config, isLoading: configLoading, error: configError } = useAssistantConfig();
+    const { config, isLoading: configLoading, isLoaded: configLoaded, error: configError } = useAssistantConfig();
     const { settings } = useAssistantSettings();
     const flags = useFeatureFlags();
     const { isReady } = usePermissions();
@@ -78,7 +78,13 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     settingsRef.current = settings;
     // The gate reads this on every tool call: writes fail closed (undefined caps) until the operator config has loaded.
     const policyCapsRef = useRef<PolicyCaps | undefined>(undefined);
-    policyCapsRef.current = configLoading || configError ? undefined : config;
+    policyCapsRef.current = configLoading || configError || !configLoaded ? undefined : config;
+
+    const isVisible = (spec: Pick<ToolSpec, 'requires' | 'risk'>): boolean =>
+        !!flags && toolVisibility(spec, { flags, role, permissionsReady: isReady }).visible;
+    // The live gate reads the latest flags, role and permix readiness, so a turn already running sees changes.
+    const isVisibleRef = useRef(isVisible);
+    isVisibleRef.current = isVisible;
 
     const makePolicyFor: AssistantControllerDeps['makePolicyFor'] = getConversationAllow =>
         createPolicyFor(
@@ -87,11 +93,6 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
             getConversationAllow,
             { isVisible: spec => isVisibleRef.current(spec) },
         );
-    const isVisible = (spec: Pick<ToolSpec, 'requires' | 'risk'>): boolean =>
-        !!flags && toolVisibility(spec, { flags, role, permissionsReady: isReady }).visible;
-    // The live gate reads the latest flags, role and permix readiness, so a turn already running sees changes.
-    const isVisibleRef = useRef(isVisible);
-    isVisibleRef.current = isVisible;
     // Live checks shared by find_tools, refresh_handle and the Refresh button on SQL results.
     const isToolVisible = (name: string): boolean => {
         const tool = getTool(name);
