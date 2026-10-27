@@ -21,6 +21,7 @@ import {
     addApprovalPart,
     applyRunnerUpdate,
     closeReasoning,
+    closeRunningToolCalls,
     createAssistantMessage,
     createId,
     expireStaleParts,
@@ -36,6 +37,7 @@ import {
 import { buildSystemPrompt, COMPACTION_SYSTEM_PROMPT, transcriptForSummary } from '@/lib/infrastructure/assistant/system-prompt';
 import type { AgentRunner, AgentRunnerDeps } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
 import { REJECTED_BY_USER, isInvalidArgsMarker } from '@/lib/infrastructure/assistant/tanstack-tools';
+import { interruptedToolError } from '@/lib/infrastructure/assistant/tool-error';
 import { getTool } from '@/lib/infrastructure/assistant/tool-registry';
 import type { RegisteredTool, ToolExecutionContext } from '@/lib/infrastructure/assistant/tool-types';
 
@@ -605,7 +607,13 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 controller.abort();
                 if (assistantRef.current?.id === assistant.id) approvalsRef.current.expireOpen();
                 if (saveFailed) setPersistent(false);
-                const message = applyRunnerUpdate(readMessage(), { type: 'finished', status: finalStatus, error: finalError });
+                // The runner closes its in-flight calls into a stream this turn no longer reads, so close them here
+                // with the runner's wording: a read was interrupted, anything else may have landed.
+                const why = saveFailed ? 'save-failed' : finalStatus === 'stopped' ? 'stopped' : 'error';
+                const riskOf = (toolName: string) =>
+                    depsRef.current.visibleTools().find(tool => tool.spec.name === toolName)?.spec.risk ?? getTool(toolName)?.spec.risk;
+                const closed = closeRunningToolCalls(readMessage(), part => interruptedToolError(riskOf(part.toolName), why));
+                const message = applyRunnerUpdate(closed, { type: 'finished', status: finalStatus, error: finalError });
                 storeMessage(message);
                 if (isCurrent()) replaceMessage(message);
             }

@@ -18,7 +18,7 @@ import { CONTEXT_OVERFLOW_ERROR, SESSION_EXPIRED_ERROR } from './runner-errors';
 import { formatUserTurn } from './system-prompt';
 import { maskSensitiveArgs } from './approvals';
 import { getTool } from './tool-registry';
-import { MAY_HAVE_LANDED } from './tool-error';
+import { interruptedToolError } from './tool-error';
 import { REJECTED_BY_USER, buildTanstackTools, createPolicyMiddleware, createToolFilterMiddleware, deniedByPolicy } from './tanstack-tools';
 import { isToolError, type RegisteredTool, type ToolExecutionContext } from './tool-types';
 
@@ -408,11 +408,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
         const closeRunningCalls = (why: 'stopped' | 'error') => {
             running.forEach(({ toolName, args, startedAt }, toolCallId) => {
                 announce(toolCallId, toolName, args);
-                const lead = why === 'stopped' ? 'Stopped by the user.' : 'The turn ended with an error.';
-                const error: ToolError =
-                    specFor(toolName)?.risk === 'read'
-                        ? { error: 'aborted', message: why === 'stopped' ? 'The tool call was stopped.' : 'The tool call was interrupted.' }
-                        : { error: 'aborted', message: `${lead} ${MAY_HAVE_LANDED}` };
+                const error = interruptedToolError(specFor(toolName)?.risk, why);
                 const durationMs = Date.now() - startedAt;
                 channel.push({ type: 'tool-result', toolCallId, result: error, error, durationMs });
                 d.emit({ type: 'tool-call-finished', turnId: input.turnId, toolCallId, durationMs, error, at: Date.now() });

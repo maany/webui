@@ -149,6 +149,18 @@ export function finalizeAssistantMessage(
     return { ...message, parts };
 }
 
+/**
+ * Closes every tool call still running with the error `errorFor` gives it. Used when the turn stops reading the
+ * runner, so the runner's own close of those calls never arrives. Calls waiting for approval are left to the caller.
+ */
+export function closeRunningToolCalls(message: ChatMessage, errorFor: (part: ToolCallPart) => ToolError): ChatMessage {
+    if (!message.parts.some(part => part.type === 'tool-call' && part.status === 'running')) return message;
+    const parts: MessagePart[] = message.parts.map(part =>
+        part.type === 'tool-call' && part.status === 'running' ? { ...part, status: 'error', error: errorFor(part) } : part,
+    );
+    return { ...message, parts };
+}
+
 /** Sets the duration of the last reasoning part. */
 export function closeReasoning(message: ChatMessage, durationMs: number): ChatMessage {
     for (let i = message.parts.length - 1; i >= 0; i--) {
