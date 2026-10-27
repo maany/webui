@@ -134,9 +134,10 @@ export const updateAccountTool = defineWriteTool<UpdateAccountInput>({
     name: 'update_account',
     domain: 'accounts',
     description:
-        "Change an account's email, type or status. options.status ACTIVE reactivates, SUSPENDED suspends. Deleting goes through delete_account.",
+        "Change an account's email, type or status. options.status ACTIVE reactivates, SUSPENDED suspends. Deleting goes through delete_account. " +
+        'High risk: suspending locks the account out and reactivating restores its access.',
     input: UpdateAccountSchema,
-    risk: 'write',
+    risk: 'high',
     requires: accountWriteRequires(),
     executor: 'feature',
     output: 'object',
@@ -187,9 +188,9 @@ export const updateAccountAttributeTool = defineWriteTool<UpdateAccountAttribute
 export const deleteAccountAttributeTool = defineWriteTool<DeleteAccountAttributeInput>({
     name: 'delete_account_attribute',
     domain: 'accounts',
-    description: 'Remove an attribute from an account.',
+    description: 'Remove an attribute from an account. High risk: removing admin takes Rucio admin rights away from the account.',
     input: DeleteAccountAttributeSchema,
-    risk: 'write',
+    risk: 'high',
     requires: accountWriteRequires(),
     executor: 'feature',
     output: 'object',

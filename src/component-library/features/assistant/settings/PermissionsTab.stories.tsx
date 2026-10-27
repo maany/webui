@@ -13,7 +13,7 @@ const TOOLS: PermissionToolInfo[] = [
     { name: 'add_did', domain: 'dids', description: 'Create a dataset or container', risk: 'write', requires: { flags: ['dids.mutate'] } },
     { name: 'list_rules', domain: 'rules', description: 'List replication rules', risk: 'read', requires: { flags: ['rules'] } },
     { name: 'create_rule', domain: 'rules', description: 'Create a replication rule', risk: 'write', requires: { flags: ['rules.create'] } },
-    { name: 'update_rule', domain: 'rules', description: 'Change, approve or deny a rule', risk: 'write', requires: { flags: ['rules.approve'] } },
+    { name: 'update_rule', domain: 'rules', description: 'Change, approve or deny a rule', risk: 'high', requires: { flags: ['rules.approve'] } },
     { name: 'list_accounts', domain: 'accounts', description: 'List accounts', risk: 'read', requires: { flags: ['accounts'], role: Role.ADMIN } },
     {
         name: 'delete_account',

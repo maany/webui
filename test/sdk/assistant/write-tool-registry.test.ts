@@ -14,6 +14,8 @@ import { ALL_FLAGS_ON, SAMPLE_WRITE_ARGS, flagsWithout } from 'test/fixtures/ass
 const FEATURE_DIR = path.resolve(__dirname, '../../../src/app/api/feature');
 const EM_DASH = String.fromCharCode(0x2014);
 // add-account-attribute and update-account-attribute are high risk because admin=True makes the account a Rucio admin.
+// update-account can suspend or reactivate an account, delete-account-attribute can strip admin, and update-rule
+// approves or denies rules waiting for approval.
 const HIGH_RISK = [
     'declare-bad-replicas',
     'delete-account',
@@ -21,6 +23,9 @@ const HIGH_RISK = [
     'add-account-identity',
     'add-account-attribute',
     'update-account-attribute',
+    'update-account',
+    'delete-account-attribute',
+    'update-rule',
 ];
 
 interface RouteInfo {

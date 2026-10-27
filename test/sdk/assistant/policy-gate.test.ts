@@ -6,7 +6,13 @@ import { createPolicyFor, type PolicyCaps } from '@/lib/infrastructure/assistant
 import { describePolicyReason } from '@/lib/infrastructure/assistant/policy-reason';
 import { registerTools, resetToolRegistryForTests } from '@/lib/infrastructure/assistant/tool-registry';
 import type { RegisteredTool } from '@/lib/infrastructure/assistant/tool-types';
-import { addAccountAttributeTool, updateAccountAttributeTool } from '@/lib/infrastructure/assistant/tools/accounts';
+import {
+    addAccountAttributeTool,
+    deleteAccountAttributeTool,
+    updateAccountAttributeTool,
+    updateAccountTool,
+} from '@/lib/infrastructure/assistant/tools/accounts';
+import { updateRuleTool } from '@/lib/infrastructure/assistant/tools/rules';
 import { ALL_FLAGS_ON, flagsWithout } from 'test/fixtures/assistant-write-fixtures';
 
 function tool(name: string, risk: ToolSpec['risk'], domain: ToolSpec['domain'], requires: ToolSpec['requires']): RegisteredTool<unknown> {
@@ -104,6 +110,19 @@ describe('createPolicyFor with the phase 4 options', () => {
         state.conversationAllow = ['update_account_attribute'];
         expect(updateAccountAttributeTool.spec.risk).toBe('high');
         expect(gate()('update_account_attribute')).toBe('ask');
+    });
+
+    it.each([
+        ['update_account', 'suspends, reactivates or retypes an account', updateAccountTool],
+        ['delete_account_attribute', 'can strip admin from an account', deleteAccountAttributeTool],
+        ['update_rule', 'approves or denies rules waiting for approval', updateRuleTool],
+    ])('always asks before %s (%s), whatever the prefs, caps or scope', (name, _why, registered) => {
+        registerTools([registered as RegisteredTool<unknown>]);
+        state.config = { writePolicyCap: 'allow', highRiskPolicyCap: 'ask' };
+        state.prefs = { [name]: 'allow' };
+        state.conversationAllow = [name];
+        expect(registered.spec.risk).toBe('high');
+        expect(gate()(name)).toBe('ask');
     });
 
     it('denies tools that are not visible', () => {

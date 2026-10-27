@@ -71,9 +71,9 @@ export const updateRuleTool = defineWriteTool<UpdateRuleInput>({
     domain: 'rules',
     description:
         'Change a replication rule. options.lifetime: seconds from now, null removes the expiry. options.approve: true approves, false denies a rule ' +
-        'waiting for approval. options.comment and options.priority. Give at least one option.',
+        'waiting for approval. options.comment and options.priority. Give at least one option. High risk: it can approve or deny rules.',
     input: UpdateRuleSchema,
-    risk: 'write',
+    risk: 'high',
     requires: { flags: ['rules.approve'] },
     executor: 'feature',
     output: 'object',
