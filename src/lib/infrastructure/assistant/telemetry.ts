@@ -53,6 +53,8 @@ interface TurnState {
     model: string;
     /** End of the last LLM step or tool call; start of the next LLM span. */
     boundary: number;
+    /** User id bound at turn start, so trailing spans after an account switch keep the right account. */
+    userId?: string;
     lastOutput?: string;
 }
 
@@ -156,8 +158,14 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
         span.setAttribute(A.ATTR_LANGFUSE_OBSERVATION_STATUS_MESSAGE, message);
     };
 
-    const setUser = (span: Span) => {
-        const userId = options.identity.userId();
+    const currentUser = (): string | undefined => {
+        try {
+            return options.identity.userId();
+        } catch {
+            return undefined;
+        }
+    };
+    const setUser = (span: Span, userId: string | undefined = currentUser()) => {
         if (userId) {
             span.setAttribute(A.ATTR_USER_ID, userId);
             span.setAttribute(A.ATTR_LANGFUSE_USER_ID, userId);
@@ -186,7 +194,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
         try {
             endToolsOfTurn(turnId, at, 'aborted');
             attempt(() => turn.span.setAttribute(A.ATTR_RUCIO_TURN_STATUS, 'aborted'));
-            attempt(() => setUser(turn.span));
+            attempt(() => setUser(turn.span, turn.userId));
             attempt(() => markError(turn.span, 'aborted', 'aborted'));
             attempt(() => turn.span.end(epochMillisToHrTime(at)));
         } finally {
@@ -235,6 +243,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                     providerKind: event.providerKind,
                     model: event.model,
                     boundary: event.at,
+                    userId: event.accountKey ?? currentUser(),
                 });
                 turnByConversation.set(event.conversationId, event.turnId);
                 return;
@@ -420,7 +429,7 @@ export function createTelemetryMapper(options: TelemetryMapperOptions): Telemetr
                             turn.span.setAttribute(A.ATTR_LANGFUSE_OBSERVATION_OUTPUT, turn.lastOutput);
                         }
                     });
-                    attempt(() => setUser(turn.span));
+                    attempt(() => setUser(turn.span, turn.userId));
                     attempt(() => {
                         if (event.status === 'error') {
                             const message = event.error ? content(event.error) : undefined;
@@ -478,6 +487,8 @@ export interface StartAssistantTelemetryOptions {
 
 export interface AssistantTelemetry {
     handle(event: AssistantEvent): void;
+    /** Ends every open span now (account switch): a later event of those turns is dropped. */
+    endAll(): void;
     forceFlush(): Promise<void>;
     shutdown(): Promise<void>;
 }
@@ -518,6 +529,13 @@ export function startAssistantTelemetry(options: StartAssistantTelemetryOptions)
             }
             try {
                 mapper.handle(event);
+            } catch {
+                // Telemetry must never break a chat turn.
+            }
+        },
+        endAll() {
+            try {
+                mapper.endAll(Date.now());
             } catch {
                 // Telemetry must never break a chat turn.
             }

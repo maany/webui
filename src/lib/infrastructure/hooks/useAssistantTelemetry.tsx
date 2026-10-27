@@ -25,7 +25,7 @@ export interface UseAssistantTelemetryInput {
     /** Operator telemetry config, or undefined while the config is loading. */
     config: AssistantConfig['telemetry'] | undefined;
     settings: AssistantSettings;
-    /** `${account}@${vo}` of the open conversation, if any. */
+    /** `${account}@${vo}` of the signed-in account, if any. */
     accountKey: string | undefined;
 }
 
@@ -112,6 +112,27 @@ export function useAssistantTelemetry({ config, settings, accountKey }: UseAssis
             telemetry?.shutdown().catch(() => undefined);
         };
     }, [targetsKey]);
+
+    // Account switch: spans and queued events of the previous account must not be stamped with, or sent
+    // under, the new one. Open spans end now (each keeps the account it started under) and the queue is dropped.
+    const previousAccountRef = useRef<string | undefined>(accountKey);
+    useEffect(() => {
+        if (previousAccountRef.current === accountKey) {
+            return;
+        }
+        previousAccountRef.current = accountKey;
+        if (pendingRef.current) {
+            pendingRef.current = [];
+        }
+        const telemetry = telemetryRef.current;
+        if (telemetry) {
+            try {
+                telemetry.endAll();
+            } catch {
+                // Telemetry must never break the assistant.
+            }
+        }
+    }, [accountKey]);
 
     return useCallback((event: AssistantEvent) => {
         const telemetry = telemetryRef.current;

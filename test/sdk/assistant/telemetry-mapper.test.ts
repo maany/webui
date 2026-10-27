@@ -279,6 +279,35 @@ describe('createTelemetryMapper', () => {
         expect(tool.events.map(e => e.name)).toEqual(['tool.approval']);
     });
 
+    it('stamps a turn with the account it started under, even when the account switched before it finished (I7)', () => {
+        let active = 'alice@def';
+        const { mapper, byName } = setup('metadata', { userId: () => active });
+        mapper.handle({ ...(TURN[0] as Extract<AssistantEvent, { type: 'turn-started' }>), accountKey: 'alice@def' });
+        active = 'bob@def';
+        mapper.handle(TURN[7]);
+        const root = byName('invoke_agent Rucio bot');
+        expect(root.attributes['user.id']).toBe('alice@def');
+        expect(root.attributes['langfuse.user.id']).toBe('alice@def');
+    });
+
+    it('binds the user id at turn start when the event carries no account (I7)', () => {
+        let active: string | undefined = 'alice@def';
+        const { mapper, byName } = setup('metadata', { userId: () => active });
+        mapper.handle(TURN[0]);
+        active = undefined;
+        mapper.handle(TURN[7]);
+        expect(byName('invoke_agent Rucio bot').attributes['user.id']).toBe('alice@def');
+    });
+
+    it('keeps the start account on a turn aborted by endAll after an account switch (I7)', () => {
+        let active = 'alice@def';
+        const { mapper, byName } = setup('metadata', { userId: () => active });
+        mapper.handle({ ...(TURN[0] as Extract<AssistantEvent, { type: 'turn-started' }>), accountKey: 'alice@def' });
+        active = 'bob@def';
+        mapper.endAll(3000);
+        expect(byName('invoke_agent Rucio bot').attributes['user.id']).toBe('alice@def');
+    });
+
     it('omits the user id when none is known', () => {
         const { mapper, byName } = setup('metadata', { userId: () => undefined });
         mapper.handle(TURN[0]);

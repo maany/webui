@@ -17,7 +17,9 @@ const settings = { telemetry: { enabled: false, contentLevel: 'metadata' } };
 jest.mock('@/lib/infrastructure/hooks/useAssistantTelemetry', () => ({ useAssistantTelemetry: (input: unknown) => useAssistantTelemetry(input) }));
 jest.mock('@/lib/infrastructure/hooks/useAssistantConfig', () => ({ useAssistantConfig: () => configState }));
 jest.mock('@/lib/infrastructure/hooks/useAssistantSettings', () => ({ useAssistantSettings: () => ({ settings, update: jest.fn() }) }));
-jest.mock('@/lib/infrastructure/hooks/useAssistant', () => ({ useAssistant: () => ({ conversation: { accountKey: 'root@def' } }) }));
+// The open conversation may be another account's (or none) while a stopped turn drains: the bridge must follow the session.
+jest.mock('@/lib/infrastructure/hooks/useAssistant', () => ({ useAssistant: () => ({ conversation: undefined }) }));
+jest.mock('next-auth/react', () => ({ useSession: () => ({ data: { user: { rucioAccount: 'root', rucioVO: 'def' } } }) }));
 jest.mock('@/component-library/features/assistant/AssistantProvider', () => ({ useAssistantEvents: (l: unknown) => useAssistantEvents(l) }));
 
 describe('AssistantTelemetryBridge', () => {

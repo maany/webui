@@ -464,6 +464,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             d.bus.emit({
                 type: 'turn-started',
                 conversationId: startConversation.id,
+                accountKey: startConversation.accountKey,
                 turnId,
                 providerKind: provider.kind,
                 model: provider.model,

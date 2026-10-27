@@ -12,9 +12,10 @@ import type { StartAssistantTelemetryOptions } from '@/lib/infrastructure/assist
 
 const handle = jest.fn();
 const shutdown = jest.fn(async () => undefined);
+const endAll = jest.fn();
 const startAssistantTelemetry = jest.fn((options: StartAssistantTelemetryOptions) => {
     void options;
-    return { handle, shutdown, forceFlush: jest.fn(async () => undefined) };
+    return { handle, shutdown, endAll, forceFlush: jest.fn(async () => undefined) };
 });
 
 jest.mock('@/lib/infrastructure/assistant/telemetry', () => ({
@@ -356,5 +357,35 @@ describe('useAssistantTelemetry', () => {
             await new Promise(resolve => setTimeout(resolve, 0));
             expect(shutdown).toHaveBeenCalledTimes(1);
         });
+    });
+});
+
+describe('useAssistantTelemetry on an account switch (I7)', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it('drops events queued for the previous account while the telemetry chunk loads', async () => {
+        const { result, rerender } = renderHook((props: UseAssistantTelemetryInput) => useAssistantTelemetry(props), {
+            initialProps: { config: telemetryConfig(), settings: settingsWith(), accountKey: 'alice@def' },
+        });
+        act(() => result.current(started));
+        rerender({ config: telemetryConfig(), settings: settingsWith(), accountKey: 'bob@def' });
+        await waitFor(() => expect(startAssistantTelemetry).toHaveBeenCalled());
+        await act(async () => undefined);
+        expect(handle).not.toHaveBeenCalledWith(started);
+    });
+
+    it('ends every open span when the account changes', async () => {
+        const { result, rerender } = renderHook((props: UseAssistantTelemetryInput) => useAssistantTelemetry(props), {
+            initialProps: { config: telemetryConfig(), settings: settingsWith(), accountKey: 'alice@def' },
+        });
+        await waitFor(() => expect(startAssistantTelemetry).toHaveBeenCalled());
+        await act(async () => undefined);
+        act(() => result.current(started));
+        expect(handle).toHaveBeenCalledWith(started);
+        expect(endAll).not.toHaveBeenCalled();
+        rerender({ config: telemetryConfig(), settings: settingsWith(), accountKey: 'bob@def' });
+        expect(endAll).toHaveBeenCalledTimes(1);
     });
 });
