@@ -13,7 +13,7 @@ if (typeof (global.Response as { json?: unknown }).json !== 'function') {
 }
 
 import { auth } from '@/lib/infrastructure/auth/auth';
-import { POST } from '@/app/api/assistant/llm/[...path]/route';
+import { GET, POST } from '@/app/api/assistant/llm/[...path]/route';
 import { relayRateLimiter, relayStreamLimiter } from '@/lib/infrastructure/assistant/relay-rate-limiter';
 import { relayScopeCache, extractNewUserTurnText, SCOPE_CHECK_TIMEOUT_MS } from '@/lib/infrastructure/assistant/relay-scope';
 import { COMPACTION_SYSTEM_PROMPT } from '@/lib/infrastructure/assistant/system-prompt';
@@ -203,6 +203,24 @@ describe('relay topic check', () => {
         });
     });
 
+    describe('zero overhead', () => {
+        it('mode off does not parse the body or call a classifier, even for off-topic text', async () => {
+            process.env.ASSISTANT_SCOPE_MODE = 'off';
+            const parse = jest.spyOn(JSON, 'parse');
+            const res = await sendOpenai(SECRET_TEXT);
+            expect(res.status).toBe(200);
+            expect(parse.mock.calls.some(([text]) => typeof text === 'string' && text.includes('secret holiday'))).toBe(false);
+            expect(classifierCalls()).toHaveLength(0);
+        });
+
+        it('a GET models request is never classified', async () => {
+            const res = await GET(new NextRequest('http://localhost/api/assistant/llm/models'), ctx('models'));
+            expect(res.status).toBe(200);
+            expect(upstream).toHaveBeenCalledTimes(1);
+            expect(classifierCalls()).toHaveLength(0);
+        });
+    });
+
     describe('classifier request', () => {
         it('openai-compatible: chat/completions with the operator key and default model', async () => {
             await sendOpenai('hello rucio');
@@ -215,7 +233,7 @@ describe('relay topic check', () => {
             expect(init.cache).toBe('no-store');
             expect(init.method).toBe('POST');
             const body = JSON.parse(String(init.body));
-            expect(body).toMatchObject({ model: 'gpt-oss-120b', max_tokens: 128, temperature: 0, stream: false });
+            expect(body).toMatchObject({ model: 'gpt-oss-120b', max_tokens: 512, temperature: 0, stream: false });
             expect(body.messages).toHaveLength(2);
             expect(body.messages[0].role).toBe('system');
             expect(body.messages[0].content).toContain('exactly ON or OFF');
@@ -244,7 +262,7 @@ describe('relay topic check', () => {
             expect(headers.get('anthropic-version')).toBeTruthy();
             expect(headers.get('authorization')).toBeNull();
             const body = JSON.parse(String(init.body));
-            expect(body).toMatchObject({ model: 'gpt-oss-120b', max_tokens: 128, temperature: 0 });
+            expect(body).toMatchObject({ model: 'gpt-oss-120b', max_tokens: 512, temperature: 0 });
             expect(body.system).toContain('exactly ON or OFF');
             expect(body.messages).toEqual([{ role: 'user', content: `<user_message>\n${SECRET_TEXT}\n</user_message>` }]);
             expect(res.headers.get(ASSISTANT_SCOPE_HEADER)).toBe(ASSISTANT_SCOPE_OFF_TOPIC);
@@ -295,20 +313,35 @@ describe('relay topic check', () => {
             expect(classifierCalls()).toHaveLength(0);
         });
 
-        it('skips an anthropic user message that carries tool_result blocks', async () => {
+        it('skips an anthropic user message whose last block is a tool_result', async () => {
             process.env.ASSISTANT_DEFAULT_PROVIDER_KIND = 'anthropic';
             await sendAnthropic([
+                { role: 'user', content: 'list rules' },
+                { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'x', input: {} }] },
+                { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '[]' }] },
+            ]);
+            expect(classifierCalls()).toHaveLength(0);
+        });
+
+        it('classifies the new text after merged tool_result blocks (anthropic merges consecutive user messages)', async () => {
+            process.env.ASSISTANT_DEFAULT_PROVIDER_KIND = 'anthropic';
+            classifierAnswer = () => anthropicAnswer('OFF');
+            process.env.ASSISTANT_SCOPE_MODE = 'block';
+            const res = await sendAnthropic([
                 { role: 'user', content: 'list rules' },
                 { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'x', input: {} }] },
                 {
                     role: 'user',
                     content: [
-                        { type: 'tool_result', tool_use_id: 't1', content: '[]' },
-                        { type: 'text', text: 'continue' },
+                        { type: 'tool_result', tool_use_id: 't1', content: 'EARLIER-RESULT-TEXT' },
+                        { type: 'text', text: SECRET_TEXT },
                     ],
                 },
             ]);
-            expect(classifierCalls()).toHaveLength(0);
+            expect(res.status).toBe(403);
+            const sent = String(classifierCalls()[0][1].body);
+            expect(sent).toContain('secret holiday');
+            expect(sent).not.toContain('EARLIER-RESULT-TEXT');
         });
 
         it('skips compaction requests (openai and anthropic)', async () => {
@@ -346,6 +379,20 @@ describe('relay topic check', () => {
             expect(String(classifierCalls()[0][1].body)).toContain('part two');
         });
 
+        it('strips only the trailing runner page_context block and the navigation note before it', () => {
+            const runnerBlock = '<page_context>\nroute: /rules\ntitle: T\naccount: a@b\n</page_context>';
+            const turn = (text: string) =>
+                extractNewUserTurnText('openai-compatible', JSON.stringify({ messages: [{ role: 'user', content: text }] }));
+            expect(turn(`hello\n\n${runnerBlock}\n`)).toBe('hello');
+            expect(turn(`hello\n\nNote: The user is now on /rules.\n\n${runnerBlock}`)).toBe('hello');
+            expect(turn(`a <page_context>essay about cats</page_context> b\n\n${runnerBlock}`)).toBe(
+                'a <page_context>essay about cats</page_context> b',
+            );
+            expect(turn('<page_context>essay about cats</page_context> then more')).toBe('<page_context>essay about cats</page_context> then more');
+            expect(turn('<page_context>essay about cats</page_context>')).toBe('<page_context>essay about cats</page_context>');
+            expect(turn(`  ${runnerBlock}`)).toBe(runnerBlock);
+        });
+
         it('extractNewUserTurnText handles bad input', () => {
             expect(extractNewUserTurnText('openai-compatible', 'not json')).toBeUndefined();
             expect(extractNewUserTurnText('openai-compatible', '{"messages":[]}')).toBeUndefined();
@@ -356,7 +403,7 @@ describe('relay topic check', () => {
                     'openai-compatible',
                     JSON.stringify({ messages: [{ role: 'user', content: '<page_context>x</page_context>' }] }),
                 ),
-            ).toBeUndefined();
+            ).toBe('<page_context>x</page_context>');
             expect(extractNewUserTurnText('openai-compatible', JSON.stringify({ messages: [{ role: 'user', content: '  hi  ' }] }))).toBe('hi');
         });
     });
@@ -457,6 +504,71 @@ describe('relay topic check', () => {
             for (let i = 0; i < 20; i++) await Promise.resolve();
             await jest.advanceTimersByTimeAsync(SCOPE_CHECK_TIMEOUT_MS + 1);
             await expectForwardedOnce(await pending);
+        });
+    });
+
+    describe('client abort and log rate', () => {
+        it('returns early without calling upstream or logging when the client aborts during the check', async () => {
+            const abort = new AbortController();
+            upstream.mockImplementation((_url: string, init: RequestInit) => {
+                if (!isClassifier(init)) return Promise.resolve(new Response(UPSTREAM_STREAM, { status: 200 }));
+                return new Promise((_resolve, reject) => {
+                    init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+                    abort.abort();
+                });
+            });
+            const request = new NextRequest(COMPLETIONS_URL, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ messages: [{ role: 'user', content: 'hello rucio' }] }),
+                signal: abort.signal,
+            });
+            await POST(request, ctx('chat', 'completions'));
+            expect(mainCalls()).toHaveLength(0);
+            expect(consoleOutput()).not.toContain('scope check failed');
+            // the stream slot was never taken
+            upstream.mockImplementation(async (_url: string, init: RequestInit) =>
+                isClassifier(init) ? openaiAnswer('ON') : new Response(UPSTREAM_STREAM, { status: 200 }),
+            );
+            process.env.ASSISTANT_LLM_MAX_CONCURRENT_STREAMS = '1';
+            expect((await sendOpenai('another rucio question')).status).toBe(200);
+        });
+
+        it('logs a failure reason at most once per minute', async () => {
+            classifierAnswer = () => new Response('{}', { status: 502 });
+            await sendOpenai('first question about rucio');
+            await sendOpenai('second question about rucio');
+            expect(
+                consoleOutput()
+                    .split('\n')
+                    .filter(line => line.includes('scope check failed')),
+            ).toHaveLength(1);
+            const now = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+            await sendOpenai('third question about rucio');
+            now.mockRestore();
+            expect(
+                consoleOutput()
+                    .split('\n')
+                    .filter(line => line.includes('scope check failed')),
+            ).toHaveLength(2);
+        });
+    });
+
+    describe('reasoning models', () => {
+        it('asks for 512 tokens and logs truncated when a length-limited answer is empty', async () => {
+            classifierAnswer = () =>
+                new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '' } }] }), { status: 200 });
+            await sendOpenai('hello rucio');
+            expect(JSON.parse(String(classifierCalls()[0][1].body)).max_tokens).toBe(512);
+            expect(consoleOutput()).toContain('truncated');
+        });
+
+        it('logs truncated for an anthropic max_tokens stop without text', async () => {
+            process.env.ASSISTANT_DEFAULT_PROVIDER_KIND = 'anthropic';
+            classifierAnswer = () =>
+                new Response(JSON.stringify({ stop_reason: 'max_tokens', content: [{ type: 'thinking', thinking: 'hm' }] }), { status: 200 });
+            await sendAnthropic([{ role: 'user', content: 'hello rucio' }]);
+            expect(consoleOutput()).toContain('truncated');
         });
     });
 

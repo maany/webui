@@ -14,7 +14,8 @@ export const SCOPE_CHECK_TIMEOUT_MS = 8000;
 export const SCOPE_TEXT_MAX_CHARS = 2000;
 const SCOPE_CACHE_TTL_MS = 10 * 60_000;
 const SCOPE_CACHE_MAX_ENTRIES = 1000;
-const CLASSIFIER_MAX_TOKENS = 128;
+const CLASSIFIER_MAX_TOKENS = 512;
+const LOG_INTERVAL_MS = 60_000;
 
 type Loose = Record<string, unknown>;
 const isObject = (value: unknown): value is Loose => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -40,6 +41,15 @@ function isCompaction(kind: Kind, body: Loose): boolean {
     );
 }
 
+const NAVIGATION_NOTE = /(?:^|\n\n)Note: The user is now on [^\n]*$/;
+
+/** Removes the single trailing page context block the runner appends and the navigation note before it. */
+function stripRunnerContext(text: string): string {
+    const start = text.lastIndexOf('<page_context>');
+    if (start < 0 || !/^<page_context>[\s\S]*<\/page_context>\s*$/i.test(text.slice(start))) return text;
+    return text.slice(0, start).trim().replace(NAVIGATION_NOTE, '').trim();
+}
+
 /**
  * The user text of the request when its last message is a new user turn, or undefined for tool continuations,
  * compaction and connection-test calls, bodies that do not parse and turns that are empty after removing the page context.
@@ -54,12 +64,17 @@ export function extractNewUserTurnText(kind: Kind, bodyText: string): string | u
     if (!isObject(body) || !Array.isArray(body.messages) || body.messages.length === 0) return undefined;
     const last: unknown = body.messages[body.messages.length - 1];
     if (!isObject(last) || last.role !== 'user') return undefined;
-    if (kind === 'anthropic' && Array.isArray(last.content) && last.content.some(block => isObject(block) && block.type === 'tool_result'))
-        return undefined;
     if (isCompaction(kind, body)) return undefined;
-    const text = textParts(last.content)
-        .replace(/<page_context>[\s\S]*?<\/page_context>/gi, '')
-        .trim();
+    let content = last.content;
+    if (kind === 'anthropic' && Array.isArray(content)) {
+        // The adapter merges a new user turn behind the tool_result blocks of the previous round: only a
+        // message that ENDS with a tool_result is a continuation, otherwise classify what follows the last one.
+        const lastResult = content.map(block => isObject(block) && block.type === 'tool_result').lastIndexOf(true);
+        if (lastResult >= 0 && lastResult === content.length - 1) return undefined;
+        content = content.slice(lastResult + 1);
+    }
+    const original = textParts(content).trim();
+    const text = stripRunnerContext(original) || original;
     if (!text || text === CONNECTION_TEST_PROMPT) return undefined;
     return text.slice(0, SCOPE_TEXT_MAX_CHARS);
 }
@@ -113,6 +128,14 @@ function answerText(kind: Kind, payload: unknown): string | undefined {
     return isObject(message) && typeof message.content === 'string' ? message.content : undefined;
 }
 
+/** True when the model ran out of tokens before it wrote any answer (typical for reasoning models). */
+function wasTruncated(kind: Kind, payload: unknown, answer: string | undefined): boolean {
+    if (answer?.trim() || !isObject(payload)) return false;
+    if (kind === 'anthropic') return payload.stop_reason === 'max_tokens';
+    const choice = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
+    return isObject(choice) && choice.finish_reason === 'length';
+}
+
 export function parseVerdict(answer: string | undefined): ScopeVerdict | undefined {
     const match = /^\W*(ON|OFF)\b/i.exec((answer ?? '').trim());
     return match ? (match[1].toUpperCase() as ScopeVerdict) : undefined;
@@ -148,6 +171,7 @@ class ScopeCache {
 
     reset(): void {
         this.entries.clear();
+        lastLogged.clear();
     }
 }
 
@@ -160,7 +184,14 @@ export function scopeCacheKey(accountKey: string, scope: AssistantRelayConfig['s
         .digest('hex');
 }
 
+const lastLogged = new Map<string, number>();
+
+/** One log line per reason and minute, so a broken classifier cannot flood the log. Never logs content. */
 function logFailure(reason: string): void {
+    const now = Date.now();
+    const previous = lastLogged.get(reason);
+    if (previous !== undefined && now - previous < LOG_INTERVAL_MS) return;
+    lastLogged.set(reason, now);
     console.warn(`[assistant relay] scope check failed, forwarding (${reason})`);
 }
 
@@ -217,15 +248,16 @@ export async function checkTurnScope(
             logFailure('unparsable');
             return undefined;
         }
-        const verdict = parseVerdict(answerText(relay.kind, payload));
+        const answer = answerText(relay.kind, payload);
+        const verdict = parseVerdict(answer);
         if (!verdict) {
-            logFailure('unparsable');
+            logFailure(wasTruncated(relay.kind, payload, answer) ? 'truncated' : 'unparsable');
             return undefined;
         }
         relayScopeCache.set(cacheKey, verdict);
         return verdict;
     } catch {
-        logFailure(timedOut ? 'timeout' : 'network');
+        if (!clientSignal?.aborted) logFailure(timedOut ? 'timeout' : 'network');
         return undefined;
     } finally {
         clearTimeout(timer);

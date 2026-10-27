@@ -159,6 +159,8 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
             }
             offTopic = true;
         }
+        // The browser left during the check: nothing to forward, no stream slot to take.
+        if (request.signal?.aborted) return new Response(null, { status: 499 });
     }
 
     const headers = buildUpstreamHeaders(relay, request.headers.get('accept') ?? 'application/json', body !== undefined);
