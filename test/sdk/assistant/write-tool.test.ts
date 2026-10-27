@@ -131,3 +131,20 @@ describe('defineWriteTool', () => {
         expect(invalidate).toHaveBeenCalledWith({ queryKey: ['rule-meta'] });
     });
 });
+
+describe('defineWriteTool account binding', () => {
+    it('forwards ctx.accountKey as the expected account header', async () => {
+        const fetchImpl = jest.fn<ReturnType<FetchLike>, Parameters<FetchLike>>(async () => jsonResponse(200, { status: 'success' }));
+        const tool = defineWriteTool(spec, { fetchImpl });
+        await tool.execute({ account: 'jdoe', key: 'country' }, makeToolContext({ accountKey: 'jdoe@def' }));
+        expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>)['x-rucio-assistant-account']).toBe('jdoe@def');
+    });
+
+    it('fails closed without sending when ctx.accountKey is missing', async () => {
+        const fetchImpl = jest.fn<ReturnType<FetchLike>, Parameters<FetchLike>>(async () => jsonResponse(200, { status: 'success' }));
+        const tool = defineWriteTool(spec, { fetchImpl });
+        const result = await tool.execute({ account: 'jdoe', key: 'country' }, makeToolContext({ accountKey: '' }));
+        expect(fetchImpl).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ error: 'denied_by_policy' });
+    });
+});

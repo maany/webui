@@ -1,5 +1,6 @@
 import type { HttpMethod } from '@/lib/core/entity/assistant/tool';
 import { SESSION_EXPIRED_MESSAGE, errorCodeForStatus, scrubSecrets, trimForModel } from './feature-executor';
+import { ACCOUNT_MISMATCH_ERROR_TYPE, ASSISTANT_ACCOUNT_HEADER } from './account-binding';
 import { MAY_HAVE_LANDED, toolError } from './tool-error';
 
 /** Writes give up after 60s. The change may still land on the server, so the error says so. */
@@ -28,6 +29,8 @@ export interface WriteRoute {
 export interface WriteRequestOptions {
     fetchImpl?: FetchLike;
     timeoutMs?: number;
+    /** `account@vo` active when the write was approved; the server refuses the write if the session account differs. */
+    expectedAccount?: string;
 }
 
 const sessionExpired = () => toolError('session_expired', SESSION_EXPIRED_MESSAGE);
@@ -83,6 +86,14 @@ export async function interpretWriteResponse(res: FetchResponseLike): Promise<un
 
     const record = isRecord(body) ? body : {};
     const errorType = typeof record.errorType === 'string' ? record.errorType.slice(0, MAX_ERROR_TYPE_CHARS) : undefined;
+    if (res.status === 409 && errorType === ACCOUNT_MISMATCH_ERROR_TYPE) {
+        // The server refused before calling Rucio, so nothing changed
+        return toolError(
+            'denied_by_policy',
+            pickMessage(record) ?? 'The signed-in account changed after this action was approved. Nothing changed.',
+            errorType,
+        );
+    }
     if (!res.ok) {
         return toolError(
             errorCodeForStatus(res.status),
@@ -118,7 +129,11 @@ export async function executeWriteRequest(
     try {
         const res = await fetchImpl(route.path, {
             method: route.method,
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                ...(options.expectedAccount ? { [ASSISTANT_ACCOUNT_HEADER]: options.expectedAccount } : {}),
+            },
             body: JSON.stringify(body),
             credentials: 'same-origin',
             redirect: 'manual',

@@ -5,6 +5,14 @@ import { getSession, withAuthenticatedSession } from '@/lib/infrastructure/auth/
 import { BaseController, TAuthenticatedControllerParameters, TSimpleControllerParameters } from '@/lib/sdk/controller';
 import { SessionUser } from '@/lib/core/entity/auth-models';
 import { Signal } from '@/lib/sdk/web';
+import { headers } from 'next/headers';
+import { toAccountKey } from '@/lib/infrastructure/assistant/page-context';
+import {
+    ACCOUNT_MISMATCH_ERROR_TYPE,
+    ACCOUNT_MISMATCH_MESSAGE,
+    ASSISTANT_ACCOUNT_HEADER,
+    isAccountMismatch,
+} from '@/lib/infrastructure/assistant/account-binding';
 
 /**
  * Mock response object that captures data from controller execution
@@ -286,12 +294,25 @@ export async function executeController<TParams extends TSimpleControllerParamet
  *   return executeAuthenticatedController(controller, { filters: { account: 'test' } });
  * }
  */
+/** The assistant's expected account header, or null when absent or when there is no request scope. */
+async function readAssistantAccountHeader(): Promise<string | null> {
+    try {
+        return (await headers()).get(ASSISTANT_ACCOUNT_HEADER);
+    } catch {
+        return null;
+    }
+}
+
 export async function executeAuthenticatedController<TParams extends TAuthenticatedControllerParameters>(
     controller: BaseController<TParams, any>,
     parameters: Omit<TParams, 'response' | 'session' | 'rucioAuthToken'>,
     streaming: boolean = false,
 ): Promise<NextResponse | Response> {
     return withAuthenticatedSession(async (user: SessionUser, token: string) => {
+        // A write approved in the assistant is bound to the account active at approval time
+        if (isAccountMismatch(await readAssistantAccountHeader(), toAccountKey(user.rucioAccount, user.rucioVO))) {
+            return NextResponse.json({ status: 'error', errorType: ACCOUNT_MISMATCH_ERROR_TYPE, message: ACCOUNT_MISMATCH_MESSAGE }, { status: 409 });
+        }
         try {
             const session = await getSession();
             const responseAdapter = streaming ? new StreamingResponseAdapter() : new ControllerResponseAdapter();

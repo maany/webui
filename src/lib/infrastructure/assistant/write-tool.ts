@@ -37,7 +37,15 @@ export function defineWriteTool<I>(spec: ToolSpec<I>, options: WriteToolOptions 
                     message: parsed.error.issues.map(issue => `${issue.path.map(String).join('.') || 'input'}: ${issue.message}`).join('; '),
                 };
             }
-            const result = await executeWriteRequest(route, parsed.data, ctx.signal, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs });
+            // Fail closed: without the approving account the server cannot check the session still matches it
+            if (!ctx.accountKey) {
+                return { error: 'denied_by_policy', message: 'The approving account is unknown, so the change was not sent. Nothing changed.' };
+            }
+            const result = await executeWriteRequest(route, parsed.data, ctx.signal, {
+                fetchImpl: options.fetchImpl,
+                timeoutMs: options.timeoutMs,
+                expectedAccount: ctx.accountKey,
+            });
             if (isToolError(result)) return result;
 
             // Best effort: a failed refetch must not turn a successful write into an error

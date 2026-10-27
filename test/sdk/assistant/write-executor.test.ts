@@ -222,3 +222,31 @@ describe('executeWriteRequest', () => {
         expect(result.message).toContain('may still have been applied');
     });
 });
+
+describe('executeWriteRequest account binding', () => {
+    it('sends the expected account header when given', async () => {
+        const fetchImpl = jest.fn<ReturnType<FetchLike>, Parameters<FetchLike>>(async () => json(200, { status: 'success' }));
+        await executeWriteRequest(route, {}, new AbortController().signal, { fetchImpl, expectedAccount: 'jdoe@def' });
+        expect(fetchImpl.mock.calls[0][1].headers).toEqual({
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            'x-rucio-assistant-account': 'jdoe@def',
+        });
+    });
+
+    it('maps a 409 account_mismatch to a denied ToolError that says nothing changed and does not claim it may have landed', async () => {
+        const message = 'The signed-in account changed after this action was approved. Nothing changed.';
+        const fetchImpl = jest.fn<ReturnType<FetchLike>, Parameters<FetchLike>>(async () =>
+            json(409, { status: 'error', errorType: 'account_mismatch', message }),
+        );
+        const result = (await executeWriteRequest(route, {}, new AbortController().signal, { fetchImpl, expectedAccount: 'jdoe@def' })) as {
+            error: string;
+            message: string;
+            errorType?: string;
+        };
+        expect(result.error).toBe('denied_by_policy');
+        expect(result.errorType).toBe('account_mismatch');
+        expect(result.message).toContain('Nothing changed');
+        expect(result.message).not.toContain('may still have been applied');
+    });
+});
