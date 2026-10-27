@@ -1,3 +1,10 @@
+// The Permissions tab reads flags, role and permix readiness; this view test renders it without those providers.
+jest.mock('@/lib/infrastructure/hooks/useToolVisibilityContext', () => {
+    const { FEATURE_REGISTRY } = jest.requireActual('@/lib/core/entity/feature-config');
+    const flags = Object.fromEntries(Object.keys(FEATURE_REGISTRY).map(key => [key, true]));
+    return { useToolVisibilityContext: () => ({ flags, role: undefined, permissionsReady: true }) };
+});
+
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { AssistantSettingsView, type AssistantSettingsViewProps } from '@/component-library/features/assistant/settings/AssistantSettingsView';
 import { DEFAULT_ASSISTANT_CONFIG } from '@/lib/core/entity/assistant/assistant-config';
@@ -80,6 +87,18 @@ describe('AssistantSettingsView', () => {
         render(<AssistantSettingsView {...props()} />);
         fireEvent.click(screen.getByRole('tab', { name: 'Telemetry' }));
         expect(screen.getByRole('checkbox', { name: 'Export traces to my own collector' })).toBeInTheDocument();
+    });
+
+    it('orders the tabs as in spec 6.4', () => {
+        render(<AssistantSettingsView {...props()} />);
+        expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
+            'Providers',
+            'Permissions',
+            'Skills',
+            'Telemetry',
+            'Display',
+            'Storage',
+        ]);
     });
 
     it('uses no em dashes in any tab', async () => {
