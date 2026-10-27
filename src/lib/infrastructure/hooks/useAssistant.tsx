@@ -27,7 +27,12 @@ import {
     monotonicIso,
 } from '@/lib/infrastructure/assistant/message-reducer';
 import { navigationNote } from '@/lib/infrastructure/assistant/page-context';
-import { CONTEXT_OVERFLOW_ERROR, SESSION_EXPIRED_ERROR, describeRunError } from '@/lib/infrastructure/assistant/runner-errors';
+import {
+    CONTEXT_OVERFLOW_ERROR,
+    SESSION_EXPIRED_ERROR,
+    TURN_SAVE_FAILED_ERROR,
+    describeRunError,
+} from '@/lib/infrastructure/assistant/runner-errors';
 import { buildSystemPrompt, COMPACTION_SYSTEM_PROMPT, transcriptForSummary } from '@/lib/infrastructure/assistant/system-prompt';
 import type { AgentRunner, AgentRunnerDeps } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
 import { REJECTED_BY_USER, isInvalidArgsMarker } from '@/lib/infrastructure/assistant/tanstack-tools';
@@ -512,6 +517,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             let finalStatus: 'completed' | 'stopped' | 'error' | 'step-limit' = 'completed';
             let finalError: string | undefined;
             let overflow = false;
+            let saveFailed = false;
 
             try {
                 for await (const update of runner.run({
@@ -581,11 +587,23 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                         setPending(pendingRef.current.filter(item => item.toolCallId !== update.toolCallId));
                     }
                     if (isCurrent()) replaceMessage(message);
-                    if (update.type === 'tool-result' || update.type === 'approval-required') await saveMessage(message);
+                    if (update.type === 'tool-result' || update.type === 'approval-required') {
+                        try {
+                            await saveMessage(message);
+                        } catch (saveError) {
+                            saveFailed = true;
+                            throw saveError;
+                        }
+                    }
                 }
             } catch (runError) {
                 finalStatus = controller.signal.aborted ? 'stopped' : 'error';
-                finalError = runError instanceof Error ? runError.message : String(runError);
+                finalError = saveFailed ? TURN_SAVE_FAILED_ERROR : runError instanceof Error ? runError.message : String(runError);
+                // Leaving the loop does not stop the runner's drive loop: abort it so no model call or tool runs headless,
+                // and expire this turn's waiting approvals, since no card can resume a runner that is gone.
+                controller.abort();
+                if (assistantRef.current?.id === assistant.id) approvalsRef.current.expireOpen();
+                if (saveFailed) setPersistent(false);
                 const message = applyRunnerUpdate(readMessage(), { type: 'finished', status: finalStatus, error: finalError });
                 storeMessage(message);
                 if (isCurrent()) replaceMessage(message);
@@ -634,40 +652,46 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 return;
             }
 
-            // A decision still saving may add or revoke a conversation grant; read the conversation only after it settled.
-            await Promise.allSettled([...decisionsRef.current]);
-            // A conversation deleted while the turn ran must not be written back.
-            await saveMessage(finalMessage);
             let updatedConversation: Conversation | undefined;
-            if (alive()) {
-                const latest = await repository.getConversation(startConversation.id);
-                if (latest && alive()) {
-                    updatedConversation = {
-                        ...latest,
-                        ...(isCurrent() && conversationRef.current?.id === latest.id ? conversationRef.current : {}),
-                        updatedAt: monotonicIso(),
-                        providerId: provider.providerId,
-                        model: provider.model,
-                        usage: sawUsage ? addUsage(latest.usage ?? EMPTY_USAGE_TOTALS, turnUsage) : latest.usage,
-                    };
-                    await repository.saveConversation(updatedConversation);
+            try {
+                // A decision still saving may add or revoke a conversation grant; read the conversation only after it settled.
+                await Promise.allSettled([...decisionsRef.current]);
+                // A conversation deleted while the turn ran must not be written back.
+                await saveMessage(finalMessage);
+                if (alive()) {
+                    const latest = await repository.getConversation(startConversation.id);
+                    if (latest && alive()) {
+                        updatedConversation = {
+                            ...latest,
+                            ...(isCurrent() && conversationRef.current?.id === latest.id ? conversationRef.current : {}),
+                            updatedAt: monotonicIso(),
+                            providerId: provider.providerId,
+                            model: provider.model,
+                            usage: sawUsage ? addUsage(latest.usage ?? EMPTY_USAGE_TOTALS, turnUsage) : latest.usage,
+                        };
+                        await repository.saveConversation(updatedConversation);
+                    }
                 }
-            }
-            emitFinished(finalStatus, finalError);
-
-            if (isCurrent()) {
-                replaceMessage(finalMessage);
-                if (updatedConversation) setConversation(updatedConversation);
-                setContextWindow(provider.contextWindow);
-                if (lastInputTokens !== null) setContextFraction(provider.contextWindow ? lastInputTokens / provider.contextWindow : null);
-                if (finalStatus === 'error') {
-                    const relay = provider.via === 'relay';
-                    const message = finalError ?? 'Something went wrong.';
-                    setError(describeRunError(message, { relay }));
-                    setSessionExpired(isSessionExpired(message, relay));
-                    setStatusState('error');
-                } else {
-                    setStatusState('idle');
+            } catch {
+                // Best effort: the turn already ran, so a failed save only means the history is not kept.
+                setPersistent(false);
+            } finally {
+                // Always settle the turn, so the panel never stays in streaming and the telemetry span ends.
+                emitFinished(finalStatus, finalError);
+                if (isCurrent()) {
+                    replaceMessage(finalMessage);
+                    if (updatedConversation) setConversation(updatedConversation);
+                    setContextWindow(provider.contextWindow);
+                    if (lastInputTokens !== null) setContextFraction(provider.contextWindow ? lastInputTokens / provider.contextWindow : null);
+                    if (finalStatus === 'error') {
+                        const relay = provider.via === 'relay';
+                        const message = finalError ?? 'Something went wrong.';
+                        setError(describeRunError(message, { relay }));
+                        setSessionExpired(isSessionExpired(message, relay));
+                        setStatusState('error');
+                    } else {
+                        setStatusState('idle');
+                    }
                 }
             }
             void repository
