@@ -263,4 +263,49 @@ describe('assistant settings storage', () => {
         localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...withProviders(), version: 2 }));
         expect(loadAssistantSettings()).toEqual(getDefaultAssistantSettings());
     });
+
+    describe('telemetry sink secrets', () => {
+        const sink = {
+            kind: 'langfuse' as const,
+            endpoint: 'https://lf.example.org',
+            publicKey: 'pk-lf-PUBLIC123',
+            secretKey: 'sk-lf-SECRET456',
+            headers: { Authorization: 'Bearer HEADERSECRET789' },
+        };
+        const withSink = (keyStorage: 'local' | 'session') =>
+            withProviders({ keyStorage, telemetry: { contentLevel: 'metadata', enabled: true, shareWithOperator: false, sink } });
+
+        it('keeps sink secrets out of localStorage in session mode', () => {
+            saveAssistantSettings(withSink('session'));
+            const raw = localStorage.getItem(ASSISTANT_SETTINGS_KEY) ?? '';
+            expect(raw).not.toContain('pk-lf-PUBLIC123');
+            expect(raw).not.toContain('sk-lf-SECRET456');
+            expect(raw).not.toContain('HEADERSECRET789');
+            expect(raw).toContain('https://lf.example.org');
+        });
+
+        it('round-trips sink secrets through sessionStorage', () => {
+            saveAssistantSettings(withSink('session'));
+            expect(loadAssistantSettings().telemetry.sink).toEqual(sink);
+        });
+
+        it('purges sink secrets from localStorage when switching from local to session', () => {
+            saveAssistantSettings(withSink('local'));
+            expect(localStorage.getItem(ASSISTANT_SETTINGS_KEY)).toContain('sk-lf-SECRET456');
+            saveAssistantSettings(withSink('session'));
+            expect(localStorage.getItem(ASSISTANT_SETTINGS_KEY)).not.toContain('sk-lf-SECRET456');
+        });
+
+        it('leaves local mode unchanged', () => {
+            saveAssistantSettings(withSink('local'));
+            expect(JSON.parse(localStorage.getItem(ASSISTANT_SETTINGS_KEY) ?? '{}').telemetry.sink).toEqual(sink);
+            expect(loadAssistantSettings().telemetry.sink).toEqual(sink);
+        });
+
+        it('clears the session sink secrets with the settings', () => {
+            saveAssistantSettings(withSink('session'));
+            clearAssistantSettings();
+            expect(sessionStorage.length).toBe(0);
+        });
+    });
 });

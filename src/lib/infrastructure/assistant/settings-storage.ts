@@ -9,6 +9,7 @@ import { TOOL_POLICIES } from '@/lib/core/entity/assistant/tool';
  */
 export const ASSISTANT_SETTINGS_KEY = 'rucio_assistant_settings';
 export const ASSISTANT_SESSION_KEYS_KEY = 'rucio_assistant_session_keys';
+export const ASSISTANT_SESSION_SINK_KEY = 'rucio_assistant_session_sink';
 const STORAGE_VERSION = 1;
 
 const PricingSchema = z.object({
@@ -69,6 +70,29 @@ const SettingsObjectSchema = z.object({
 export const AssistantSettingsSchema: z.ZodType<AssistantSettings> = SettingsObjectSchema;
 
 const SessionKeysSchema = z.record(z.string(), z.string());
+const SinkSecretsSchema = z.object({
+    publicKey: z.string().optional(),
+    secretKey: z.string().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+});
+type SinkSecrets = z.infer<typeof SinkSecretsSchema>;
+type TelemetrySink = z.infer<typeof TelemetrySinkSchema>;
+
+function readSessionSinkSecrets(): SinkSecrets {
+    try {
+        const raw = sessionStorage.getItem(ASSISTANT_SESSION_SINK_KEY);
+        if (!raw) return {};
+        const parsed = SinkSecretsSchema.safeParse(JSON.parse(raw));
+        return parsed.success ? parsed.data : {};
+    } catch {
+        return {};
+    }
+}
+
+function splitSinkSecrets(sink: TelemetrySink): { publicSink: TelemetrySink; secrets: SinkSecrets } {
+    const { publicKey, secretKey, headers, ...publicSink } = sink;
+    return { publicSink: publicSink as TelemetrySink, secrets: { publicKey, secretKey, headers } };
+}
 
 function isBrowser(): boolean {
     return typeof window !== 'undefined';
@@ -165,8 +189,10 @@ export function loadAssistantSettings(): AssistantSettings {
         if (settings.keyStorage !== 'session') return settings;
         const keys = readSessionKeys();
         if (!parsed.success) dropOrphanedSessionKeys(keys, settings.providers);
+        const sink = settings.telemetry.sink;
         return {
             ...settings,
+            telemetry: sink ? { ...settings.telemetry, sink: { ...sink, ...readSessionSinkSecrets() } } : settings.telemetry,
             providers: settings.providers.map(provider =>
                 Object.prototype.hasOwnProperty.call(keys, provider.id) ? { ...provider, apiKey: keys[provider.id] } : provider,
             ),
@@ -203,16 +229,25 @@ export function saveAssistantSettings(settings: AssistantSettings): void {
             settings.providers.forEach(provider => {
                 if (provider.apiKey) keys[provider.id] = provider.apiKey;
             });
-            // The key-free entry goes first: if it cannot be written, drop the old entry so a plaintext key never stays behind.
+            const sink = settings.telemetry.sink;
+            const split = sink ? splitSinkSecrets(sink) : undefined;
+            const telemetry = split ? { ...settings.telemetry, sink: split.publicSink } : settings.telemetry;
+            // The secret-free entry goes first: if it cannot be written, drop the old entry so a plaintext secret never stays behind.
             try {
-                localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify({ ...settings, providers: settings.providers.map(withoutKey) }));
+                localStorage.setItem(
+                    ASSISTANT_SETTINGS_KEY,
+                    JSON.stringify({ ...settings, telemetry, providers: settings.providers.map(withoutKey) }),
+                );
             } catch (error) {
                 localStorage.removeItem(ASSISTANT_SETTINGS_KEY);
                 throw error;
             }
             sessionStorage.setItem(ASSISTANT_SESSION_KEYS_KEY, JSON.stringify(keys));
+            if (split) sessionStorage.setItem(ASSISTANT_SESSION_SINK_KEY, JSON.stringify(split.secrets));
+            else sessionStorage.removeItem(ASSISTANT_SESSION_SINK_KEY);
         } else {
             sessionStorage.removeItem(ASSISTANT_SESSION_KEYS_KEY);
+            sessionStorage.removeItem(ASSISTANT_SESSION_SINK_KEY);
             localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify(settings));
         }
     } catch {
@@ -231,6 +266,11 @@ export function clearAssistantSettings(): void {
     }
     try {
         sessionStorage.removeItem(ASSISTANT_SESSION_KEYS_KEY);
+    } catch {
+        console.error('Failed to clear assistant settings');
+    }
+    try {
+        sessionStorage.removeItem(ASSISTANT_SESSION_SINK_KEY);
     } catch {
         console.error('Failed to clear assistant settings');
     }

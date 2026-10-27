@@ -4,6 +4,7 @@ import { useCallback, useSyncExternalStore } from 'react';
 import type { AssistantSettings } from '@/lib/core/entity/assistant/settings';
 import {
     ASSISTANT_SESSION_KEYS_KEY,
+    ASSISTANT_SESSION_SINK_KEY,
     ASSISTANT_SETTINGS_KEY,
     clearAssistantSettings,
     getDefaultAssistantSettings,
@@ -18,7 +19,9 @@ let cachedSettings: AssistantSettings = SERVER_SNAPSHOT;
 
 function readRaw(): string {
     try {
-        return `${localStorage.getItem(ASSISTANT_SETTINGS_KEY) ?? ''}\n${sessionStorage.getItem(ASSISTANT_SESSION_KEYS_KEY) ?? ''}`;
+        return `${localStorage.getItem(ASSISTANT_SETTINGS_KEY) ?? ''}\n${sessionStorage.getItem(ASSISTANT_SESSION_KEYS_KEY) ?? ''}\n${
+            sessionStorage.getItem(ASSISTANT_SESSION_SINK_KEY) ?? ''
+        }`;
     } catch {
         return '';
     }
