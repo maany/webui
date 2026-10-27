@@ -13,6 +13,8 @@ export interface AssistantRelayConfig {
     rateLimitPerMinute: number;
     /** ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS: time to upstream headers and max idle gap in the response body (default 120000) */
     upstreamTimeoutMs: number;
+    /** ASSISTANT_LLM_UPSTREAM_MAX_MS: total deadline for one relayed request, headers plus body (default 600000) */
+    upstreamMaxMs: number;
 }
 
 /**

@@ -27,6 +27,7 @@ const ENV_KEYS = [
     'ASSISTANT_DEFAULT_MODEL',
     'ASSISTANT_RELAY_RATE_LIMIT',
     'ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS',
+    'ASSISTANT_LLM_UPSTREAM_MAX_MS',
 ];
 
 const signInAs = (account: string) =>
@@ -401,6 +402,50 @@ describe('/api/assistant/llm/[...path]', () => {
             expect(errored).toBe(true);
             expect(cancelled).toBe(true);
             expect(onDone).toHaveBeenCalledTimes(1);
+        });
+
+        it('cancels a dripping upstream body when the total deadline aborts', async () => {
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            let cancelled = false;
+            const body = new ReadableStream<Uint8Array>({
+                pull() {
+                    return new Promise(resolve => setTimeout(resolve, 20));
+                },
+                cancel() {
+                    cancelled = true;
+                },
+            });
+            const deadline = new AbortController();
+            setTimeout(() => deadline.abort(), 60);
+            const { errored } = await drain(guardBody(body, 5000, RELAY_MAX_RESPONSE_BYTES, () => undefined, deadline.signal));
+            expect(errored).toBe(true);
+            expect(cancelled).toBe(true);
+        });
+
+        it('does not log an upstream failure when the client cancels during a pending read', async () => {
+            const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            const body = new ReadableStream<Uint8Array>({ pull: () => new Promise(() => undefined) });
+            const guarded = guardBody(body, 5000, RELAY_MAX_RESPONSE_BYTES, () => undefined);
+            const reader = guarded.getReader();
+            const pending = reader.read();
+            await new Promise(resolve => setTimeout(resolve, 10));
+            await reader.cancel();
+            await pending.catch(() => undefined);
+            await new Promise(resolve => setTimeout(resolve, 20));
+            expect(errorSpy).not.toHaveBeenCalled();
+        });
+
+        it('answers 504 when the total deadline passes before headers', async () => {
+            process.env.ASSISTANT_LLM_UPSTREAM_MAX_MS = '50';
+            jest.spyOn(console, 'error').mockImplementation(() => undefined);
+            upstream.mockImplementationOnce(
+                (_url: string, init: RequestInit) =>
+                    new Promise((_resolve, reject) => {
+                        init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+                    }),
+            );
+            const res = await POST(post(COMPLETIONS_URL, BODY), ctx('chat', 'completions'));
+            expect(res.status).toBe(504);
         });
 
         it('cancels an upstream body that goes idle', async () => {

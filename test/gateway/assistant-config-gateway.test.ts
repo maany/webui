@@ -51,6 +51,7 @@ describe('AssistantConfigGateway', () => {
                 'ASSISTANT_PRICES_JSON',
                 'ASSISTANT_RELAY_RATE_LIMIT',
                 'ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS',
+                'ASSISTANT_LLM_UPSTREAM_MAX_MS',
             ].sort(),
         );
     });
@@ -252,6 +253,7 @@ describe('AssistantConfigGateway', () => {
             apiKey: 'sk-operator-secret',
             rateLimitPerMinute: 30,
             upstreamTimeoutMs: 120000,
+            upstreamMaxMs: 600000,
         });
     });
 
@@ -264,6 +266,16 @@ describe('AssistantConfigGateway', () => {
     ])('reads ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS=%p as %p', async (raw, expected) => {
         setEnv({ ASSISTANT_DEFAULT_BASE_URL: 'https://llm.example.org/v1', ASSISTANT_DEFAULT_MODEL: 'm', ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS: raw });
         await expect(gateway().getRelayConfig()).resolves.toMatchObject({ upstreamTimeoutMs: expected });
+    });
+
+    it.each([
+        ['900000', 900000],
+        ['abc', 600000],
+        ['0', 600000],
+        ['99999999999', 600000],
+    ])('reads ASSISTANT_LLM_UPSTREAM_MAX_MS=%p as %p', async (raw, expected) => {
+        setEnv({ ASSISTANT_DEFAULT_BASE_URL: 'https://llm.example.org/v1', ASSISTANT_DEFAULT_MODEL: 'm', ASSISTANT_LLM_UPSTREAM_MAX_MS: raw });
+        await expect(gateway().getRelayConfig()).resolves.toMatchObject({ upstreamMaxMs: expected });
     });
 
     it.each([

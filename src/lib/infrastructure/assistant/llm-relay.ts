@@ -42,9 +42,15 @@ function buildUpstreamUrl(baseURL: string, subpath: string): string | undefined 
 
 /**
  * Pipes the upstream body through, erroring the stream and cancelling upstream when no chunk arrives
- * for idleMs or the total exceeds maxBytes. onDone runs once the stream ends, errors or is cancelled.
+ * for idleMs, the total exceeds maxBytes or the deadline signal aborts. onDone runs once the stream ends, errors or is cancelled.
  */
-export function guardBody(source: ReadableStream<Uint8Array>, idleMs: number, maxBytes: number, onDone: () => void): ReadableStream<Uint8Array> {
+export function guardBody(
+    source: ReadableStream<Uint8Array>,
+    idleMs: number,
+    maxBytes: number,
+    onDone: () => void,
+    deadline?: AbortSignal,
+): ReadableStream<Uint8Array> {
     const reader = source.getReader();
     let total = 0;
     let finished = false;
@@ -61,7 +67,14 @@ export function guardBody(source: ReadableStream<Uint8Array>, idleMs: number, ma
                 const idle = new Promise<never>((_, reject) => {
                     timer = setTimeout(() => reject(new Error('idle')), idleMs);
                 });
-                const { done, value } = await Promise.race([reader.read(), idle]);
+                const aborted = new Promise<never>((_, reject) => {
+                    if (!deadline) return;
+                    if (deadline.aborted) reject(new Error('deadline'));
+                    else deadline.addEventListener('abort', () => reject(new Error('deadline')), { once: true });
+                });
+                aborted.catch(() => undefined);
+                const { done, value } = await Promise.race([reader.read(), idle, aborted]);
+                if (finished) return;
                 if (done) {
                     finish();
                     controller.close();
@@ -71,6 +84,7 @@ export function guardBody(source: ReadableStream<Uint8Array>, idleMs: number, ma
                 if (total > maxBytes) throw new Error('too_large');
                 controller.enqueue(value);
             } catch (error) {
+                if (finished) return;
                 console.error('[assistant relay] upstream body aborted');
                 await reader.cancel().catch(() => undefined);
                 finish();
@@ -159,8 +173,14 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
         timedOut = true;
         controller.abort();
     }, timeoutMs);
+    // Total deadline: bounds an upstream that keeps the connection alive by dripping chunks.
+    const deadlineTimer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, relay.upstreamMaxMs);
     const cleanup = () => {
         clearTimeout(headerTimer);
+        clearTimeout(deadlineTimer);
         clientSignal?.removeEventListener('abort', onClientAbort);
     };
 
@@ -206,9 +226,15 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
         cleanup();
         return new Response(upstream.body ?? null, { status: upstream.status, headers: responseHeaders });
     }
-    const guarded = guardBody(upstream.body, timeoutMs, RELAY_MAX_RESPONSE_BYTES, () => {
-        cleanup();
-        controller.abort();
-    });
+    const guarded = guardBody(
+        upstream.body,
+        timeoutMs,
+        RELAY_MAX_RESPONSE_BYTES,
+        () => {
+            cleanup();
+            controller.abort();
+        },
+        controller.signal,
+    );
     return new Response(guarded, { status: upstream.status, headers: responseHeaders });
 }

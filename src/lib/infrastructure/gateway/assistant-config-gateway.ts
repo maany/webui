@@ -37,6 +37,7 @@ export const ASSISTANT_ENV_KEYS = [
     'ASSISTANT_PRICES_JSON',
     'ASSISTANT_RELAY_RATE_LIMIT',
     'ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS',
+    'ASSISTANT_LLM_UPSTREAM_MAX_MS',
 ] as const;
 
 type AssistantEnvKey = (typeof ASSISTANT_ENV_KEYS)[number];
@@ -46,6 +47,8 @@ const DEFAULT_RELAY_RATE_LIMIT = 30;
 const MAX_RELAY_RATE_LIMIT = 10_000;
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 120_000;
 const MAX_UPSTREAM_TIMEOUT_MS = 3_600_000;
+const DEFAULT_UPSTREAM_MAX_MS = 600_000;
+const MAX_UPSTREAM_MAX_MS = 3_600_000;
 /** ASSISTANT_TELEMETRY_USER_SALT shorter than this (after trimming) is treated as missing. */
 export const MIN_TELEMETRY_USER_SALT_LENGTH = 16;
 const MAX_CONTEXT_WINDOW = 100_000_000;
@@ -235,6 +238,7 @@ class AssistantConfigGateway implements AssistantConfigGatewayOutputPort {
             ...(apiKey !== undefined ? { apiKey } : {}),
             rateLimitPerMinute: parsePositiveInt(env.ASSISTANT_RELAY_RATE_LIMIT, MAX_RELAY_RATE_LIMIT) ?? DEFAULT_RELAY_RATE_LIMIT,
             upstreamTimeoutMs: parsePositiveInt(env.ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS, MAX_UPSTREAM_TIMEOUT_MS) ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
+            upstreamMaxMs: parsePositiveInt(env.ASSISTANT_LLM_UPSTREAM_MAX_MS, MAX_UPSTREAM_MAX_MS) ?? DEFAULT_UPSTREAM_MAX_MS,
         };
     }
 
