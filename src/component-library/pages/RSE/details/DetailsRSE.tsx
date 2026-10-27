@@ -17,6 +17,8 @@ import { WarningField } from '@/component-library/features/fields/WarningField';
 import { RSEDetailsProtocol } from '@/lib/core/entity/rucio';
 import { InfoField } from '@/component-library/features/fields/InfoField';
 import { Divider } from '@/component-library/atoms/misc/Divider';
+import { usePageDescribe } from '@/lib/infrastructure/hooks/usePageDescribe';
+import { describeRSEPage } from '@/lib/infrastructure/assistant/page-summaries';
 
 /**
  * A responsive divider component for RSE sections.
@@ -184,6 +186,8 @@ export const DetailsRSE = (props: DetailsRSEProps) => {
         retry: false,
         refetchOnWindowFocus: false,
     });
+
+    usePageDescribe(() => describeRSEPage({ name: props.name, meta, attributes: attributes?.attributes }));
 
     const hasError = metaError || attributesError;
     if (hasError) {

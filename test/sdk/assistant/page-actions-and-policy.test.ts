@@ -26,12 +26,30 @@ describe('page action registry', () => {
         const apply = jest.fn(async (args: { dids: string[]; copies: number }) => `prefilled ${args.dids.length} DIDs, ${args.copies} copies`);
         const unregister = registry.register({ name: 'rule_create.prefill', description: 'Prefill', schema, apply });
         expect(registry.list()).toEqual([
-            { name: 'rule_create.prefill', description: 'Prefill', inputJsonSchema: expect.objectContaining({ type: 'object' }) },
+            { name: 'rule_create.prefill', description: 'Prefill', inputJsonSchema: expect.objectContaining({ type: 'object' }), risk: 'read' },
         ]);
         await expect(registry.invoke('rule_create.prefill', { dids: ['user.root:a'], copies: '2' })).resolves.toBe('prefilled 1 DIDs, 2 copies');
         expect(apply).toHaveBeenCalledWith({ dids: ['user.root:a'], copies: 2 });
         unregister();
         expect(registry.list()).toEqual([]);
+    });
+
+    it('lists the declared risk of an action and defaults to read', () => {
+        const registry = createPageActionRegistry();
+        registry.register({ name: 'a.read', description: 'A', schema, apply: async () => 'ok' });
+        registry.register({ name: 'b.write', description: 'B', schema, apply: async () => 'ok', risk: 'write' });
+        expect(registry.list().map(info => [info.name, info.risk])).toEqual([
+            ['a.read', 'read'],
+            ['b.write', 'write'],
+        ]);
+    });
+
+    it('refuses to invoke an action that is not read only, without applying it (m5)', async () => {
+        const registry = createPageActionRegistry();
+        const apply = jest.fn(async () => 'ok');
+        registry.register({ name: 'b.write', description: 'B', schema, apply, risk: 'write' });
+        await expect(registry.invoke('b.write', { dids: [] })).rejects.toMatchObject({ error: 'denied_by_policy' });
+        expect(apply).not.toHaveBeenCalled();
     });
 
     it('throws ToolError shapes for unknown actions and bad args', async () => {

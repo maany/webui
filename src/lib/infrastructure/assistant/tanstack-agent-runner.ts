@@ -16,6 +16,9 @@ import type { ToolError, ToolPolicy } from '@/lib/core/entity/assistant/tool';
 import { computeCost, type TokenUsage } from '@/lib/core/entity/assistant/usage';
 import { CONTEXT_OVERFLOW_ERROR, SESSION_EXPIRED_ERROR } from './runner-errors';
 import { formatUserTurn } from './system-prompt';
+import { maskSensitiveArgs } from './approvals';
+import { getTool } from './tool-registry';
+import { MAY_HAVE_LANDED } from './tool-error';
 import { REJECTED_BY_USER, buildTanstackTools, createPolicyMiddleware, createToolFilterMiddleware, deniedByPolicy } from './tanstack-tools';
 import { isToolError, type RegisteredTool, type ToolExecutionContext } from './tool-types';
 
@@ -374,16 +377,56 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
             policyFor: name => d.policyFor(name),
             makeToolContext: toolCallId => d.makeToolContext(toolCallId, input.turnId),
             onResult: recordDuration,
+            onStart: (id, name, args) => markRunning(id, name, args),
         });
         // Reads deps() again so tools loaded mid-turn by find_tools are offered on the next model call.
         let liveClient: ChatClient | null = null;
         const pinnedAsk = new Map(built.builtPolicy);
+        // Tools of the latest rebuild, so masking sees mid-turn tools without calling deps() again per tool call.
+        let latestTools = d.tools;
+        // Calls already shown, and calls whose tool started but has no result yet.
+        const announced = new Set<string>();
+        const running = new Map<string, { toolName: string; args: unknown; startedAt: number }>();
+        const specFor = (toolName: string) =>
+            [latestTools, d.tools].map(list => list.find(tool => tool.spec.name === toolName)).find(Boolean)?.spec ?? getTool(toolName)?.spec;
+        const announce = (toolCallId: string, toolName: string, args: unknown) => {
+            if (announced.has(toolCallId)) return;
+            announced.add(toolCallId);
+            const policy = built.builtPolicy.get(toolName) ?? d.policyFor(toolName);
+            // Execution keeps TanStack's own args; what is stored, shown and emitted never carries sensitive values.
+            const shownArgs = maskSensitiveArgs(args, specFor(toolName)?.sensitiveArgs ?? []);
+            channel.push({ type: 'tool-call', toolCallId, toolName, args: shownArgs, policy });
+            d.emit({ type: 'tool-call-started', turnId: input.turnId, toolCallId, toolName, args: shownArgs, policy, at: Date.now() });
+        };
+        // Called by the execute wrapper just before the tool runs. Only records it: the client's own TOOL_CALL_END
+        // announces the call in stream order, so pushing here could put the card ahead of text it has not read yet.
+        const markRunning = (toolCallId: string, toolName: string, args: unknown) => {
+            running.set(toolCallId, { toolName, args: maskSensitiveArgs(args, specFor(toolName)?.sensitiveArgs ?? []), startedAt: Date.now() });
+        };
+        // A Stop or an error drops the chunks the client has not processed yet, so a tool that already started would
+        // leave no result. Show and close it here; a write may have landed, so it says so.
+        const closeRunningCalls = (why: 'stopped' | 'error') => {
+            running.forEach(({ toolName, args, startedAt }, toolCallId) => {
+                announce(toolCallId, toolName, args);
+                const lead = why === 'stopped' ? 'Stopped by the user.' : 'The turn ended with an error.';
+                const error: ToolError =
+                    specFor(toolName)?.risk === 'read'
+                        ? { error: 'aborted', message: why === 'stopped' ? 'The tool call was stopped.' : 'The tool call was interrupted.' }
+                        : { error: 'aborted', message: `${lead} ${MAY_HAVE_LANDED}` };
+                const durationMs = Date.now() - startedAt;
+                channel.push({ type: 'tool-result', toolCallId, result: error, error, durationMs });
+                d.emit({ type: 'tool-call-finished', turnId: input.turnId, toolCallId, durationMs, error, at: Date.now() });
+            });
+            running.clear();
+        };
         const buildTools = () => {
             const fresh = deps();
+            latestTools = fresh.tools;
             const rebuilt = buildTanstackTools(fresh.tools, {
                 policyFor: name => fresh.policyFor(name),
                 makeToolContext: toolCallId => fresh.makeToolContext(toolCallId, input.turnId),
                 onResult: recordDuration,
+                onStart: (id, name, args) => markRunning(id, name, args),
                 // Tools built at the start keep their approval mode, so a pending approval still resumes.
                 builtWith: pinnedAsk,
             });
@@ -476,20 +519,11 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                         case 'TOOL_CALL_END': {
                             const toolName = toolNames.get(chunk.toolCallId) ?? 'unknown';
                             const args = chunk.input !== undefined ? chunk.input : parseToolContent(toolArgsText.get(chunk.toolCallId) || '{}');
-                            const policy = built.builtPolicy.get(toolName) ?? d.policyFor(toolName);
-                            channel.push({ type: 'tool-call', toolCallId: chunk.toolCallId, toolName, args, policy });
-                            d.emit({
-                                type: 'tool-call-started',
-                                turnId: input.turnId,
-                                toolCallId: chunk.toolCallId,
-                                toolName,
-                                args,
-                                policy,
-                                at: Date.now(),
-                            });
+                            announce(chunk.toolCallId, toolName, args);
                             break;
                         }
                         case 'TOOL_CALL_RESULT': {
+                            running.delete(chunk.toolCallId);
                             const result = parseToolContent(chunk.content);
                             const error = isToolError(result) ? result : undefined;
                             const durationMs = durations.get(chunk.toolCallId) ?? 0;
@@ -577,8 +611,11 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                     });
                 }
 
-                if (input.signal.aborted) channel.push({ type: 'finished', status: 'stopped' });
-                else if (runError)
+                if (input.signal.aborted) {
+                    closeRunningCalls('stopped');
+                    channel.push({ type: 'finished', status: 'stopped' });
+                } else if (runError) {
+                    closeRunningCalls('error');
                     channel.push({
                         type: 'finished',
                         status: 'error',
@@ -588,9 +625,11 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                             ? CONTEXT_OVERFLOW_ERROR
                             : runError.message,
                     });
-                else if (stepLimitHit || lastFinishReason === 'tool_calls') channel.push({ type: 'finished', status: 'step-limit' });
+                } else if (stepLimitHit || lastFinishReason === 'tool_calls') channel.push({ type: 'finished', status: 'step-limit' });
                 else channel.push({ type: 'finished', status: 'completed' });
             } catch (error) {
+                if (input.signal.aborted) closeRunningCalls('stopped');
+                else closeRunningCalls('error');
                 channel.push(
                     input.signal.aborted
                         ? { type: 'finished', status: 'stopped' }

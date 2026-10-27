@@ -168,12 +168,17 @@ describe('createAgentRunner', () => {
     });
 
     it('auto-approves a pending call when the live policy became allow during the turn', async () => {
-        const { run, executed, policies } = setup([{ toolCalls: [{ name: 'do_write', input: { id: 'r1' } }] }, { text: 'done' }]);
-        const updates = run();
-        policies.do_write = 'ask';
-        const seen = await collectUpdates(updates, update => {
-            if (update.type === 'tool-call') policies.do_write = 'allow';
-        });
+        const { run, executed, policies, fake } = setup([]);
+        // The flip happens where it is ordered against the runner: the update consumer may lag the whole turn.
+        fake.setResponses([
+            () => {
+                // The tools for this call were already built as ask; the interrupt is handled after this.
+                policies.do_write = 'allow';
+                return { toolCalls: [{ name: 'do_write', input: { id: 'r1' } }] };
+            },
+            { text: 'done' },
+        ]);
+        const seen = await collectUpdates(run());
         expect(executed).toEqual(['do_write:r1']);
         expect(seen.some(update => update.type === 'approval-required')).toBe(false);
     });
@@ -201,12 +206,12 @@ describe('createAgentRunner', () => {
         // Stop only once the tool is really running, so load cannot reorder the abort and the stream.
         void slowToolStarted.then(() => controller.abort());
         const updates = await collectUpdates(run());
-        // The stop ends the turn without waiting for the tool's rejection to be streamed back, so a tool-result
-        // may or may not precede `finished`; the reducer closes open tool calls as aborted either way.
         await slowToolAborted;
-        const result = updates.find(update => update.type === 'tool-result');
-        if (result) expect(result).toMatchObject({ error: { error: 'aborted' } });
-        expect(updates.some(update => update.type === 'tool-call')).toBe(true);
+        // The runner shows and closes a call whose tool started, even when the client had not delivered it before the stop.
+        expect(updates.filter(update => update.type === 'tool-call')).toHaveLength(1);
+        expect(updates.filter(update => update.type === 'tool-result')).toEqual([
+            expect.objectContaining({ error: { error: 'aborted', message: 'The tool call was stopped.' } }),
+        ]);
         expect(finished(updates)).toEqual({ type: 'finished', status: 'stopped' });
     });
 
@@ -234,19 +239,19 @@ describe('createAgentRunner', () => {
     });
 
     it('keeps the step limit across approval resumes when the policy flips to allow', async () => {
-        const { run, executed, policies, fake } = setup(
-            [
-                { toolCalls: [{ name: 'do_write', input: { id: '1' } }] },
-                { toolCalls: [{ name: 'do_write', input: { id: '2' } }] },
-                { toolCalls: [{ name: 'do_write', input: { id: '3' } }] },
-                { toolCalls: [{ name: 'do_write', input: { id: '4' } }] },
-                { text: 'never reached' },
-            ],
-            { maxSteps: 2 },
-        );
-        const updates = await collectUpdates(run(), update => {
-            if (update.type === 'tool-call') policies.do_write = 'allow';
-        });
+        const { run, executed, policies, fake } = setup([], { maxSteps: 2 });
+        fake.setResponses([
+            () => {
+                // Built as ask, relaxed before the first interrupt is handled.
+                policies.do_write = 'allow';
+                return { toolCalls: [{ name: 'do_write', input: { id: '1' } }] };
+            },
+            { toolCalls: [{ name: 'do_write', input: { id: '2' } }] },
+            { toolCalls: [{ name: 'do_write', input: { id: '3' } }] },
+            { toolCalls: [{ name: 'do_write', input: { id: '4' } }] },
+            { text: 'never reached' },
+        ]);
+        const updates = await collectUpdates(run());
         expect(finished(updates)).toEqual({ type: 'finished', status: 'step-limit' });
         expect(fake.state.callCount).toBe(2);
         expect(executed).toEqual(['do_write:1']);

@@ -82,6 +82,15 @@ describe('read tool registry', () => {
         for (const route of WRITE_ROUTES) for (const spec of specsFor(route)) expect(spec.risk).not.toBe('read');
     });
 
+    it('registers exactly one write tool for every write route (phase 4)', () => {
+        for (const route of WRITE_ROUTES) {
+            const specs = specsFor(route);
+            expect(specs).toHaveLength(1);
+            expect(specs[0].risk).not.toBe('read');
+            expect(specs[0].name).toBe(route.replace(/-/g, '_'));
+        }
+    });
+
     it('registers the core data tools as always on', () => {
         for (const name of ['find_tools', 'run_sql', 'refresh_handle']) {
             expect(allTools().find(tool => tool.spec.name === name)?.spec.alwaysOn).toBe(true);

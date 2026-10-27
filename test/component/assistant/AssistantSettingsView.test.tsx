@@ -85,7 +85,7 @@ describe('AssistantSettingsView', () => {
     it('uses no em dashes in any tab', async () => {
         render(<AssistantSettingsView {...props()} />);
         let text = document.body.textContent ?? '';
-        ['Providers', 'Skills', 'Telemetry', 'Display', 'Storage'].forEach(name => {
+        ['Providers', 'Permissions', 'Skills', 'Telemetry', 'Display', 'Storage'].forEach(name => {
             fireEvent.click(screen.getByRole('tab', { name }));
             text += document.body.textContent ?? '';
         });

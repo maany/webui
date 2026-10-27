@@ -19,7 +19,7 @@ import { createAssistantEventBus, type AssistantEventBus } from '@/lib/infrastru
 import { createConversationRepository } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
 import { lookupModel } from '@/lib/infrastructure/assistant/model-catalog';
 import { buildPageContext, toAccountKey } from '@/lib/infrastructure/assistant/page-context';
-import { createPolicyFor } from '@/lib/infrastructure/assistant/policy-for';
+import { createPolicyFor, type PolicyCaps } from '@/lib/infrastructure/assistant/policy-for';
 import { ASSISTANT_RELAY_BASE_URL, DEFAULT_BASE_URLS } from '@/lib/infrastructure/assistant/provider-kinds';
 import { completeText, createAgentRunner } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
 import { allTools, getTool } from '@/lib/infrastructure/assistant/tool-registry';
@@ -48,7 +48,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     const { data: session } = useSession();
     const accountKey = toAccountKey(session?.user?.rucioAccount, session?.user?.rucioVO);
     const role = session?.user?.role;
-    const { config } = useAssistantConfig();
+    const { config, isLoading: configLoading, isLoaded: configLoaded, error: configError } = useAssistantConfig();
     const { settings } = useAssistantSettings();
     const flags = useFeatureFlags();
     const { isReady } = usePermissions();
@@ -78,15 +78,23 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
     configRef.current = config;
     const settingsRef = useRef(settings);
     settingsRef.current = settings;
+    // The gate reads this on every tool call: writes fail closed (undefined caps) until the operator config has loaded.
+    const policyCapsRef = useRef<PolicyCaps | undefined>(undefined);
+    policyCapsRef.current = configLoading || configError || !configLoaded ? undefined : config;
+
+    const isVisible = (spec: Pick<ToolSpec, 'requires' | 'risk'>): boolean =>
+        !!flags && toolVisibility(spec, { flags, role, permissionsReady: isReady }).visible;
+    // The live gate reads the latest flags, role and permix readiness, so a turn already running sees changes.
+    const isVisibleRef = useRef(isVisible);
+    isVisibleRef.current = isVisible;
 
     const makePolicyFor: AssistantControllerDeps['makePolicyFor'] = getConversationAllow =>
         createPolicyFor(
-            () => configRef.current,
+            () => policyCapsRef.current,
             () => settingsRef.current,
             getConversationAllow,
+            { isVisible: spec => isVisibleRef.current(spec) },
         );
-    const isVisible = (spec: Pick<ToolSpec, 'requires' | 'risk'>): boolean =>
-        !!flags && toolVisibility(spec, { flags, role, permissionsReady: isReady }).visible;
     // Live checks shared by find_tools, refresh_handle and the Refresh button on SQL results.
     const isToolVisible = (name: string): boolean => {
         const tool = getTool(name);

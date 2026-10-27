@@ -35,9 +35,9 @@ export async function fetchAssistantConfig(): Promise<AssistantConfig> {
 
 /**
  * Operator configuration for Rucio bot. Returns DEFAULT_ASSISTANT_CONFIG while loading, on error,
- * and while the assistant flag is off (no request is made then).
+ * and while the assistant flag is off (no request is made then). isLoaded is true only once real data arrived.
  */
-export function useAssistantConfig(): { config: AssistantConfig; isLoading: boolean; error?: Error } {
+export function useAssistantConfig(): { config: AssistantConfig; isLoading: boolean; isLoaded: boolean; error?: Error } {
     const enabled = useFeature('assistant');
     const query = useQuery<AssistantConfig, Error>({
         queryKey: QUERY_KEYS.assistantConfig,
@@ -50,6 +50,8 @@ export function useAssistantConfig(): { config: AssistantConfig; isLoading: bool
     return {
         config: query.data ?? DEFAULT_ASSISTANT_CONFIG,
         isLoading: enabled && query.isLoading,
+        // False for a query that is disabled, errored or paused offline (not loading, no data): callers fail closed.
+        isLoaded: enabled && query.data !== undefined,
         ...(query.error ? { error: query.error } : {}),
     };
 }

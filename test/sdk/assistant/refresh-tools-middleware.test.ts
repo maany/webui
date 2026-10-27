@@ -57,7 +57,7 @@ describe('tools loaded mid-turn', () => {
 describe('policy changes and late tools during a run', () => {
     const provider = { providerId: 'p', kind: 'openai-compatible', model: 'fake', via: 'direct' } as const;
 
-    function setupWrite(options: { late?: boolean } = {}) {
+    function setupWrite(options: { late?: boolean; onWrite?: (id: string, policies: Record<string, ToolPolicy>) => void } = {}) {
         const executed: string[] = [];
         const policies: Record<string, ToolPolicy> = { find_tools: 'allow', do_write: 'allow' };
         let loaded = !options.late;
@@ -67,6 +67,7 @@ describe('policy changes and late tools during a run', () => {
         });
         const doWrite = makeTool('do_write', 'write', z.object({ id: z.string() }), async args => {
             executed.push(args.id);
+            options.onWrite?.(args.id, policies);
             return { ok: true };
         });
         const controller = new AbortController();
@@ -88,42 +89,94 @@ describe('policy changes and late tools during a run', () => {
         return { fake, run, runner, executed, policies };
     }
 
+    // Policy changes are made where they are ordered against the runner: the update consumer drains a buffered
+    // channel and may only see the first tool-result after the whole turn has run.
     it('asks for approval when a tool built as allow is tightened to ask mid-turn', async () => {
-        const { fake, run, runner, executed, policies } = setupWrite();
+        const { fake, run, runner, executed } = setupWrite({
+            // Runs before the next model call rebuilds the tools, so call 2 is built as an ask tool.
+            onWrite: (id, policies) => {
+                if (id === '1') policies.do_write = 'ask';
+            },
+        });
         fake.setResponses([
             { toolCalls: [{ name: 'do_write', input: { id: '1' } }] },
             { toolCalls: [{ name: 'do_write', input: { id: '2' } }] },
             { text: 'done' },
         ]);
         const updates = await collectUpdates(run(), update => {
-            if (update.type === 'tool-result' && policies.do_write === 'allow') policies.do_write = 'ask';
             if (update.type === 'approval-required') setTimeout(() => runner.resolveApproval(update.toolCallId, true), 10);
         });
         expect(updates.filter(update => update.type === 'approval-required')).toHaveLength(1);
         expect(executed).toEqual(['1', '2']);
+        expect(updates[updates.length - 1]).toEqual({ type: 'finished', status: 'completed' });
+    });
+
+    it('refuses a call built as allow when its policy is tightened to ask after the tools were built', async () => {
+        const { fake, run, executed, policies } = setupWrite();
+        fake.setResponses([
+            { toolCalls: [{ name: 'do_write', input: { id: '1' } }] },
+            () => {
+                // The tools for this call were already built as allow.
+                policies.do_write = 'ask';
+                return { toolCalls: [{ name: 'do_write', input: { id: '2' } }] };
+            },
+            { text: 'done' },
+        ]);
+        const updates = await collectUpdates(run());
+        expect(executed).toEqual(['1']);
+        expect(updates.some(update => update.type === 'approval-required')).toBe(false);
+        expect(updates.filter(update => update.type === 'tool-result').pop()).toMatchObject({
+            error: { error: 'denied_by_policy', message: expect.stringContaining('now needs approval') },
+        });
+        expect(updates[updates.length - 1]).toEqual({ type: 'finished', status: 'completed' });
     });
 
     it('refuses a tool built as allow that is denied mid-turn', async () => {
-        const { fake, run, executed, policies } = setupWrite();
+        const { fake, run, executed } = setupWrite({
+            onWrite: (id, policies) => {
+                if (id === '1') policies.do_write = 'deny';
+            },
+        });
         fake.setResponses([
             { toolCalls: [{ name: 'do_write', input: { id: '1' } }] },
             { toolCalls: [{ name: 'do_write', input: { id: '2' } }] },
             { text: 'done' },
         ]);
-        const updates = await collectUpdates(run(), update => {
-            if (update.type === 'tool-result' && policies.do_write === 'allow') policies.do_write = 'deny';
-        });
+        const updates = await collectUpdates(run());
         expect(executed).toEqual(['1']);
         expect(updates.filter(update => update.type === 'tool-result').pop()).toMatchObject({ error: { error: 'denied_by_policy' } });
+    });
+
+    it('refuses a call built as allow when its policy is denied after the tools were built', async () => {
+        const { fake, run, executed, policies } = setupWrite();
+        fake.setResponses([
+            { toolCalls: [{ name: 'do_write', input: { id: '1' } }] },
+            () => {
+                // The tools for this call were already built as allow.
+                policies.do_write = 'deny';
+                return { toolCalls: [{ name: 'do_write', input: { id: '2' } }] };
+            },
+            { text: 'done' },
+        ]);
+        const updates = await collectUpdates(run());
+        expect(executed).toEqual(['1']);
+        expect(updates.some(update => update.type === 'approval-required')).toBe(false);
+        expect(updates.filter(update => update.type === 'tool-result').pop()).toMatchObject({ error: { error: 'denied_by_policy' } });
+        expect(updates[updates.length - 1]).toEqual({ type: 'finished', status: 'completed' });
     });
 
     it('resumes the approval of a tool built as ask when its policy becomes allow', async () => {
         const { fake, run, executed, policies } = setupWrite();
         policies.do_write = 'ask';
-        fake.setResponses([{ toolCalls: [{ name: 'do_write', input: { id: '1' } }] }, { text: 'done' }]);
-        const updates = await collectUpdates(run(), update => {
-            if (update.type === 'tool-call') policies.do_write = 'allow';
-        });
+        fake.setResponses([
+            () => {
+                // The tools for this call were already built as ask; the interrupt is handled after this.
+                policies.do_write = 'allow';
+                return { toolCalls: [{ name: 'do_write', input: { id: '1' } }] };
+            },
+            { text: 'done' },
+        ]);
+        const updates = await collectUpdates(run());
         expect(executed).toEqual(['1']);
         expect(updates[updates.length - 1]).toEqual({ type: 'finished', status: 'completed' });
     });

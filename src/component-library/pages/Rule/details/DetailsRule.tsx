@@ -32,6 +32,8 @@ import { CommentRuleDialog } from '@/component-library/features/mutations/Commen
 import { DenyRuleDialog } from '@/component-library/features/mutations/DenyRuleDialog';
 import { DeleteRuleDialog } from '@/component-library/features/mutations/DeleteRuleDialog';
 import { usePermissions } from '@/lib/infrastructure/hooks/usePermissions';
+import { usePageDescribe } from '@/lib/infrastructure/hooks/usePageDescribe';
+import { describeRulePage } from '@/lib/infrastructure/assistant/page-summaries';
 
 export const DetailsRuleTabs = ({ id, meta, featureDDMDashboard }: { id: string; meta: RuleMetaViewModel; featureDDMDashboard: boolean }) => {
     const tabNames = ['Attributes', 'Locks'];
@@ -244,6 +246,8 @@ export const DetailsRule = ({ id, featureDDMDashboard }: { id: string; featureDD
         retry: false,
         refetchOnWindowFocus: false,
     });
+
+    usePageDescribe(() => describeRulePage({ id, meta }));
 
     if (metaError) {
         return (

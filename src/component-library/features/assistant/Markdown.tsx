@@ -7,17 +7,9 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import Highlight from 'react-highlight';
 import { cn } from '@/component-library/utils';
+import { isInAppHref } from '@/lib/infrastructure/assistant/in-app-href';
 
-/** Relative links ("/rule/123") stay in the app; everything else opens in a new tab. */
-export function isInAppHref(href: string | undefined): href is string {
-    if (typeof href !== 'string' || !href.startsWith('/') || href.startsWith('//')) return false;
-    // Browsers normalise '/\\evil.com' to '//evil.com', so reject backslashes, whitespace and control characters too.
-    for (const char of href) {
-        const code = char.charCodeAt(0);
-        if (char === '\\' || code <= 0x20 || code === 0x7f || /\s/.test(char)) return false;
-    }
-    return true;
-}
+export { isInAppHref };
 
 /**
  * Model output must never make the browser fetch anything on render, so

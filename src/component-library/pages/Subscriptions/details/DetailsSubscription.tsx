@@ -10,6 +10,8 @@ import { useState } from 'react';
 import { Alert } from '@/component-library/atoms/feedback/Alert';
 import { DetailsSubscriptionSections } from '@/component-library/pages/Subscriptions/details/DetailsSubscriptionSections';
 import { DetailsSubscriptionMeta } from '@/component-library/pages/Subscriptions/details/DetailsSubscriptionMeta';
+import { usePageDescribe } from '@/lib/infrastructure/hooks/usePageDescribe';
+import { describeSubscriptionPage } from '@/lib/infrastructure/assistant/page-summaries';
 
 export type DetailsSubscriptionProps = {
     account: string;
@@ -54,6 +56,8 @@ export const DetailsSubscription = ({ account, name }: DetailsSubscriptionProps)
         retry: false,
         refetchOnWindowFocus: false,
     });
+
+    usePageDescribe(() => describeSubscriptionPage({ account, name, meta }));
 
     if (metaError) {
         return (

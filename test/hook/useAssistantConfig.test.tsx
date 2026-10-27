@@ -1,6 +1,6 @@
 import React from 'react';
 import { renderHook, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { FeatureProvider } from '@/component-library/features/feature-flags/FeatureProvider';
 import { FEATURE_REGISTRY, type FeatureFlagMap, type FeatureKey } from '@/lib/core/entity/feature-config';
 import { DEFAULT_ASSISTANT_CONFIG } from '@/lib/core/entity/assistant/assistant-config';
@@ -37,6 +37,7 @@ describe('useAssistantConfig', () => {
         const { result } = renderHook(() => useAssistantConfig(), { wrapper: wrapperFor(false) });
         expect(result.current.config).toEqual(DEFAULT_ASSISTANT_CONFIG);
         expect(result.current.isLoading).toBe(false);
+        expect(result.current.isLoaded).toBe(false);
         expect(fetchSpy).not.toHaveBeenCalled();
     });
 
@@ -45,7 +46,9 @@ describe('useAssistantConfig', () => {
         reply(200, { status: 'success', ...DEFAULT_ASSISTANT_CONFIG, writePolicyCap: 'deny', allowByok: false, defaultProvider });
         const { result } = renderHook(() => useAssistantConfig(), { wrapper: wrapperFor(true) });
         expect(result.current.isLoading).toBe(true);
+        expect(result.current.isLoaded).toBe(false);
         await waitFor(() => expect(result.current.isLoading).toBe(false));
+        expect(result.current.isLoaded).toBe(true);
         expect(fetchSpy).toHaveBeenCalledWith('/api/feature/get-assistant-config');
         expect(result.current.config).toEqual({ ...DEFAULT_ASSISTANT_CONFIG, writePolicyCap: 'deny', allowByok: false, defaultProvider });
         expect(result.current.config).not.toHaveProperty('status');
@@ -58,5 +61,20 @@ describe('useAssistantConfig', () => {
         await waitFor(() => expect(result.current.error).toBeDefined());
         expect(result.current.error?.message).toBe('Could not read the assistant configuration');
         expect(result.current.config).toEqual(DEFAULT_ASSISTANT_CONFIG);
+        expect(result.current.isLoaded).toBe(false);
+    });
+
+    it('is not loaded while the query is paused offline: not loading, no data', async () => {
+        reply(200, { status: 'success', ...DEFAULT_ASSISTANT_CONFIG });
+        onlineManager.setOnline(false);
+        try {
+            const { result } = renderHook(() => useAssistantConfig(), { wrapper: wrapperFor(true) });
+            await new Promise(resolve => setTimeout(resolve, 20));
+            expect(fetchSpy).not.toHaveBeenCalled();
+            expect(result.current.isLoading).toBe(false);
+            expect(result.current.isLoaded).toBe(false);
+        } finally {
+            onlineManager.setOnline(true);
+        }
     });
 });

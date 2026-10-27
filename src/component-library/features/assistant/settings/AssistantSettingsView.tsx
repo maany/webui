@@ -13,6 +13,7 @@ import { ProvidersTab } from './ProvidersTab';
 import { SkillsTabContainer } from './SkillsTabContainer';
 import { TelemetryTab } from './TelemetryTab';
 import { DisplayTab } from './DisplayTab';
+import { PermissionsTabContainer } from './PermissionsTabContainer';
 import { StorageTab } from './StorageTab';
 import { AssistantStorageSection } from './AssistantStorageSection';
 
@@ -34,6 +35,10 @@ export const ASSISTANT_SETTINGS_TABS: { name: string; render(props: AssistantSet
         render: p => (
             <ProvidersTab config={p.config} settings={p.settings} onUpdate={p.onUpdate} onTestConnection={p.onTestConnection} newId={p.newId} />
         ),
+    },
+    {
+        name: 'Permissions',
+        render: p => <PermissionsTabContainer config={p.config} configError={p.configError} settings={p.settings} onUpdate={p.onUpdate} />,
     },
     { name: 'Skills', render: p => <SkillsTabContainer config={p.config} settings={p.settings} onUpdate={p.onUpdate} /> },
     { name: 'Telemetry', render: p => <TelemetryTab config={p.config} settings={p.settings} onUpdate={p.onUpdate} /> },

@@ -27,6 +27,8 @@ export interface BuildToolsOptions {
     policyFor(toolName: string): ToolPolicy;
     makeToolContext(toolCallId: string): ToolExecutionContext;
     onResult: ToolResultObserver;
+    /** Called just before a tool runs, never for a call that is refused first. */
+    onStart?(toolCallId: string, toolName: string, args: unknown): void;
     /**
      * Policies tools were built with earlier in a run. A tool built as ask is rebuilt as ask even if its live policy relaxed,
      * so a pending approval still matches its tool; every other policy, and every execution check, stays live.
@@ -112,6 +114,7 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
                 options.onResult(toolCallId, tightened, tightened, 0);
                 return tightened;
             }
+            options.onStart?.(toolCallId, tool.spec.name, args);
             const ctx = options.makeToolContext(toolCallId);
             let result: unknown;
             try {

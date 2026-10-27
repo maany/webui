@@ -72,6 +72,8 @@ export const CreateRuleStageSubmission = ({ parameters, removeSaved }: CreateRul
         refetchOnWindowFocus: false,
         refetchOnReconnect: false,
         refetchOnMount: false,
+        // Each mount submits once; a cached result from an earlier submission must never answer a new one
+        gcTime: 0,
         retry: false,
     });
 

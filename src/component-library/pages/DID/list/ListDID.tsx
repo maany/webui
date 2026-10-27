@@ -8,6 +8,7 @@ import { SelectionChangedEvent } from 'ag-grid-community';
 import { Heading } from '@/component-library/atoms/misc/Heading';
 import { useToast } from '@/lib/infrastructure/hooks/useToast';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/infrastructure/query';
 import { ListDIDTable } from '@/component-library/pages/DID/list/ListDIDTable';
 import { BaseViewModelValidator } from '@/component-library/features/utils/BaseViewModelValidator';
 import { ListDIDMeta } from '@/component-library/pages/DID/list/meta/ListDIDMeta';
@@ -105,7 +106,7 @@ export const ListDID = (props: ListDIDProps) => {
         return null;
     };
 
-    const metaQueryKey = ['meta'];
+    const metaQueryKey = [...QUERY_KEYS.DID_META];
     const {
         data: meta,
         error: metaError,
