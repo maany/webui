@@ -175,6 +175,7 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         const before = panelStateRef.current;
         panelStateRef.current = panelState;
+        if (process.env.NODE_ENV === 'development' && before !== panelState) console.debug('[Rucio bot] panel', panelState);
         if (panelState !== 'closed' || before === 'closed') return;
         const opener = openerRef.current;
         openerRef.current = null;

@@ -502,7 +502,10 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     }),
                     emit: event => depsRef.current.bus.emit(event),
                     makeToolContext: (toolCallId, toolTurnId) => {
-                        const { activateTools, ...extras } = depsRef.current.toolContextExtras();
+                        const { activateTools, minimizePanel, ...extras } = depsRef.current.toolContextExtras();
+                        // A tool may only move the page or the panel for the live turn: not after Stop, after the view
+                        // moved to another chat, or while the session gate is closed.
+                        const mayAct = () => isCurrent() && !controller.signal.aborted && depsRef.current.sessionActive?.() !== false;
                         return {
                             signal: controller.signal,
                             conversationId: startConversation.id,
@@ -511,7 +514,18 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                             accountKey: startConversation.accountKey,
                             handles: depsRef.current.handles,
                             pages: depsRef.current.pages,
-                            navigate: url => depsRef.current.navigate(url),
+                            navigate: url => {
+                                if (!mayAct()) return;
+                                if (process.env.NODE_ENV === 'development') console.trace('[Rucio bot] navigate', url);
+                                depsRef.current.navigate(url);
+                            },
+                            ...(minimizePanel
+                                ? {
+                                      minimizePanel: () => {
+                                          if (mayAct()) minimizePanel();
+                                      },
+                                  }
+                                : {}),
                             queryClient: depsRef.current.queryClient,
                             emit: event => depsRef.current.bus.emit(event),
                             ...extras,
