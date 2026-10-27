@@ -26,13 +26,13 @@ import { FeatureProvider } from '@/component-library/features/feature-flags/Feat
 import { AssistantProvider } from '@/component-library/features/assistant/AssistantProvider';
 import { useRefreshGate } from '@/component-library/features/assistant/DataHandleStoreContext';
 import { AssistantContext, type UseAssistantResult } from '@/lib/infrastructure/hooks/useAssistant';
-import { AssistantShellProvider } from '@/lib/infrastructure/hooks/useAssistantShell';
+import { AssistantShellProvider, useAssistantPanel, type AssistantConversationControls } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/in-memory-conversation-repository';
 import { getAssistantDataHandleStore } from '@/lib/infrastructure/assistant/duckdb';
 import type { AgentRunner, AgentRunnerDeps, RunnerUpdate } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
 import type { AssistantConversationRepositoryPort } from '@/lib/core/port/secondary/assistant-conversation-repository-port';
 import { FEATURE_REGISTRY, type FeatureFlagMap, type FeatureKey } from '@/lib/core/entity/feature-config';
-import { makeNoopHandles } from 'test/fixtures/assistant-fixtures';
+import { makeConversation, makeNoopHandles } from 'test/fixtures/assistant-fixtures';
 
 const allFlags = (): FeatureFlagMap => {
     const map = {} as FeatureFlagMap;
@@ -183,5 +183,38 @@ describe('AssistantProvider data tools wiring', () => {
         await waitFor(() => expect(assistant().persistent).toBe(true));
         act(() => lost());
         await waitFor(() => expect(assistant().persistent).toBe(false));
+    });
+
+    it('passes the explicit account key of the sign-out hook through to the repository delete', async () => {
+        const repository = new InMemoryConversationRepository();
+        await repository.saveConversation(makeConversation('c1', 'alice@def'));
+        await repository.saveConversation(makeConversation('c2', 'bob@def'));
+        let controls: AssistantConversationControls | null = null;
+        const Capture = () => {
+            controls = useAssistantPanel().conversationControls;
+            return null;
+        };
+        render(
+            <QueryClientProvider client={new QueryClient()}>
+                <FeatureProvider features={allFlags()}>
+                    <AssistantShellProvider>
+                        <AssistantProvider
+                            overrides={{
+                                repository: Promise.resolve({ repository, persistent: true }),
+                                createRunner: () => ({ run: async function* () {}, resolveApproval: jest.fn() }),
+                            }}
+                        >
+                            <Capture />
+                        </AssistantProvider>
+                    </AssistantShellProvider>
+                </FeatureProvider>
+            </QueryClientProvider>,
+        );
+        await waitFor(() => expect(controls).not.toBeNull());
+        await act(async () => {
+            await (controls as unknown as AssistantConversationControls).deleteAll('alice@def');
+        });
+        expect(await repository.listConversations('alice@def')).toEqual([]);
+        expect((await repository.listConversations('bob@def')).map(c => c.id)).toEqual(['c2']);
     });
 });

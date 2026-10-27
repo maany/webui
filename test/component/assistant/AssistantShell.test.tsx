@@ -6,18 +6,17 @@ jest.mock('next-auth/react', () => ({
     useSession: () => ({ data: mockSession.current }),
 }));
 jest.mock('@/lib/infrastructure/assistant/indexeddb-conversation-repository', () => ({
-    deleteAssistantDatabase: jest.fn().mockResolvedValue(undefined),
     createConversationRepository: jest.fn(),
 }));
 jest.mock('@/component-library/features/assistant/AssistantRoot', () => ({ __esModule: true, default: () => <div data-testid="assistant-root" /> }));
 
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { FeatureProvider } from '@/component-library/features/feature-flags/FeatureProvider';
 import { AssistantHeaderButton } from '@/component-library/features/assistant/AssistantHeaderButton';
 import { AssistantMount } from '@/component-library/features/assistant/AssistantMount';
 import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/in-memory-conversation-repository';
-import { createConversationRepository, deleteAssistantDatabase } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
+import { createConversationRepository } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
 import { getAttachedPageActionRegistry } from '@/lib/infrastructure/assistant/page-action-bridge';
 import { ASSISTANT_SETTINGS_KEY, getDefaultAssistantSettings } from '@/lib/infrastructure/assistant/settings-storage';
 import { runSignOutHooks } from '@/lib/infrastructure/auth/sign-out-hooks';
@@ -64,7 +63,6 @@ describe('Rucio bot shell', () => {
     beforeEach(() => {
         setMobile(false);
         localStorage.clear();
-        (deleteAssistantDatabase as jest.Mock).mockClear();
         (createConversationRepository as jest.Mock).mockReset();
         mockSession.current = { user: { rucioAccount: 'alice', rucioVO: 'def' } };
     });
@@ -127,7 +125,6 @@ describe('Rucio bot shell', () => {
         await act(async () => {
             await runSignOutHooks();
         });
-        expect(deleteAssistantDatabase).not.toHaveBeenCalled();
         unmount();
     });
 
@@ -158,7 +155,6 @@ describe('Rucio bot shell', () => {
         });
         expect(await repository.listConversations('alice@def')).toEqual([]);
         expect((await repository.listConversations('bob@def')).map(c => c.id)).toEqual(['b1']);
-        expect(deleteAssistantDatabase).not.toHaveBeenCalled();
     });
 
     it('stops the turn through the conversation controller when the panel registered one, then deletes', async () => {
@@ -189,6 +185,31 @@ describe('Rucio bot shell', () => {
         // The repository delete runs too, so the clear does not depend on the controller.
         expect(await repository.listConversations('alice@def')).toEqual([]);
         expect((await repository.listConversations('bob@def')).length).toBe(1);
+    });
+
+    it('starts the repository delete without waiting for a controller delete that hangs', async () => {
+        const repository = await seedTwoAccounts();
+        enableClearOnLogout();
+        const controls: AssistantConversationControls = {
+            deleteConversation: jest.fn(),
+            deleteAll: jest.fn().mockReturnValue(new Promise<void>(() => undefined)),
+            deleteAllAccounts: jest.fn(),
+        };
+        function Register() {
+            const { registerConversationControls } = useAssistantPanel();
+            React.useEffect(() => registerConversationControls(controls), [registerConversationControls]);
+            return null;
+        }
+        render(
+            <FeatureProvider features={flagMap({ assistant: true })}>
+                <AssistantShellProvider>
+                    <Register />
+                </AssistantShellProvider>
+            </FeatureProvider>,
+        );
+        void runSignOutHooks();
+        await waitFor(async () => expect(await repository.listConversations('alice@def')).toEqual([]));
+        expect(controls.deleteAll).toHaveBeenCalledWith('alice@def');
     });
 
     it('falls back to the repository when the controller delete fails, and never throws', async () => {

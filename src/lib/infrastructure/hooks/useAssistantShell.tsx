@@ -208,25 +208,30 @@ export function AssistantShellProvider({ children }: { children: ReactNode }) {
             if (keys.length === 0) return;
             const active = activeAccountKeyRef.current;
             // The mounted controller aborts a running turn and tombstones the ids, so the turn cannot save them again.
+            // It runs alongside the repository delete, so a hung controller cannot delay the delete past the hook timeout.
             const controls = conversationControlsRef.current;
-            if (controls && active) {
+            const controllerDelete = (async () => {
+                if (!controls || !active) return;
                 try {
                     await controls.deleteAll(active);
                 } catch {
                     // Not enough on its own: the repository delete below covers every key anyway.
                 }
-            }
-            try {
-                const { createConversationRepository } = await import('@/lib/infrastructure/assistant/indexeddb-conversation-repository');
-                const { repository } = await createConversationRepository();
+            })();
+            const repositoryDelete = (async () => {
                 try {
-                    await Promise.all(keys.map(key => repository.deleteAll(key)));
-                } finally {
-                    (repository as { close?: () => void }).close?.();
+                    const { createConversationRepository } = await import('@/lib/infrastructure/assistant/indexeddb-conversation-repository');
+                    const { repository } = await createConversationRepository();
+                    try {
+                        await Promise.all(keys.map(key => repository.deleteAll(key)));
+                    } finally {
+                        (repository as { close?: () => void }).close?.();
+                    }
+                } catch {
+                    // Best effort: sign-out must never fail because of cleanup.
                 }
-            } catch {
-                // Best effort: sign-out must never fail because of cleanup.
-            }
+            })();
+            await Promise.all([controllerDelete, repositoryDelete]);
         });
     }, [enabled]);
 
