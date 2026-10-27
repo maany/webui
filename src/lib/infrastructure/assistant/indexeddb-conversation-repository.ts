@@ -1,4 +1,4 @@
-import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { ChatMessage, Conversation } from '@/lib/core/entity/assistant/conversation';
 import type { RetentionSettings } from '@/lib/core/entity/assistant/settings';
 import type { AssistantConversationRepositoryPort } from '@/lib/core/port/secondary/assistant-conversation-repository-port';
@@ -8,7 +8,6 @@ import { InMemoryConversationRepository } from './in-memory-conversation-reposit
 export const ASSISTANT_DB_NAME = 'rucio-assistant';
 const ASSISTANT_DB_VERSION = 1;
 const OPEN_TIMEOUT_MS = 3_000;
-const DELETE_TIMEOUT_MS = 3_000;
 
 interface AssistantDB extends DBSchema {
     conversations: { key: string; value: Conversation; indexes: { byAccount: string } };
@@ -35,9 +34,6 @@ async function openAssistantDb(onBlocking: (db: IDBPDatabase<AssistantDB>) => vo
     return holder.db;
 }
 
-/** Bumped by every clear: repositories created before it must not reopen (and so recreate) the database. */
-let clearEpoch = 0;
-
 function isInvalidState(error: unknown): boolean {
     return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'InvalidStateError';
 }
@@ -51,7 +47,6 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
     private reopening?: Promise<IDBPDatabase<AssistantDB> | undefined>;
     private fallback?: InMemoryConversationRepository;
     private readonly lostListeners = new Set<() => void>();
-    private readonly epoch = clearEpoch;
 
     private constructor(db: IDBPDatabase<AssistantDB>, private readonly openTimeoutMs: number) {
         this.db = db;
@@ -90,11 +85,6 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
     /** The live connection, reopened lazily after the browser closed it; undefined once we fell back to memory. */
     private async connection(): Promise<IDBPDatabase<AssistantDB> | undefined> {
         if (this.fallback) return undefined;
-        // After a clear (logout) nothing from this instance may reach IndexedDB again.
-        if (this.epoch !== clearEpoch) {
-            this.degrade();
-            return undefined;
-        }
         if (this.db) return this.db;
         this.reopening ??= (async () => {
             try {
@@ -103,11 +93,6 @@ export class IndexedDbConversationRepository implements AssistantConversationRep
                     this.openTimeoutMs,
                     late => late.close(),
                 );
-                if (this.epoch !== clearEpoch) {
-                    db.close();
-                    this.degrade();
-                    return undefined;
-                }
                 this.db = db;
                 return db;
             } catch {
@@ -303,31 +288,12 @@ export async function createConversationRepository(
 ): Promise<{ repository: AssistantConversationRepositoryPort; persistent: boolean }> {
     if (typeof indexedDB === 'undefined') return { repository: new InMemoryConversationRepository(), persistent: false };
     try {
-        const open = options.open ?? (() => IndexedDbConversationRepository.open());
+        const openTimeoutMs = options.openTimeoutMs ?? OPEN_TIMEOUT_MS;
+        const open = options.open ?? (() => IndexedDbConversationRepository.open({ openTimeoutMs }));
         // A connection that opens after the timeout is never used, so close it or it would block later deletes.
-        const repository = await withTimeout(open(), options.openTimeoutMs ?? OPEN_TIMEOUT_MS, late => late.close());
+        const repository = await withTimeout(open(), openTimeoutMs, late => late.close());
         return { repository, persistent: true };
     } catch {
         return { repository: new InMemoryConversationRepository(), persistent: false };
-    }
-}
-
-/** Deletes every stored conversation of every account (the "all accounts" cleanup). Never throws and never hangs. */
-export async function deleteAssistantDatabase(timeoutMs: number = DELETE_TIMEOUT_MS): Promise<void> {
-    // Set before anything else: a turn still running must not reopen the database behind this clear.
-    clearEpoch += 1;
-    if (typeof indexedDB === 'undefined') return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-        await Promise.race([
-            deleteDB(ASSISTANT_DB_NAME),
-            new Promise<void>(resolve => {
-                timer = setTimeout(resolve, timeoutMs);
-            }),
-        ]);
-    } catch {
-        // Best effort: the database may be unavailable or blocked by another tab.
-    } finally {
-        if (timer) clearTimeout(timer);
     }
 }

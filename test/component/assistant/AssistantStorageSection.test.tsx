@@ -6,7 +6,6 @@ jest.mock('next-auth/react', () => ({
 }));
 jest.mock('@/lib/infrastructure/assistant/indexeddb-conversation-repository', () => ({
     createConversationRepository: jest.fn(),
-    deleteAssistantDatabase: jest.fn(),
 }));
 jest.mock('@/lib/infrastructure/hooks/useAssistantShell', () => ({ useAssistantPanel: jest.fn() }));
 
@@ -14,7 +13,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AssistantStorageSection } from '@/component-library/features/assistant/settings/AssistantStorageSection';
 import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/in-memory-conversation-repository';
-import { createConversationRepository, deleteAssistantDatabase } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
+import { createConversationRepository } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
 import { getDefaultAssistantSettings } from '@/lib/infrastructure/assistant/settings-storage';
 import { useAssistantPanel } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { makeConversation } from 'test/fixtures/assistant-fixtures';
@@ -227,7 +226,6 @@ describe('AssistantStorageSection', () => {
         it('deletes every account through the repository and keeps the store persisting', async () => {
             const { repository, notifyStorageChanged } = setup();
             await seedOthers(repository);
-            (deleteAssistantDatabase as jest.Mock).mockClear();
             (createConversationRepository as jest.Mock).mockClear();
             renderSection();
             fireEvent.click(await screen.findByRole('button', { name: 'Delete Rucio bot data for all accounts' }));
@@ -235,7 +233,6 @@ describe('AssistantStorageSection', () => {
             await waitFor(() => expect(notifyStorageChanged).toHaveBeenCalled());
             await waitFor(() => expect(screen.queryByText('Other accounts in this browser')).not.toBeInTheDocument());
             expect(screen.queryByRole('button', { name: 'Delete Conversation c1' })).not.toBeInTheDocument();
-            expect(deleteAssistantDatabase).not.toHaveBeenCalled();
             expect(createConversationRepository).toHaveBeenCalledTimes(1);
             await repository.saveConversation(makeConversation('n1', 'root@def', '2026-10-25T08:00:00.000Z'));
             expect((await repository.listConversations('root@def')).map(c => c.id)).toEqual(['n1']);

@@ -6,7 +6,6 @@ import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/i
 import {
     ASSISTANT_DB_NAME,
     createConversationRepository,
-    deleteAssistantDatabase,
     IndexedDbConversationRepository,
 } from '@/lib/infrastructure/assistant/indexeddb-conversation-repository';
 import { makeConversation } from 'test/fixtures/assistant-fixtures';
@@ -24,7 +23,7 @@ describe.each(repositories)('%s', (_name, open) => {
     let repository: AssistantConversationRepositoryPort;
 
     beforeEach(async () => {
-        await deleteAssistantDatabase();
+        await deleteDB(ASSISTANT_DB_NAME);
         repository = await open();
     });
 
@@ -161,7 +160,7 @@ const deleteFromAnotherTab = () => deleteDB(ASSISTANT_DB_NAME);
 
 describe('IndexedDbConversationRepository connection loss', () => {
     beforeEach(async () => {
-        await deleteAssistantDatabase();
+        await deleteDB(ASSISTANT_DB_NAME);
     });
 
     it('reopens lazily after another tab deleted the database', async () => {
@@ -249,20 +248,6 @@ describe('IndexedDbConversationRepository connection loss', () => {
         );
         expect(lost).not.toHaveBeenCalled();
     });
-
-    it('does not recreate the database when an old repository writes after the clear', async () => {
-        const old = await IndexedDbConversationRepository.open();
-        await old.saveConversation(makeConversation('c1', 'root@def'));
-        await deleteAssistantDatabase();
-        await old.saveMessage(message('m1', 'c1', '2026-10-25T10:00:01.000Z'));
-        await old.saveConversation(makeConversation('c1', 'root@def'));
-        expect(old.persistent).toBe(false);
-        const databases = await indexedDB.databases();
-        expect(databases.map(database => database.name)).not.toContain(ASSISTANT_DB_NAME);
-        const fresh = await IndexedDbConversationRepository.open();
-        expect(await fresh.listConversations('root@def')).toEqual([]);
-        fresh.close();
-    });
 });
 
 describe('createConversationRepository', () => {
@@ -310,31 +295,11 @@ describe('createConversationRepository', () => {
         expect(closeSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('deleteAssistantDatabase resolves instead of throwing when deleteDatabase throws', async () => {
-        await withIndexedDb(
-            {
-                deleteDatabase: () => {
-                    throw new Error('SecurityError');
-                },
-            },
-            async () => {
-                await expect(deleteAssistantDatabase()).resolves.toBeUndefined();
-            },
-        );
-    });
-
-    it('deleteAssistantDatabase resolves after its timeout when the delete never completes', async () => {
-        await withIndexedDb({ deleteDatabase: () => new IDBRequest() }, async () => {
-            await expect(deleteAssistantDatabase(10)).resolves.toBeUndefined();
-        });
-    });
-
-    it('deleteAssistantDatabase wipes stored chats even while a connection is open', async () => {
-        const repository = await IndexedDbConversationRepository.open();
-        await repository.saveConversation(makeConversation('c1', 'root@def'));
-        await deleteAssistantDatabase();
-        const reopened = await IndexedDbConversationRepository.open();
-        expect(await reopened.listConversations('root@def')).toEqual([]);
-        reopened.close();
+    it('passes its open timeout on to the repository it opens', async () => {
+        const open = jest.spyOn(IndexedDbConversationRepository, 'open');
+        const { repository } = await createConversationRepository({ openTimeoutMs: 1234 });
+        expect(open).toHaveBeenCalledWith({ openTimeoutMs: 1234 });
+        (repository as IndexedDbConversationRepository).close();
+        open.mockRestore();
     });
 });
