@@ -28,8 +28,23 @@ function setup(script: FakeStep[], options: { maxToolCalls?: number; maxSteps?: 
             executed.push(`do_write:${args.id}`);
             return { ok: true };
         }),
+        makeTool('fail_write', 'write', z.object({ id: z.string() }), async args => {
+            executed.push(`fail_write:${args.id}`);
+            return { error: 'not_found', message: `Nothing called ${args.id}` };
+        }),
+        makeTool('flaky_read', 'read', z.object({ id: z.string() }), async args => {
+            executed.push(`flaky_read:${args.id}`);
+            return { error: 'timeout', message: 'The request timed out' };
+        }),
     ];
-    const policies: Record<string, ToolPolicy> = { get_rule: 'allow', read_echo: 'allow', do_write: 'ask', ...options.policies };
+    const policies: Record<string, ToolPolicy> = {
+        get_rule: 'allow',
+        read_echo: 'allow',
+        do_write: 'ask',
+        fail_write: 'ask',
+        flaky_read: 'allow',
+        ...options.policies,
+    };
     const runner = createAgentRunner(
         () => ({
             provider: { providerId: 'p1', kind: 'openai-compatible', model: 'fake-model', via: 'direct' },
@@ -45,7 +60,7 @@ function setup(script: FakeStep[], options: { maxToolCalls?: number; maxSteps?: 
     );
     const run = () =>
         runner.run({ conversationId: 'conv-1', turnId: 'turn-1', history: [], userMessage: makeUserMessage('hello'), signal: controller.signal });
-    return { run, runner, executed, fake };
+    return { run, runner, executed, fake, policies };
 }
 
 const results = (updates: RunnerUpdate[]) =>
@@ -201,5 +216,102 @@ describe('runner loop guard: consecutive failures', () => {
         ]);
         const updates = await collectUpdates(run());
         expect(results(updates).every(result => (result.result as { note?: string }).note === undefined)).toBe(true);
+    });
+});
+
+describe('runner loop guard: approvals and special failures', () => {
+    const approvalsOf = (updates: RunnerUpdate[]) => updates.filter(update => update.type === 'approval-required');
+
+    it('still asks for approval when a call refused with "now needs approval" is asked again', async () => {
+        const { run, runner, executed, policies, fake } = setup([], { policies: { do_write: 'allow' } });
+        fake.setResponses([
+            () => {
+                // Built without approval; the policy tightens before the call runs.
+                policies.do_write = 'ask';
+                return { toolCalls: [{ name: 'do_write', input: { id: 'r1' } }] };
+            },
+            { toolCalls: [{ name: 'do_write', input: { id: 'r1' } }] },
+            { text: 'done' },
+        ]);
+        const updates = await collectUpdates(run(), update => {
+            if (update.type === 'approval-required') setTimeout(() => runner.resolveApproval(update.toolCallId, true), 10);
+        });
+        expect(results(updates)[0].error).toMatchObject({ error: 'denied_by_policy', message: expect.stringContaining('now needs approval') });
+        expect(approvalsOf(updates)).toHaveLength(1);
+        expect(executed).toEqual(['do_write:r1']);
+    });
+
+    it('refuses a repeat of a failed approval call without showing another card', async () => {
+        const { run, runner, executed } = setup([
+            { toolCalls: [{ name: 'fail_write', input: { id: 'x' } }] },
+            { toolCalls: [{ name: 'fail_write', input: { id: 'x' } }] },
+            { text: 'it failed' },
+        ]);
+        const updates = await collectUpdates(run(), update => {
+            if (update.type === 'approval-required') setTimeout(() => runner.resolveApproval(update.toolCallId, true), 10);
+        });
+        expect(approvalsOf(updates)).toHaveLength(1);
+        expect(executed).toEqual(['fail_write:x']);
+        expect(results(updates)[1].error).toMatchObject({ error: 'repeated_failure' });
+    });
+
+    it('does not count a rejection, so asking again shows the card again', async () => {
+        const { run, runner } = setup([
+            { toolCalls: [{ name: 'do_write', input: { id: 'r1' } }] },
+            { toolCalls: [{ name: 'do_write', input: { id: 'r1' } }] },
+            { text: 'ok' },
+        ]);
+        const updates = await collectUpdates(run(), update => {
+            if (update.type === 'approval-required') setTimeout(() => runner.resolveApproval(update.toolCallId, false), 10);
+        });
+        expect(approvalsOf(updates)).toHaveLength(2);
+    });
+
+    it('records a live deny of an approval call, so its repeat is refused', async () => {
+        const { run, policies, fake } = setup([]);
+        fake.setResponses([
+            () => {
+                // Built as ask, denied before the interrupt is handled.
+                policies.do_write = 'deny';
+                return { toolCalls: [{ name: 'do_write', input: { id: 'r1' } }] };
+            },
+            { toolCalls: [{ name: 'do_write', input: { id: 'r1' } }] },
+            { text: 'denied' },
+        ]);
+        const updates = await collectUpdates(run());
+        expect(results(updates)[0].error).toMatchObject({ error: 'denied_by_policy' });
+        expect(results(updates)[1].error).toMatchObject({ error: 'repeated_failure' });
+    });
+
+    it('counts calls to unknown tools against the budget', async () => {
+        const { run, executed } = setup(
+            [
+                {
+                    toolCalls: [
+                        { name: 'no_such_tool', input: {} },
+                        { name: 'no_such_tool', input: { a: 1 } },
+                    ],
+                },
+                { toolCalls: [{ name: 'read_echo', input: { text: '1' } }] },
+                { text: 'done' },
+            ],
+            { maxToolCalls: 2 },
+        );
+        const updates = await collectUpdates(run());
+        expect(executed).toEqual([]);
+        expect(results(updates).some(result => result.error?.error === 'tool_budget_exhausted')).toBe(true);
+        expect(finished(updates)).toEqual({ type: 'finished', status: 'step-limit' });
+    });
+
+    it('allows one identical retry after a transient failure, then refuses', async () => {
+        const { run, executed } = setup([
+            { toolCalls: [{ name: 'flaky_read', input: { id: 'a' } }] },
+            { toolCalls: [{ name: 'flaky_read', input: { id: 'a' } }] },
+            { toolCalls: [{ name: 'flaky_read', input: { id: 'a' } }] },
+            { text: 'it keeps timing out' },
+        ]);
+        const updates = await collectUpdates(run());
+        expect(executed).toEqual(['flaky_read:a', 'flaky_read:a']);
+        expect(results(updates)[2].error).toMatchObject({ error: 'repeated_failure' });
     });
 });

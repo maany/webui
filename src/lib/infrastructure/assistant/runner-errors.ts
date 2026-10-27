@@ -59,10 +59,10 @@ export function classifyRunError(error: string, options: { relay?: boolean } = {
     if (options.relay) {
         if (/\b401\b/.test(error)) return 'session';
         // The relay answers 404 when the operator has not configured a model.
-        if (/\b404\b/.test(error)) return 'configuration';
+        if (/\b404\b|upstream_misconfigured/.test(error)) return 'configuration';
         return 'retryable';
     }
-    if (/\b401\b|(invalid|incorrect|missing).*key|unauthori[sz]ed|authentication/i.test(error)) return 'configuration';
+    if (/\b40[13]\b|(invalid|incorrect|missing).*api.?key|unauthori[sz]ed|authentication/i.test(error)) return 'configuration';
     if (/no base url/i.test(error)) return 'configuration';
     if (/\b404\b|model.*not.*found/i.test(error)) return 'configuration';
     return 'retryable';

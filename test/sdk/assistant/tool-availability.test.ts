@@ -154,6 +154,13 @@ describe('gate errors', () => {
         expect(deniedByPolicy('create_rule').message).toMatch(/tell the user/i);
     });
 
+    it('does not forbid a retry while the settings are still loading', () => {
+        const denied = deniedByPolicy('create_rule', UNAVAILABLE_REASONS.loading);
+        expect(denied.message).toContain('try again in a moment');
+        expect(denied.message).not.toMatch(/do not retry/i);
+        expect(denied.errorType).toBe('not_ready');
+    });
+
     it('refresh_handle names the reason when the tool behind a handle is unavailable', async () => {
         const result = await refreshHandle('rules_1', {
             records: [

@@ -45,6 +45,18 @@ export function canonicalJson(value: unknown): string {
 /** Failures that say nothing about the call itself: the user said no, or the turn was stopped. */
 const NOT_A_FAILURE = new Set<string>(['rejected_by_user', 'aborted']);
 
+/**
+ * errorType of refusals that only mean "not now": the call needs approval since the policy tightened, or the
+ * settings are still loading. Asking again is the right move, so they are not failures.
+ */
+export const NEEDS_APPROVAL_ERROR_TYPE = 'needs_approval';
+export const NOT_READY_ERROR_TYPE = 'not_ready';
+const NOT_A_FAILURE_TYPES = new Set<string>([NEEDS_APPROVAL_ERROR_TYPE, NOT_READY_ERROR_TYPE]);
+
+/** Errors that may heal on their own: an identical call is refused only after it failed this way twice. */
+const TRANSIENT = new Set<string>(['timeout', 'unavailable', 'stream_error', 'session_expired']);
+const TRANSIENT_REPEATS = 2;
+
 export interface ToolCallGuard {
     /**
      * Checks a call before it runs or asks for approval. The first check of a call counts it against the budget; a
@@ -61,6 +73,11 @@ export interface ToolCallGuard {
      * ends with the step limit.
      */
     continueAfterToolPhase(): boolean;
+    /**
+     * Records a call TanStack answered without running any hook (unknown tool, arguments that are not JSON), so it
+     * still counts against the budget and the failure streak. Calls the guard already saw are ignored.
+     */
+    observe(toolCallId: string, toolName: string, args: unknown, result: unknown): void;
 }
 
 /** Per-turn loop guard. Create one per run so every turn starts with a clean slate. */
@@ -69,6 +86,7 @@ export function createToolCallGuard(maxToolCalls: number = DEFAULT_MAX_TOOL_CALL
     const keys = new Map<string, string>();
     const settled = new Set<string>();
     const failedKeys = new Set<string>();
+    const transientCounts = new Map<string, number>();
     let counted = 0;
     let consecutiveFailures = 0;
     let exceeded = false;
@@ -84,9 +102,13 @@ export function createToolCallGuard(maxToolCalls: number = DEFAULT_MAX_TOOL_CALL
             consecutiveFailures = 0;
             return result;
         }
-        if (NOT_A_FAILURE.has(result.error)) return result;
+        if (NOT_A_FAILURE.has(result.error) || (result.errorType !== undefined && NOT_A_FAILURE_TYPES.has(result.errorType))) return result;
         const key = keys.get(toolCallId);
-        if (key !== undefined) failedKeys.add(key);
+        if (key !== undefined) {
+            const transient = TRANSIENT.has(result.error) ? (transientCounts.get(key) ?? 0) + 1 : TRANSIENT_REPEATS;
+            transientCounts.set(key, transient);
+            if (transient >= TRANSIENT_REPEATS) failedKeys.add(key);
+        }
         consecutiveFailures += 1;
         return withNote(result);
     };
@@ -109,6 +131,14 @@ export function createToolCallGuard(maxToolCalls: number = DEFAULT_MAX_TOOL_CALL
             return settle(toolCallId, refusal) as ToolError;
         },
         settle,
+        observe(toolCallId, toolName, args, result) {
+            if (keys.has(toolCallId) || settled.has(toolCallId)) return;
+            keys.set(toolCallId, `${toolName}:${canonicalJson(args)}`);
+            counted += 1;
+            if (counted > limit) exceeded = true;
+            const message = typeof result === 'object' && result !== null ? (result as { error?: unknown }).error : undefined;
+            settle(toolCallId, isToolError(result) || typeof message !== 'string' ? result : { error: 'invalid_args', message });
+        },
         budgetExceeded: () => exceeded,
         continueAfterToolPhase() {
             const stop = exceededBeforePhase;
@@ -139,6 +169,12 @@ export function createToolCallGuardMiddleware(guard: ToolCallGuard, onRefused: (
             if (!refusal) return undefined;
             onRefused(hook.toolCallId, refusal);
             return { type: 'skip', result: refusal };
+        },
+        onToolPhaseComplete: (_ctx, info) => {
+            for (const result of info.results) {
+                const call = info.toolCalls.find(toolCall => toolCall.id === result.toolCallId);
+                guard.observe(result.toolCallId, result.toolName, call ? parseArguments(call.function.arguments) : undefined, result.result);
+            }
         },
         onShouldContinue: () => guard.continueAfterToolPhase(),
     };

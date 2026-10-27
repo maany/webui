@@ -617,11 +617,14 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                                         recordDuration(toolCallId, refusal, refusal, 0);
                                         queueMicrotask(() => autoResolve(toolCallId, false, refusal));
                                     } else if (live === 'allow') queueMicrotask(() => autoResolve(toolCallId, true));
-                                    else if (live === 'deny')
-                                        queueMicrotask(() =>
-                                            autoResolve(toolCallId, false, deniedByPolicy(toolName || 'unknown', unavailableReason(toolName))),
-                                        );
-                                    else channel.push({ type: 'approval-required', toolCallId });
+                                    else if (live === 'deny') {
+                                        const denied = guard.settle(
+                                            toolCallId,
+                                            deniedByPolicy(toolName || 'unknown', unavailableReason(toolName)),
+                                        ) as ToolError;
+                                        recordDuration(toolCallId, denied, denied, 0);
+                                        queueMicrotask(() => autoResolve(toolCallId, false, denied));
+                                    } else channel.push({ type: 'approval-required', toolCallId });
                                 }
                             }
                             break;

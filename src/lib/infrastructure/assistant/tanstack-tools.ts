@@ -2,7 +2,8 @@ import { toolDefinition, type AnyTool, type ChatMiddleware } from '@tanstack/ai'
 import type { AnyClientTool } from '@tanstack/ai-client';
 import { z } from 'zod';
 import type { ToolError, ToolPolicy } from '@/lib/core/entity/assistant/tool';
-import type { ToolCallGuard } from './tool-call-guard';
+import { UNAVAILABLE_REASONS } from './tool-availability';
+import { NEEDS_APPROVAL_ERROR_TYPE, NOT_READY_ERROR_TYPE, type ToolCallGuard } from './tool-call-guard';
 import { isToolError, type RegisteredTool, type ToolExecutionContext } from './tool-types';
 
 /** Shape a rejected approval sends back to the model. */
@@ -11,6 +12,7 @@ export const ApprovalRejectSchema = z.object({
     message: z.string(),
     /** The loop guard's stop note, see tool-call-guard. */
     note: z.string().optional(),
+    errorType: z.string().optional(),
 });
 
 export const REJECTED_BY_USER: ToolError = {
@@ -20,6 +22,9 @@ export const REJECTED_BY_USER: ToolError = {
 
 /** The refusal for a denied tool. `reason` is a short user-facing phrase such as "disabled on this server". */
 export function deniedByPolicy(toolName: string, reason?: string): ToolError {
+    // Still loading is not a real setting: the call may work in a moment, so it is not counted as a failure.
+    if (reason === UNAVAILABLE_REASONS.loading)
+        return { error: 'denied_by_policy', message: `${toolName} is ${reason}. Tell the user.`, errorType: NOT_READY_ERROR_TYPE };
     const why = reason ? `${toolName} is ${reason}.` : `${toolName} is turned off by the Rucio bot permissions or by the server.`;
     return { error: 'denied_by_policy', message: `${why} Tell the user it is not available; do not retry it or look for a workaround.` };
 }
@@ -119,7 +124,11 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
             }
             if (isInvalidArgsMarker(args)) return finish(toolCallId, invalidArgs(args), 0);
             if (policy !== 'ask' && options.policyFor(tool.spec.name) === 'ask') {
-                const tightened: ToolError = { error: 'denied_by_policy', message: 'This action now needs approval. Ask again to request it.' };
+                const tightened: ToolError = {
+                    error: 'denied_by_policy',
+                    message: 'This action now needs approval. Ask again to request it.',
+                    errorType: NEEDS_APPROVAL_ERROR_TYPE,
+                };
                 return finish(toolCallId, tightened, 0);
             }
             options.onStart?.(toolCallId, tool.spec.name, args);

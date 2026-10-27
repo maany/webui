@@ -114,7 +114,8 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
             visibility: flags ? toolVisibility(tool.spec, { flags, role, permissionsReady: isReady }) : { visible: false, reason: 'not-ready' },
             policy: toolPolicy(name),
             prefs: settingsRef.current.toolPolicies,
-            capsLoaded: policyCapsRef.current !== undefined,
+            // A config that failed to load is not loading any more: its fail-closed denies are reported as server side.
+            capsLoaded: policyCapsRef.current !== undefined || !!configError,
         });
     };
     // A turn already running reads the latest flags, role, settings and caps.

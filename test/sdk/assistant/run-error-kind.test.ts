@@ -14,6 +14,8 @@ describe('classifyRunError', () => {
         ['This provider has no base URL. Add one in Rucio bot settings.', false],
         ['404 model not found: gpt-nope', false],
         ['404 Not Found', true],
+        ['403 Forbidden: this key has no access to the model', false],
+        ['502 upstream_misconfigured', true],
     ])('treats %s (relay %s) as a configuration error', (error, relay) => {
         expect(classifyRunError(error, { relay })).toBe('configuration');
     });
@@ -28,6 +30,7 @@ describe('classifyRunError', () => {
         [CONTEXT_OVERFLOW_ERROR, false],
         [TURN_SAVE_FAILED_ERROR, false],
         [OFF_TOPIC_ERROR, true],
+        ['400 Bad Request: unknown key "foo" in tools', false],
     ])('keeps Retry for %s (relay %s)', (error, relay) => {
         expect(classifyRunError(error, { relay })).toBe('retryable');
     });
