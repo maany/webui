@@ -36,6 +36,8 @@ export interface ChatMessage {
     role: 'user' | 'assistant';
     parts: MessagePart[];
     usage?: TurnUsage;
+    /** User messages only: the operator relay refused this request as off topic. Kept for display, never sent to the model. */
+    offTopic?: boolean;
     createdAt: string;
 }
 

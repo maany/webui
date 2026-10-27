@@ -162,7 +162,21 @@ describe('AssistantPanelView', () => {
         );
         expect(screen.getAllByRole('alert').length).toBeGreaterThan(0);
         expect(screen.getAllByText(OFF_TOPIC_MESSAGE).length).toBeGreaterThan(0);
+        expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
         expect(screen.queryByText(/session/i)).toBeNull();
+    });
+
+    it('still shows a blocked user message in the panel', () => {
+        const blocked: ChatMessage = {
+            id: 'u1',
+            conversationId: 'c1',
+            role: 'user',
+            parts: [{ type: 'text', text: 'write an essay about holidays' }],
+            createdAt: 'x',
+            offTopic: true,
+        };
+        render(<AssistantPanelView {...props({ messages: [blocked] })} />);
+        expect(screen.getByText('write an essay about holidays')).toBeInTheDocument();
     });
 
     it('warns when history is not saved', () => {

@@ -107,7 +107,11 @@ function shorten(text: string, limit: number): string {
 export function transcriptForSummary(messages: ChatMessage[], previousSummary?: string): string {
     const lines: string[] = [];
     if (previousSummary) lines.push(`Earlier summary: ${previousSummary}`);
+    let previousBlocked = false;
     for (const message of messages) {
+        const skip = message.offTopic === true || (message.role === 'assistant' && previousBlocked);
+        previousBlocked = message.offTopic === true;
+        if (skip) continue;
         for (const part of message.parts) {
             if (part.type === 'text') lines.push(`${message.role === 'user' ? 'User' : 'Rucio bot'}: ${part.text}`);
             else if (part.type === 'tool-call') {

@@ -31,6 +31,7 @@ import {
 import { navigationNote } from '@/lib/infrastructure/assistant/page-context';
 import {
     CONTEXT_OVERFLOW_ERROR,
+    OFF_TOPIC_ERROR,
     SESSION_EXPIRED_ERROR,
     TURN_SAVE_FAILED_ERROR,
     describeRunError,
@@ -686,10 +687,18 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 return;
             }
 
+            // A turn the relay refused as off topic is flagged, so it never reaches later model calls; a retry that is answered clears it.
+            const blockedOffTopic = finalStatus === 'error' && finalError === OFF_TOPIC_ERROR;
+            let userUpdate: ChatMessage | undefined;
+            if (blockedOffTopic !== (userMessage.offTopic === true)) {
+                const { offTopic: _previous, ...rest } = userMessage;
+                userUpdate = blockedOffTopic ? { ...rest, offTopic: true } : rest;
+            }
             let updatedConversation: Conversation | undefined;
             try {
                 // A decision still saving may add or revoke a conversation grant; read the conversation only after it settled.
                 await Promise.allSettled([...decisionsRef.current]);
+                if (userUpdate) await saveMessage(userUpdate);
                 // A conversation deleted while the turn ran must not be written back.
                 await saveMessage(finalMessage);
                 if (alive()) {
@@ -713,6 +722,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 // Always settle the turn, so the panel never stays in streaming and the telemetry span ends.
                 emitFinished(finalStatus, finalError);
                 if (isCurrent()) {
+                    if (userUpdate) replaceMessage(userUpdate);
                     replaceMessage(finalMessage);
                     if (updatedConversation) setConversation(updatedConversation);
                     setContextWindow(provider.contextWindow);

@@ -29,6 +29,7 @@ import { AssistantContext, type UseAssistantResult } from '@/lib/infrastructure/
 import { AssistantShellProvider, useAssistantPanel, type AssistantConversationControls } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { InMemoryConversationRepository } from '@/lib/infrastructure/assistant/in-memory-conversation-repository';
 import { getAssistantDataHandleStore } from '@/lib/infrastructure/assistant/duckdb';
+import { OFF_TOPIC_ERROR } from '@/lib/infrastructure/assistant/runner-errors';
 import type { AgentRunner, AgentRunnerDeps, RunnerUpdate } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
 import type { AssistantConversationRepositoryPort } from '@/lib/core/port/secondary/assistant-conversation-repository-port';
 import { FEATURE_REGISTRY, type FeatureFlagMap, type FeatureKey } from '@/lib/core/entity/feature-config';
@@ -150,6 +151,29 @@ describe('AssistantProvider data tools wiring', () => {
         expect(gate().isToolVisible?.('list_rules')).toBe(true);
         expect(gate().isToolVisible?.('no_such_tool')).toBe(false);
         expect(gate().toolPolicy?.('list_rules')).toBe('allow');
+    });
+
+    it('flags the user message of a blocked off-topic turn and clears the flag when a retry is answered', async () => {
+        let blocked = true;
+        const script = async function* (): AsyncGenerator<RunnerUpdate> {
+            yield blocked ? { type: 'finished', status: 'error', error: OFF_TOPIC_ERROR } : { type: 'finished', status: 'completed' };
+        };
+        const { assistant, repository } = setup({ script: () => script() });
+        await act(async () => {
+            await assistant().send('write an essay');
+        });
+        const userMessage = () => assistant().messages.find(message => message.role === 'user');
+        expect(userMessage()?.offTopic).toBe(true);
+        expect(assistant().error).toMatch(/unrelated to Rucio/);
+        const [stored] = await repository.listConversations('root@def');
+        expect((await repository.listMessages(stored.id)).find(message => message.role === 'user')?.offTopic).toBe(true);
+
+        blocked = false;
+        await act(async () => {
+            await assistant().retry();
+        });
+        expect(userMessage()?.offTopic).toBeUndefined();
+        expect((await repository.listMessages(stored.id)).find(message => message.role === 'user')?.offTopic).toBeUndefined();
     });
 
     it('persists a run_sql result without its rows', async () => {

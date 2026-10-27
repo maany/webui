@@ -236,7 +236,12 @@ function toolResultForHistory(part: ToolCallPart): string {
 /** Converts stored chat messages to TanStack model messages. Reasoning, approvals and notices stay out. */
 export function toModelMessages(history: ChatMessage[]): ModelMessage[] {
     const out: ModelMessage[] = [];
+    let previousBlocked = false;
     for (const message of history) {
+        // A refused off-topic request and its notice-only reply stay visible in the panel but never reach the model.
+        const skip = message.offTopic === true || (message.role === 'assistant' && previousBlocked);
+        previousBlocked = message.offTopic === true;
+        if (skip) continue;
         if (message.role === 'user') {
             out.push({ role: 'user', content: formatUserTurn(message) });
             continue;
