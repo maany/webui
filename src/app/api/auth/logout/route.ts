@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { signOut } from '@/lib/infrastructure/auth/auth';
+import { safeCallbackPath } from '@/lib/infrastructure/utils/safe-callback-url';
 
 /**
  * API route for logging out
@@ -12,7 +13,9 @@ import { signOut } from '@/lib/infrastructure/auth/auth';
 export async function GET(req: NextRequest) {
     try {
         const searchParams = req.nextUrl.searchParams;
-        const callbackUrl = searchParams.get('callbackUrl') || '/auth/login';
+        // Only a same-origin path: an absolute or protocol-relative callbackUrl would be an open redirect.
+        const raw = searchParams.get('callbackUrl');
+        const callbackUrl = raw ? safeCallbackPath(raw) : '/auth/login';
 
         // NextAuth signOut will clear the session
         await signOut({ redirect: false });
@@ -39,7 +42,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
     try {
         const searchParams = req.nextUrl.searchParams;
-        const callbackUrl = searchParams.get('callbackUrl') || '/auth/login';
+        // Only a same-origin path: an absolute or protocol-relative callbackUrl would be an open redirect.
+        const raw = searchParams.get('callbackUrl');
+        const callbackUrl = raw ? safeCallbackPath(raw) : '/auth/login';
 
         // NextAuth signOut will clear the session
         await signOut({ redirect: false });
