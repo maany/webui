@@ -12,6 +12,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { AssistantPanelView, type AssistantPanelViewProps } from '@/component-library/features/assistant/AssistantPanelView';
 import type { ChatMessage } from '@/lib/core/entity/assistant/conversation';
 import { STEP_LIMIT_NOTICE } from '@/lib/infrastructure/assistant/message-reducer';
+import { OFF_TOPIC_MESSAGE, OFF_TOPIC_NOTICE } from '@/lib/infrastructure/assistant/runner-errors';
 import { makeConversation } from 'test/fixtures/assistant-fixtures';
 
 function props(overrides: Partial<AssistantPanelViewProps> = {}): AssistantPanelViewProps {
@@ -129,6 +130,39 @@ describe('AssistantPanelView', () => {
         rerender(<AssistantPanelView {...q} />);
         fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
         expect(q.onContinue).toHaveBeenCalled();
+    });
+
+    it('shows the off-topic warn notice as a quiet info note under the reply', () => {
+        render(
+            <AssistantPanelView
+                {...props({
+                    messages: [
+                        assistantMessage([
+                            { type: 'text', text: 'Sure.' },
+                            { type: 'notice', level: 'info', text: OFF_TOPIC_NOTICE },
+                        ]),
+                    ],
+                })}
+            />,
+        );
+        const notice = screen.getByText(OFF_TOPIC_NOTICE);
+        expect(notice).not.toHaveAttribute('role', 'alert');
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('shows a blocked off-topic turn as an error with Retry and no session banner', () => {
+        render(
+            <AssistantPanelView
+                {...props({
+                    status: 'error',
+                    error: OFF_TOPIC_MESSAGE,
+                    messages: [assistantMessage([{ type: 'notice', level: 'error', text: OFF_TOPIC_MESSAGE }])],
+                })}
+            />,
+        );
+        expect(screen.getAllByRole('alert').length).toBeGreaterThan(0);
+        expect(screen.getAllByText(OFF_TOPIC_MESSAGE).length).toBeGreaterThan(0);
+        expect(screen.queryByText(/session/i)).toBeNull();
     });
 
     it('warns when history is not saved', () => {

@@ -14,7 +14,7 @@ import type { AssistantEvent } from '@/lib/core/entity/assistant/events';
 import type { ResolvedProvider } from '@/lib/core/entity/assistant/provider-config';
 import type { ToolError, ToolPolicy } from '@/lib/core/entity/assistant/tool';
 import { computeCost, type TokenUsage } from '@/lib/core/entity/assistant/usage';
-import { CONTEXT_OVERFLOW_ERROR, SESSION_EXPIRED_ERROR } from './runner-errors';
+import { ASSISTANT_SCOPE_HEADER, ASSISTANT_SCOPE_OFF_TOPIC, CONTEXT_OVERFLOW_ERROR, OFF_TOPIC_ERROR, SESSION_EXPIRED_ERROR } from './runner-errors';
 import { formatUserTurn } from './system-prompt';
 import { maskSensitiveArgs } from './approvals';
 import { getTool } from './tool-registry';
@@ -52,11 +52,13 @@ export type RunnerUpdate =
     | { type: 'approval-required'; toolCallId: string }
     | { type: 'tool-result'; toolCallId: string; result: unknown; error?: ToolError; durationMs: number }
     | { type: 'usage'; usage: TokenUsage }
-    | { type: 'finished'; status: 'completed' | 'stopped' | 'error' | 'step-limit'; error?: string };
+    | { type: 'finished'; status: 'completed' | 'stopped' | 'error' | 'step-limit'; error?: string; offTopic?: boolean };
 
 /** Signals from the adapter's fetch that the SDK would otherwise bury in a generic connection error. */
 export interface AdapterHooks {
     onSessionExpired(): void;
+    /** The relay found the user turn off topic: 'warn' still answers, 'block' refused the request. */
+    onOffTopic?(mode: 'warn' | 'block'): void;
 }
 
 export interface AgentRunnerOptions {
@@ -124,6 +126,17 @@ export interface ProviderAdapterOptions {
     fetch?: typeof fetch;
     /** Called when the relay shows the session is gone (the SDK only reports a connection error). */
     onSessionExpired?: () => void;
+    /** Called when the relay flags the turn as off topic (header, warn) or refuses it (403, block). */
+    onOffTopic?: (mode: 'warn' | 'block') => void;
+}
+
+async function isOffTopicRefusal(response: Response): Promise<boolean> {
+    try {
+        const body: unknown = await response.clone().json();
+        return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === OFF_TOPIC_ERROR;
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -132,7 +145,11 @@ export interface ProviderAdapterOptions {
  * redirects stay manual and anything that is not JSON or an event stream is
  * treated as an expired session.
  */
-export function createRelayFetch(base: typeof fetch = (...args) => fetch(...args), onSessionExpired?: () => void): typeof fetch {
+export function createRelayFetch(
+    base: typeof fetch = (...args) => fetch(...args),
+    onSessionExpired?: () => void,
+    onOffTopic?: (mode: 'warn' | 'block') => void,
+): typeof fetch {
     const expired = () => {
         onSessionExpired?.();
         return new Error(SESSION_EXPIRED_ERROR);
@@ -141,7 +158,12 @@ export function createRelayFetch(base: typeof fetch = (...args) => fetch(...args
         const response = await base(input, { ...init, redirect: 'manual' });
         const redirected = response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400);
         if (redirected) throw expired();
+        if (response.status === 403 && (await isOffTopicRefusal(response))) {
+            onOffTopic?.('block');
+            throw new Error(OFF_TOPIC_ERROR);
+        }
         if (response.ok) {
+            if (response.headers.get(ASSISTANT_SCOPE_HEADER) === ASSISTANT_SCOPE_OFF_TOPIC) onOffTopic?.('warn');
             const contentType = response.headers.get('content-type') ?? '';
             if (!/json|event-stream/i.test(contentType)) throw expired();
         }
@@ -152,7 +174,7 @@ export function createRelayFetch(base: typeof fetch = (...args) => fetch(...args
 /** Builds the TanStack text adapter. Provider SDKs load lazily, so only the chosen one is downloaded. */
 export async function createProviderAdapter(provider: ResolvedProvider, options: ProviderAdapterOptions = {}): Promise<AnyTextAdapter> {
     const target = resolveAdapterTarget(provider, options.origin ?? window.location.origin);
-    const relayFetch = provider.via === 'relay' ? createRelayFetch(options.fetch, options.onSessionExpired) : options.fetch;
+    const relayFetch = provider.via === 'relay' ? createRelayFetch(options.fetch, options.onSessionExpired, options.onOffTopic) : options.fetch;
     // The SDKs retry connection failures; a session problem will not heal, so relay calls fail fast.
     const extra = {
         ...(relayFetch ? { fetch: relayFetch } : {}),
@@ -187,7 +209,7 @@ export async function createProviderAdapter(provider: ResolvedProvider, options:
 }
 
 const defaultCreateAdapter = (provider: ResolvedProvider, hooks: AdapterHooks) =>
-    createProviderAdapter(provider, { onSessionExpired: hooks.onSessionExpired });
+    createProviderAdapter(provider, { onSessionExpired: hooks.onSessionExpired, onOffTopic: hooks.onOffTopic });
 
 function safeJson(value: unknown): string {
     try {
@@ -362,6 +384,8 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
         let stepLimitHit = false;
         let runError: { message: string; code?: string } | undefined;
         let sessionExpired = false;
+        let offTopicBlocked = false;
+        let offTopicWarned = false;
         let callStartedAt = Date.now();
         let callText = '';
         let waiter: (() => void) | null = null;
@@ -447,6 +471,10 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                 const adapter = await (options.createAdapter ?? defaultCreateAdapter)(d.provider, {
                     onSessionExpired: () => {
                         sessionExpired = true;
+                    },
+                    onOffTopic: mode => {
+                        if (mode === 'block') offTopicBlocked = true;
+                        else offTopicWarned = true;
                     },
                 });
                 const connection = stream(
@@ -609,7 +637,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
 
                 if (input.signal.aborted) {
                     closeRunningCalls('stopped');
-                    channel.push({ type: 'finished', status: 'stopped' });
+                    channel.push({ type: 'finished', status: 'stopped', ...(offTopicWarned ? { offTopic: true } : {}) });
                 } else if (runError) {
                     closeRunningCalls('error');
                     channel.push({
@@ -617,19 +645,32 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                         status: 'error',
                         error: sessionExpired
                             ? SESSION_EXPIRED_ERROR
+                            : offTopicBlocked
+                            ? OFF_TOPIC_ERROR
                             : runError.code === 'context_overflow'
                             ? CONTEXT_OVERFLOW_ERROR
                             : runError.message,
                     });
-                } else if (stepLimitHit || lastFinishReason === 'tool_calls') channel.push({ type: 'finished', status: 'step-limit' });
-                else channel.push({ type: 'finished', status: 'completed' });
+                } else if (stepLimitHit || lastFinishReason === 'tool_calls') {
+                    channel.push({ type: 'finished', status: 'step-limit', ...(offTopicWarned ? { offTopic: true } : {}) });
+                } else channel.push({ type: 'finished', status: 'completed', ...(offTopicWarned ? { offTopic: true } : {}) });
             } catch (error) {
                 if (input.signal.aborted) closeRunningCalls('stopped');
                 else closeRunningCalls('error');
                 channel.push(
                     input.signal.aborted
-                        ? { type: 'finished', status: 'stopped' }
-                        : { type: 'finished', status: 'error', error: error instanceof Error ? error.message : String(error) },
+                        ? { type: 'finished', status: 'stopped', ...(offTopicWarned ? { offTopic: true } : {}) }
+                        : {
+                              type: 'finished',
+                              status: 'error',
+                              error: sessionExpired
+                                  ? SESSION_EXPIRED_ERROR
+                                  : offTopicBlocked
+                                  ? OFF_TOPIC_ERROR
+                                  : error instanceof Error
+                                  ? error.message
+                                  : String(error),
+                          },
                 );
             } finally {
                 if (onAbort) input.signal.removeEventListener('abort', onAbort);

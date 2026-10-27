@@ -8,12 +8,21 @@ import {
     completeText,
     createAgentRunner,
     createProviderAdapter,
+    createRelayFetch,
     resolveAdapterTarget,
     toModelMessages,
     type RunnerUpdate,
 } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
 import { buildTanstackTools } from '@/lib/infrastructure/assistant/tanstack-tools';
-import { describeRunError } from '@/lib/infrastructure/assistant/runner-errors';
+import {
+    ASSISTANT_SCOPE_HEADER,
+    ASSISTANT_SCOPE_OFF_TOPIC,
+    OFF_TOPIC_ERROR,
+    OFF_TOPIC_MESSAGE,
+    OFF_TOPIC_NOTICE,
+    describeRunError,
+} from '@/lib/infrastructure/assistant/runner-errors';
+import { finalizeAssistantMessage } from '@/lib/infrastructure/assistant/message-reducer';
 import type { RegisteredTool } from '@/lib/infrastructure/assistant/tool-types';
 import { collectUpdates, makeTool, makeToolContextFactory, makeUserMessage, textOf } from 'test/fixtures/assistant-fixtures';
 
@@ -519,6 +528,147 @@ describe('operator relay session handling', () => {
         expect(describeRunError('429 {"error":"too_many_streams"}')).toBe(wording);
         expect(describeRunError('429 {"error":"rate_limited"}', { relay: true })).toMatch(/rate limiting requests/);
         expect(describeRunError('429 Too Many Requests')).toMatch(/rate limiting requests/);
+    });
+});
+
+describe('relay topic scope handling', () => {
+    const json = { 'content-type': 'application/json' };
+    const offTopic403 = () => new Response(JSON.stringify({ error: 'off_topic', message: OFF_TOPIC_MESSAGE }), { status: 403, headers: json });
+    const chunk = (delta: object, finish: string | null) =>
+        `data: ${JSON.stringify({
+            id: 'c1',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'm',
+            choices: [{ index: 0, delta, finish_reason: finish }],
+        })}\n\n`;
+    const okStream = (headers: Record<string, string> = {}) =>
+        new Response(`${chunk({ role: 'assistant', content: 'Hi' }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`, {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream', ...headers },
+        });
+    const relayProvider = {
+        providerId: 'operator',
+        kind: 'openai-compatible' as const,
+        model: 'm',
+        baseURL: '/api/assistant/llm',
+        via: 'relay' as const,
+    };
+
+    async function runThroughRelay(fetchImpl: typeof fetch) {
+        const controller = new AbortController();
+        const runner = createAgentRunner(
+            () => ({
+                provider: relayProvider,
+                tools: [],
+                policyFor: () => 'allow',
+                systemPrompt: 's',
+                emit: () => undefined,
+                makeToolContext: makeToolContextFactory(controller.signal),
+                maxSteps: 3,
+            }),
+            {
+                createAdapter: (provider, hooks) =>
+                    createProviderAdapter(provider, { fetch: fetchImpl, origin: 'https://webui.example.org', ...hooks }),
+            },
+        );
+        return collectUpdates(
+            runner.run({ conversationId: 'c', turnId: 't', history: [], userMessage: makeUserMessage('hi'), signal: controller.signal }),
+        );
+    }
+
+    it('createRelayFetch turns a 403 off_topic into onOffTopic(block) and an off_topic error, never a session expiry', async () => {
+        const onSessionExpired = jest.fn();
+        const onOffTopic = jest.fn();
+        const wrapped = createRelayFetch(async () => offTopic403(), onSessionExpired, onOffTopic);
+        await expect(wrapped('/api/assistant/llm/chat/completions', {})).rejects.toThrow(OFF_TOPIC_ERROR);
+        expect(onOffTopic).toHaveBeenCalledWith('block');
+        expect(onSessionExpired).not.toHaveBeenCalled();
+    });
+
+    it('createRelayFetch leaves other 403 answers alone', async () => {
+        const onOffTopic = jest.fn();
+        const other = new Response('{"error":"forbidden"}', { status: 403, headers: json });
+        const wrapped = createRelayFetch(async () => other, undefined, onOffTopic);
+        expect((await wrapped('/x', {})).status).toBe(403);
+        const plain = createRelayFetch(async () => new Response('nope', { status: 403 }), undefined, onOffTopic);
+        expect((await plain('/x', {})).status).toBe(403);
+        expect(onOffTopic).not.toHaveBeenCalled();
+    });
+
+    it('createRelayFetch reports the warn header and returns the response', async () => {
+        const onOffTopic = jest.fn();
+        const response = okStream({ [ASSISTANT_SCOPE_HEADER]: ASSISTANT_SCOPE_OFF_TOPIC });
+        const wrapped = createRelayFetch(async () => response, undefined, onOffTopic);
+        expect(await wrapped('/x', {})).toBe(response);
+        expect(onOffTopic).toHaveBeenCalledWith('warn');
+        const clean = createRelayFetch(async () => okStream(), undefined, onOffTopic);
+        await clean('/x', {});
+        expect(onOffTopic).toHaveBeenCalledTimes(1);
+    });
+
+    it('run() finishes with the off_topic error when the relay blocks the turn', async () => {
+        const updates = await runThroughRelay((async () => offTopic403()) as unknown as typeof fetch);
+        expect(finished(updates)).toEqual({ type: 'finished', status: 'error', error: OFF_TOPIC_ERROR });
+    });
+
+    async function runWithHook(warn: boolean) {
+        const fake = fakeText({});
+        fake.setResponses([{ text: 'Hi' }] as FakeStep[]);
+        const controller = new AbortController();
+        const runner = createAgentRunner(
+            () => ({
+                provider: relayProvider,
+                tools: [],
+                policyFor: () => 'allow',
+                systemPrompt: 's',
+                emit: () => undefined,
+                makeToolContext: makeToolContextFactory(controller.signal),
+                maxSteps: 3,
+            }),
+            {
+                createAdapter: (_provider, hooks) => {
+                    if (warn) hooks.onOffTopic?.('warn');
+                    return fake;
+                },
+            },
+        );
+        return collectUpdates(
+            runner.run({ conversationId: 'c', turnId: 't', history: [], userMessage: makeUserMessage('hi'), signal: controller.signal }),
+        );
+    }
+
+    it('run() marks a completed turn as off topic when the relay warns', async () => {
+        expect(finished(await runWithHook(true))).toEqual({ type: 'finished', status: 'completed', offTopic: true });
+    });
+
+    it('run() does not mark a normal turn', async () => {
+        expect(finished(await runWithHook(false))).toEqual({ type: 'finished', status: 'completed' });
+    });
+
+    it('describeRunError gives the off topic wording, which is not a session, rate limit or config message', () => {
+        expect(describeRunError(OFF_TOPIC_ERROR)).toBe(OFF_TOPIC_MESSAGE);
+        expect(describeRunError(OFF_TOPIC_ERROR, { relay: true })).toBe(OFF_TOPIC_MESSAGE);
+        expect(OFF_TOPIC_MESSAGE).toBe('This looks unrelated to Rucio. Rucio bot only helps with Rucio, the WebUI and related data management work.');
+        expect(OFF_TOPIC_NOTICE).toBe('This looks unrelated to Rucio. Rucio bot is meant for Rucio and the WebUI.');
+    });
+
+    it('finalizeAssistantMessage adds the info notice after the reply and shows the friendly text for a blocked turn', () => {
+        const message: ChatMessage = {
+            id: 'a',
+            conversationId: 'c',
+            role: 'assistant',
+            parts: [{ type: 'text', text: 'Hello' }],
+            createdAt: 'x',
+        };
+        expect(finalizeAssistantMessage(message, 'completed', undefined, true).parts).toEqual([
+            { type: 'text', text: 'Hello' },
+            { type: 'notice', level: 'info', text: OFF_TOPIC_NOTICE },
+        ]);
+        expect(finalizeAssistantMessage(message, 'completed').parts).toHaveLength(1);
+        expect(finalizeAssistantMessage({ ...message, parts: [] }, 'error', OFF_TOPIC_ERROR).parts).toEqual([
+            { type: 'notice', level: 'error', text: OFF_TOPIC_MESSAGE },
+        ]);
     });
 });
 

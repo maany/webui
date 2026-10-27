@@ -1,6 +1,7 @@
 import type { ChatMessage, MessagePart, ToolCallStatus } from '@/lib/core/entity/assistant/conversation';
 import type { ToolError } from '@/lib/core/entity/assistant/tool';
 import type { RunnerUpdate } from './tanstack-agent-runner';
+import { OFF_TOPIC_ERROR, OFF_TOPIC_MESSAGE, OFF_TOPIC_NOTICE } from './runner-errors';
 
 type ToolCallPart = Extract<MessagePart, { type: 'tool-call' }>;
 
@@ -115,7 +116,7 @@ export function applyRunnerUpdate(message: ChatMessage, update: RunnerUpdate): C
         case 'usage':
             return message;
         case 'finished':
-            return finalizeAssistantMessage(message, update.status, update.error);
+            return finalizeAssistantMessage(message, update.status, update.error, update.offTopic);
     }
 }
 
@@ -134,6 +135,7 @@ export function finalizeAssistantMessage(
     message: ChatMessage,
     status: 'completed' | 'stopped' | 'error' | 'step-limit',
     error?: string,
+    offTopic?: boolean,
 ): ChatMessage {
     const wasApproved = (toolCallId: string) =>
         message.parts.some(part => part.type === 'approval' && part.toolCallId === toolCallId && part.decision === 'approved');
@@ -143,9 +145,11 @@ export function finalizeAssistantMessage(
               { ...part, status: 'error', error: part.status === 'running' && wasApproved(part.toolCallId) ? APPROVED_OUTCOME_UNKNOWN : ABORTED }
             : part,
     );
+    if (offTopic && status !== 'error') parts.push({ type: 'notice', level: 'info', text: OFF_TOPIC_NOTICE });
     if (status === 'step-limit') parts.push({ type: 'notice', level: 'warning', text: STEP_LIMIT_NOTICE });
     if (status === 'stopped') parts.push({ type: 'notice', level: 'info', text: 'Stopped.' });
-    if (status === 'error') parts.push({ type: 'notice', level: 'error', text: error ?? 'Something went wrong.' });
+    if (status === 'error')
+        parts.push({ type: 'notice', level: 'error', text: error === OFF_TOPIC_ERROR ? OFF_TOPIC_MESSAGE : error ?? 'Something went wrong.' });
     return { ...message, parts };
 }
 
