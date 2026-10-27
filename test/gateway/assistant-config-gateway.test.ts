@@ -53,6 +53,9 @@ describe('AssistantConfigGateway', () => {
                 'ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS',
                 'ASSISTANT_LLM_UPSTREAM_MAX_MS',
                 'ASSISTANT_LLM_MAX_CONCURRENT_STREAMS',
+                'ASSISTANT_SCOPE_MODE',
+                'ASSISTANT_SCOPE_EXTRA_TOPICS',
+                'ASSISTANT_SCOPE_MODEL',
             ].sort(),
         );
     });
@@ -256,6 +259,7 @@ describe('AssistantConfigGateway', () => {
             upstreamTimeoutMs: 120000,
             upstreamMaxMs: 600000,
             maxConcurrentStreams: 3,
+            scope: { mode: 'warn', extraTopics: [], model: 'gpt-oss-120b' },
         });
     });
 

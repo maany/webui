@@ -29,6 +29,7 @@ const ENV_KEYS = [
     'ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS',
     'ASSISTANT_LLM_UPSTREAM_MAX_MS',
     'ASSISTANT_LLM_MAX_CONCURRENT_STREAMS',
+    'ASSISTANT_SCOPE_MODE',
 ];
 
 const signInAs = (account: string) =>
@@ -64,6 +65,8 @@ describe('/api/assistant/llm/[...path]', () => {
         process.env.ASSISTANT_DEFAULT_BASE_URL = 'https://llm.example.org/v1/';
         process.env.ASSISTANT_DEFAULT_API_KEY = 'sk-operator-secret';
         process.env.ASSISTANT_DEFAULT_MODEL = 'gpt-oss-120b';
+        // The topic check has its own suite (llm-relay-scope.test.ts)
+        process.env.ASSISTANT_SCOPE_MODE = 'off';
         signInAs('jdoe');
         upstream = jest.fn(async () => new Response(UPSTREAM_STREAM, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
         global.fetch = upstream as unknown as typeof fetch;

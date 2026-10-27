@@ -7,6 +7,19 @@ export const SESSION_EXPIRED_ERROR = 'session_expired';
 /** `finished.error` value when the browser could not save the conversation mid-turn, so the turn was stopped. */
 export const TURN_SAVE_FAILED_ERROR = 'turn_save_failed';
 
+/** Error code and `finished.error` value when the operator relay refuses an off-topic request (block mode). */
+export const OFF_TOPIC_ERROR = 'off_topic';
+
+/** Shown when the relay blocks an off-topic request. */
+export const OFF_TOPIC_MESSAGE = 'This looks unrelated to Rucio. Rucio bot only helps with Rucio, the WebUI and related data management work.';
+
+/** Shown under the reply when the relay flags an off-topic request but still answers (warn mode). */
+export const OFF_TOPIC_NOTICE = 'This looks unrelated to Rucio. Rucio bot is meant for Rucio and the WebUI.';
+
+/** Response header the relay sets in warn mode, and its value. */
+export const ASSISTANT_SCOPE_HEADER = 'x-rucio-bot-scope';
+export const ASSISTANT_SCOPE_OFF_TOPIC = 'off-topic';
+
 const TOO_MANY_STREAMS_TEXT = 'Too many assistant replies are running for this account. Wait for one to finish and try again.';
 
 const SESSION_EXPIRED_TEXT = 'Your session has expired. Log in again.';
@@ -14,6 +27,7 @@ const SESSION_EXPIRED_TEXT = 'Your session has expired. Log in again.';
 /** Short, user-facing hint for a provider error message. */
 export function describeRunError(error: string, options: { relay?: boolean } = {}): string {
     if (error === SESSION_EXPIRED_ERROR) return SESSION_EXPIRED_TEXT;
+    if (error === OFF_TOPIC_ERROR) return OFF_TOPIC_MESSAGE;
     if (options.relay) {
         if (/\b401\b/.test(error)) return SESSION_EXPIRED_TEXT;
         if (/\b404\b/.test(error)) return 'The assistant is not configured on this server.';

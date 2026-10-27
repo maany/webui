@@ -8,7 +8,9 @@ import type AssistantConfigGatewayOutputPort from '@/lib/core/port/secondary/ass
 import type { AssistantRelayConfig } from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
 import { getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
 import { relayRateLimiter, relayStreamLimiter } from './relay-rate-limiter';
-import { ANTHROPIC_API_VERSION } from './provider-kinds';
+import { buildUpstreamHeaders, buildUpstreamUrl } from './relay-upstream';
+import { CHAT_PATHS, checkTurnScope, extractNewUserTurnText } from './relay-scope';
+import { ASSISTANT_SCOPE_HEADER, ASSISTANT_SCOPE_OFF_TOPIC, OFF_TOPIC_ERROR, OFF_TOPIC_MESSAGE } from './runner-errors';
 import { parseContentLength, readCappedBody } from './read-capped-body';
 
 /** The only upstream paths the relay forwards, per operator provider kind. */
@@ -24,20 +26,6 @@ const PASSTHROUGH_RESPONSE_HEADERS = ['content-type', 'retry-after'];
 
 function reply(status: number, error: string, headers?: Record<string, string>): Response {
     return NextResponse.json({ error }, { status, headers });
-}
-
-/**
- * Operator base URL + allow-listed subpath. Query string and hash of the base URL are dropped and
- * trailing slashes of its path are normalised; the subpath never comes from the request.
- */
-function buildUpstreamUrl(baseURL: string, subpath: string): string | undefined {
-    try {
-        const base = new URL(baseURL);
-        if (base.protocol !== 'http:' && base.protocol !== 'https:') return undefined;
-        return `${base.origin}${base.pathname.replace(/\/+$/, '')}/${subpath}`;
-    } catch {
-        return undefined;
-    }
 }
 
 /**
@@ -158,14 +146,22 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
         body = new TextDecoder().decode(bytes);
     }
 
-    const headers = new Headers({ accept: request.headers.get('accept') ?? 'application/json' });
-    if (body !== undefined) headers.set('content-type', 'application/json');
-    if (relay.kind === 'anthropic') {
-        headers.set('anthropic-version', ANTHROPIC_API_VERSION);
-        if (relay.apiKey) headers.set('x-api-key', relay.apiKey);
-    } else if (relay.apiKey) {
-        headers.set('authorization', `Bearer ${relay.apiKey}`);
+    // Topic check of new user turns. After the body read and the rate limit hit, before the stream slot is taken.
+    let offTopic = false;
+    if (method === 'POST' && body !== undefined && relay.scope.mode !== 'off' && subpath === CHAT_PATHS[relay.kind]) {
+        const text = extractNewUserTurnText(relay.kind, body);
+        if (text !== undefined && (await checkTurnScope(relay, accountKey, text, request.signal ?? undefined)) === 'OFF') {
+            if (relay.scope.mode === 'block') {
+                return NextResponse.json(
+                    { error: OFF_TOPIC_ERROR, message: OFF_TOPIC_MESSAGE },
+                    { status: 403, headers: { 'cache-control': 'no-store' } },
+                );
+            }
+            offTopic = true;
+        }
     }
+
+    const headers = buildUpstreamHeaders(relay, request.headers.get('accept') ?? 'application/json', body !== undefined);
 
     const releaseSlot = relayStreamLimiter.tryAcquire(accountKey, relay.maxConcurrentStreams);
     if (!releaseSlot) {
@@ -242,6 +238,7 @@ export async function relayLlmRequest(request: NextRequest, path: string[]): Pro
     }
 
     const responseHeaders = new Headers({ 'cache-control': 'no-store' });
+    if (offTopic) responseHeaders.set(ASSISTANT_SCOPE_HEADER, ASSISTANT_SCOPE_OFF_TOPIC);
     PASSTHROUGH_RESPONSE_HEADERS.forEach(name => {
         const value = upstream.headers.get(name);
         if (value !== null) responseHeaders.set(name, value);

@@ -2,7 +2,11 @@ import { inject, injectable } from 'inversify';
 import { z } from 'zod';
 import type EnvConfigGatewayOutputPort from '@/lib/core/port/secondary/env-config-gateway-output-port';
 import type AssistantConfigGatewayOutputPort from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
-import type { AssistantRelayConfig, AssistantTelemetryRelayConfig } from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
+import type {
+    AssistantRelayConfig,
+    AssistantScopeConfig,
+    AssistantTelemetryRelayConfig,
+} from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
 import { parseOtlpHeaders } from '@/lib/infrastructure/assistant/otlp-headers';
 import { DEFAULT_ASSISTANT_CONFIG, type AssistantConfig, type TelemetryContentLevel } from '@/lib/core/entity/assistant/assistant-config';
 import {
@@ -39,6 +43,9 @@ export const ASSISTANT_ENV_KEYS = [
     'ASSISTANT_LLM_UPSTREAM_TIMEOUT_MS',
     'ASSISTANT_LLM_UPSTREAM_MAX_MS',
     'ASSISTANT_LLM_MAX_CONCURRENT_STREAMS',
+    'ASSISTANT_SCOPE_MODE',
+    'ASSISTANT_SCOPE_EXTRA_TOPICS',
+    'ASSISTANT_SCOPE_MODEL',
 ] as const;
 
 type AssistantEnvKey = (typeof ASSISTANT_ENV_KEYS)[number];
@@ -52,6 +59,9 @@ const DEFAULT_UPSTREAM_MAX_MS = 600_000;
 const MAX_UPSTREAM_MAX_MS = 3_600_000;
 const DEFAULT_MAX_CONCURRENT_STREAMS = 3;
 const MAX_MAX_CONCURRENT_STREAMS = 1_000;
+const SCOPE_MODES: readonly AssistantScopeConfig['mode'][] = ['off', 'warn', 'block'];
+const MAX_SCOPE_TOPICS = 20;
+const MAX_SCOPE_TOPIC_LENGTH = 100;
 /** ASSISTANT_TELEMETRY_USER_SALT shorter than this (after trimming) is treated as missing. */
 export const MIN_TELEMETRY_USER_SALT_LENGTH = 16;
 const MAX_CONTEXT_WINDOW = 100_000_000;
@@ -152,6 +162,29 @@ function parseOperatorDefault(env: AssistantEnv): OperatorDefault | undefined {
     };
 }
 
+/** Comma separated topics: control characters stripped, trimmed, empty dropped, at most 20 of at most 100 characters. */
+function parseScopeTopics(value: string | undefined): string[] {
+    const topics: string[] = [];
+    for (const part of (value ?? '').split(',')) {
+        const topic = part
+            .replace(/\p{Cc}/gu, '')
+            .trim()
+            .slice(0, MAX_SCOPE_TOPIC_LENGTH)
+            .trim();
+        if (topic) topics.push(topic);
+        if (topics.length >= MAX_SCOPE_TOPICS) break;
+    }
+    return topics;
+}
+
+function parseScope(env: AssistantEnv, operator: OperatorDefault): AssistantScopeConfig {
+    return {
+        mode: parseChoice(env.ASSISTANT_SCOPE_MODE, SCOPE_MODES, 'warn'),
+        extraTopics: parseScopeTopics(env.ASSISTANT_SCOPE_EXTRA_TOPICS),
+        model: clean(env.ASSISTANT_SCOPE_MODEL) ?? operator.model,
+    };
+}
+
 /** The deployment secret for hashing user ids in operator traces, or undefined when missing or too short. */
 function parseUserSalt(value: string | undefined): string | undefined {
     const normalised = clean(value);
@@ -244,6 +277,7 @@ class AssistantConfigGateway implements AssistantConfigGatewayOutputPort {
             upstreamMaxMs: parsePositiveInt(env.ASSISTANT_LLM_UPSTREAM_MAX_MS, MAX_UPSTREAM_MAX_MS) ?? DEFAULT_UPSTREAM_MAX_MS,
             maxConcurrentStreams:
                 parsePositiveInt(env.ASSISTANT_LLM_MAX_CONCURRENT_STREAMS, MAX_MAX_CONCURRENT_STREAMS) ?? DEFAULT_MAX_CONCURRENT_STREAMS,
+            scope: parseScope(env, operator),
         };
     }
 

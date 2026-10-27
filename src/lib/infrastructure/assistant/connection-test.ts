@@ -1,5 +1,5 @@
 import type { ResolvedProvider } from '@/lib/core/entity/assistant/provider-config';
-import { ANTHROPIC_API_VERSION, DEFAULT_BASE_URLS } from './provider-kinds';
+import { ANTHROPIC_API_VERSION, CONNECTION_TEST_PROMPT, DEFAULT_BASE_URLS } from './provider-kinds';
 
 export type ConnectionErrorCode = 'cors' | 'lna' | 'mixed-content' | 'auth' | 'no-tools' | 'model-not-found' | 'network' | 'unknown';
 
@@ -15,7 +15,6 @@ export interface ConnectionTestOptions {
 
 export const CONNECTION_TEST_TIMEOUT_MS = 20_000;
 const MAX_TOKENS = 64;
-const PROMPT = 'Reply with OK.';
 const TOOL_NAME = 'ping';
 const TOOL_DESCRIPTION = 'Connection check. Takes no arguments.';
 const EMPTY_SCHEMA = { type: 'object', properties: {} };
@@ -44,7 +43,7 @@ export function buildTestRequest(resolved: ResolvedProvider): { url: string; ini
         const body = {
             model: resolved.model,
             max_tokens: MAX_TOKENS,
-            messages: [{ role: 'user', content: PROMPT }],
+            messages: [{ role: 'user', content: CONNECTION_TEST_PROMPT }],
             tools: [{ name: TOOL_NAME, description: TOOL_DESCRIPTION, input_schema: EMPTY_SCHEMA }],
         };
         return { url: `${root}/v1/messages`, init: { method: 'POST', headers, body: JSON.stringify(body) } };
@@ -55,7 +54,7 @@ export function buildTestRequest(resolved: ResolvedProvider): { url: string; ini
     const limit = resolved.kind === 'openai' ? { max_completion_tokens: MAX_TOKENS } : { max_tokens: MAX_TOKENS };
     const body = {
         model: resolved.model,
-        messages: [{ role: 'user', content: PROMPT }],
+        messages: [{ role: 'user', content: CONNECTION_TEST_PROMPT }],
         tools: [{ type: 'function', function: { name: TOOL_NAME, description: TOOL_DESCRIPTION, parameters: EMPTY_SCHEMA } }],
         stream: false,
         ...limit,

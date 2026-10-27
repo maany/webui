@@ -17,6 +17,17 @@ export interface AssistantRelayConfig {
     upstreamMaxMs: number;
     /** ASSISTANT_LLM_MAX_CONCURRENT_STREAMS: relayed requests one account may have in flight at once (default 3) */
     maxConcurrentStreams: number;
+    /** Topic check of new user turns (ASSISTANT_SCOPE_*) */
+    scope: AssistantScopeConfig;
+}
+
+export interface AssistantScopeConfig {
+    /** ASSISTANT_SCOPE_MODE: off skips the check, warn flags off-topic turns, block refuses them (default warn) */
+    mode: 'off' | 'warn' | 'block';
+    /** ASSISTANT_SCOPE_EXTRA_TOPICS: extra topics the operator counts as on topic */
+    extraTopics: string[];
+    /** ASSISTANT_SCOPE_MODEL: model used for the check (default: the operator default model) */
+    model: string;
 }
 
 /**

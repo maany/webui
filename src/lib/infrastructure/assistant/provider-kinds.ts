@@ -41,3 +41,6 @@ export const KIND_NEEDS_BASE_URL: Record<ByokProviderKind, boolean> = {
 
 /** Value of the `anthropic-version` header sent to the Anthropic API. */
 export const ANTHROPIC_API_VERSION = '2023-06-01';
+
+/** User prompt of the settings "Test connection" request; the relay does not topic-check it. */
+export const CONNECTION_TEST_PROMPT = 'Reply with OK.';
