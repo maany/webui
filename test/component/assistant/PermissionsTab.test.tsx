@@ -93,6 +93,21 @@ describe('PermissionsTab', () => {
         expect(onChange).toHaveBeenCalledWith({ list_dids: 'ask', 'group:rules': 'ask' });
     });
 
+    it('a group choice keeps the choices of hidden tools in that domain', () => {
+        const { onChange } = renderTab({
+            visibility: { flags: flagsWithout('rules.approve'), role: Role.ADMIN, permissionsReady: true },
+            prefs: { create_rule: 'deny', update_rule: 'ask', list_dids: 'ask' },
+        });
+        const group = within(screen.getByRole('group', { name: 'Policy for all Rules tools' }));
+        fireEvent.click(group.getByRole('radio', { name: 'Ask' }));
+        expect(onChange).toHaveBeenCalledWith({ update_rule: 'ask', list_dids: 'ask', 'group:rules': 'ask' });
+    });
+
+    it('explains what a group control does', () => {
+        renderTab();
+        expect(screen.getAllByText('Applies to every tool in this group and replaces their individual choices.').length).toBeGreaterThan(0);
+    });
+
     it('lists hidden tools with the reason', () => {
         renderTab({ visibility: { flags: flagsWithout('assistant.bad_replicas'), role: Role.USER, permissionsReady: true } });
         const hidden = within(screen.getByRole('region', { name: 'Hidden tools' }));
@@ -110,9 +125,11 @@ describe('PermissionsTab', () => {
         ).toHaveTextContent('Write tools are off');
     });
 
-    it('marks every tool as checking permissions until permix is ready', () => {
+    it('shows one checking line, not a hidden tool list, until permix is ready', () => {
         renderTab({ visibility: { ...admin, permissionsReady: false } });
-        expect(within(screen.getByRole('region', { name: 'Hidden tools' })).getAllByText('Checking your permissions')).toHaveLength(TOOLS.length);
+        expect(screen.getAllByText('Checking your permissions')).toHaveLength(1);
+        expect(screen.queryByRole('region', { name: 'Hidden tools' })).not.toBeInTheDocument();
+        expect(screen.queryByText('create_rule')).not.toBeInTheDocument();
     });
 
     it('resets to defaults', () => {

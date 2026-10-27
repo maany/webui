@@ -52,14 +52,10 @@ describe('PermissionsTabContainer', () => {
         render(<PermissionsTabContainer config={DEFAULT_ASSISTANT_CONFIG} configError={new Error('500')} settings={settings} onUpdate={update} />);
         expect(screen.getByText('Could not load the operator limits. Write tools stay blocked until they load.')).toBeInTheDocument();
         expect(screen.queryByRole('group')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Reset to defaults' })).not.toBeInTheDocument();
     });
 
     it('is the settings tab right after Providers (spec 6.4 order)', () => {
         expect(ASSISTANT_SETTINGS_TABS.map(tab => tab.name).slice(0, 2)).toEqual(['Providers', 'Permissions']);
-    });
-
-    it('shows no policy controls while the limits are in error', () => {
-        render(<PermissionsTabContainer config={DEFAULT_ASSISTANT_CONFIG} configError={new Error('500')} settings={settings} onUpdate={update} />);
-        expect(screen.queryByRole('button', { name: 'Reset to defaults' })).not.toBeInTheDocument();
     });
 });

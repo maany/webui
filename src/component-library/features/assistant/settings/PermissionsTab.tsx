@@ -117,7 +117,8 @@ export function PermissionsTab({ tools, visibility, config, prefs, onChange }: P
 
     const setToolPolicy = (name: string, policy: ToolPolicy) => onChange({ ...prefs, [name]: policy });
     const setGroupPolicy = (domain: ToolDomain, policy: ToolPolicy) => {
-        const domainTools = new Set(tools.filter(tool => tool.domain === domain).map(tool => tool.name));
+        // Only the tools shown here lose their own choice; a hidden tool keeps its choice for when it is shown again.
+        const domainTools = new Set(visible.filter(tool => tool.domain === domain).map(tool => tool.name));
         const next: ToolPolicyPrefs = {};
         Object.entries(prefs).forEach(([key, value]) => {
             if (!domainTools.has(key)) next[key] = value;
@@ -160,14 +161,19 @@ export function PermissionsTab({ tools, visibility, config, prefs, onChange }: P
                             <h3 id={headingId} className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
                                 {TOOL_DOMAIN_LABELS[domain]}
                             </h3>
-                            <PolicyChoice
-                                groupName={`group-${domain}`}
-                                label={`Policy for all ${TOOL_DOMAIN_LABELS[domain]} tools`}
-                                value={groupValue}
-                                cap={groupCap}
-                                offerAllow={groupOffersAllow}
-                                onSelect={policy => setGroupPolicy(domain, policy)}
-                            />
+                            <div className="space-y-1">
+                                <PolicyChoice
+                                    groupName={`group-${domain}`}
+                                    label={`Policy for all ${TOOL_DOMAIN_LABELS[domain]} tools`}
+                                    value={groupValue}
+                                    cap={groupCap}
+                                    offerAllow={groupOffersAllow}
+                                    onSelect={policy => setGroupPolicy(domain, policy)}
+                                />
+                                <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                                    Applies to every tool in this group and replaces their individual choices.
+                                </p>
+                            </div>
                         </div>
                         <ul className="divide-y divide-neutral-200 dark:divide-neutral-700">
                             {domainTools.map(tool => (
@@ -196,7 +202,9 @@ export function PermissionsTab({ tools, visibility, config, prefs, onChange }: P
                 );
             })}
 
-            {hidden.length > 0 && (
+            {!visibility.permissionsReady && <p className="text-sm text-neutral-600 dark:text-neutral-400">Checking your permissions</p>}
+
+            {visibility.permissionsReady && hidden.length > 0 && (
                 <section aria-labelledby="permissions-hidden" className="space-y-2">
                     <h3 id="permissions-hidden" className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
                         Hidden tools
