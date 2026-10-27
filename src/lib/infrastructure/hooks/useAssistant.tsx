@@ -1,5 +1,6 @@
 'use client';
 
+import { CONVERSATION_TITLE_MAX_CHARS, normalizeConversationTitle } from '@/lib/core/services/assistant-conversation-title';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
 import type { ChatMessage, Conversation, MessagePart } from '@/lib/core/entity/assistant/conversation';
@@ -67,6 +68,8 @@ export interface UseAssistantResult {
     newConversation(): void;
     openConversation(id: string): Promise<void>;
     deleteConversation(id: string): Promise<void>;
+    /** Renames a conversation of the active account without changing its order in the history; rejects an empty title. */
+    renameConversation?(id: string, title: string): Promise<void>;
     /**
      * Deletes every conversation of an account (default: the active one), stopping any running turn first.
      * The explicit key lets a sign-out that runs after the session is gone still stop and tombstone its turn.
@@ -136,7 +139,7 @@ export interface AssistantControllerDeps {
 }
 
 const DEFAULT_MAX_STEPS = 25;
-const TITLE_MAX_CHARS = 60;
+const TITLE_MAX_CHARS = CONVERSATION_TITLE_MAX_CHARS;
 
 function providerErrorMessage(error: string): string {
     switch (error) {
@@ -372,7 +375,14 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 if (!text) return history;
                 if (signal.aborted || !isCurrent()) return history;
                 const live = conversationRef.current?.id === current.id ? conversationRef.current : current;
-                const updated: Conversation = { ...live, compactedSummary: text, compactedUpToMessageId: plan.upToMessageId };
+                // A rename may have landed while the summary was written, so the stored title wins over a stale copy.
+                const storedTitle = live === current ? (await repository.getConversation(current.id))?.title : undefined;
+                const updated: Conversation = {
+                    ...live,
+                    ...(storedTitle ? { title: storedTitle } : {}),
+                    compactedSummary: text,
+                    compactedUpToMessageId: plan.upToMessageId,
+                };
                 setConversation(updated);
                 if (!deletedRef.current.has(current.id)) await repository.saveConversation(updated);
                 depsRef.current.bus.emit({ type: 'compaction', conversationId: current.id, upToMessageId: plan.upToMessageId, at: Date.now() });
@@ -1078,6 +1088,24 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         [refreshConversations, resetView],
     );
 
+    const renameConversation = useCallback(
+        async (id: string, rawTitle: string) => {
+            const title = normalizeConversationTitle(rawTitle);
+            if (!title) throw new Error('A chat title cannot be empty.');
+            const accountKey = depsRef.current.accountKey;
+            if (!accountKey || deletedRef.current.has(id)) return;
+            const { repository } = await depsRef.current.repository;
+            const latest = await repository.getConversation(id);
+            if (!latest || latest.accountKey !== accountKey || deletedRef.current.has(id)) return;
+            // Shown first: a running turn merges the open conversation into its own saves, so it keeps the title.
+            const open = conversationRef.current;
+            if (open?.id === id) setConversation({ ...open, title });
+            await repository.saveConversation({ ...latest, title });
+            await refreshConversations();
+        },
+        [refreshConversations, setConversation],
+    );
+
     // Shared by both delete-all flavours: blocks new sends until the delete settles, tombstones every id the
     // delete will remove (so a streaming turn skips its later writes) and un-marks them when the delete fails.
     const deleteConversationsWhere = useCallback(
@@ -1153,6 +1181,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         newConversation,
         openConversation,
         deleteConversation,
+        renameConversation,
         deleteAllConversations,
         deleteAllAccountsConversations,
         persistent,

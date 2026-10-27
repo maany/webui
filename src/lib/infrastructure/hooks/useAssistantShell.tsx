@@ -21,6 +21,7 @@ export interface AssistantMemoryControls {
 
 export interface AssistantConversationControls {
     deleteConversation(id: string): Promise<void>;
+    renameConversation?(id: string, title: string): Promise<void>;
     /** Active account by default; the explicit key lets sign-out target an account whose session is already gone. */
     deleteAll(accountKey?: string): Promise<void>;
     deleteAllAccounts(): Promise<void>;

@@ -179,11 +179,12 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
         [handles, registerMemoryControls],
     );
 
-    const { deleteConversation, deleteAllConversations, deleteAllAccountsConversations } = assistant;
+    const { deleteConversation, renameConversation, deleteAllConversations, deleteAllAccountsConversations } = assistant;
     useEffect(
         () =>
             registerConversationControls({
                 deleteConversation,
+                renameConversation,
                 deleteAll: async accountKey => {
                     await deleteAllConversations?.(accountKey);
                 },
@@ -191,7 +192,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
                     await deleteAllAccountsConversations?.();
                 },
             }),
-        [deleteConversation, deleteAllConversations, deleteAllAccountsConversations, registerConversationControls],
+        [deleteConversation, renameConversation, deleteAllConversations, deleteAllAccountsConversations, registerConversationControls],
     );
 
     const refresh = assistant.refreshConversations;
