@@ -24,15 +24,38 @@ interface RunnerScript {
     second: boolean;
     /** When it settles before the decision, the runner reports call-1 as done (a crafted state change mid-save). */
     poke: Promise<void> | null;
+    /** Asks for approval of call-2 as well, up front, and finishes once both are decided. */
+    concurrent?: boolean;
 }
 
 function approvalRunner(toolName: string, log: string[], script: RunnerScript) {
     const resolveSpy = jest.fn<void, [string, boolean]>();
     let decide: ((outcome: boolean | 'aborted') => void) | null = null;
+    const decisions = new Map<string, (approved: boolean) => void>();
     const runner: AgentRunner = {
         async *run(input): AsyncGenerator<RunnerUpdate> {
             yield { type: 'tool-call', toolCallId: 'call-1', toolName, args: { id: 'r1' }, policy: 'ask' };
             yield { type: 'approval-required', toolCallId: 'call-1' };
+            if (script.concurrent) {
+                yield { type: 'tool-call', toolCallId: 'call-2', toolName, args: { id: 'r2' }, policy: 'ask' };
+                yield { type: 'approval-required', toolCallId: 'call-2' };
+                const both = ['call-1', 'call-2'].map(
+                    id =>
+                        new Promise<boolean | 'aborted'>(resolve => {
+                            decisions.set(id, resolve);
+                            input.signal.addEventListener('abort', () => resolve('aborted'));
+                        }),
+                );
+                const outcomes = await Promise.all(both);
+                if (input.signal.aborted || outcomes.includes('aborted')) {
+                    yield { type: 'finished', status: 'stopped' };
+                    return;
+                }
+                yield { type: 'tool-result', toolCallId: 'call-1', result: { ok: true }, durationMs: 1 };
+                yield { type: 'tool-result', toolCallId: 'call-2', result: { ok: true }, durationMs: 1 };
+                yield { type: 'finished', status: 'completed' };
+                return;
+            }
             const decided = new Promise<boolean | 'aborted'>(resolve => {
                 decide = resolve;
                 if (input.signal.aborted) resolve('aborted');
@@ -62,6 +85,7 @@ function approvalRunner(toolName: string, log: string[], script: RunnerScript) {
         resolveApproval(toolCallId, approved) {
             log.push(`runner.resolveApproval:${approved}`);
             resolveSpy(toolCallId, approved);
+            decisions.get(toolCallId)?.(approved);
             decide?.(approved);
         },
     };
@@ -371,6 +395,80 @@ describe('useAssistantController approvals (phase 4 hardening)', () => {
             hook.result.current.stop();
             await sending;
         });
+    });
+
+    it('never holds the same conversation grant twice when two decisions race (P1)', async () => {
+        const { hook, repository, script } = setup();
+        script.concurrent = true;
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('go');
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals).toHaveLength(2));
+        // Both decisions pass the in-memory check before either grant lands.
+        const original = repository.getConversation.bind(repository);
+        let waiting = 0;
+        let open: () => void = () => undefined;
+        const gate = new Promise<void>(resolve => (open = resolve));
+        jest.spyOn(repository, 'getConversation').mockImplementation(async id => {
+            waiting += 1;
+            if (waiting === 2) open();
+            await gate;
+            return original(id);
+        });
+        await act(async () => {
+            await Promise.all([
+                hook.result.current.resolveApproval('call-1', 'approved', 'conversation'),
+                hook.result.current.resolveApproval('call-2', 'approved', 'conversation'),
+            ]);
+            await sending;
+        });
+        expect(hook.result.current.conversation?.conversationAllow).toEqual(['do_write']);
+        const [stored] = await repository.listConversations('root@def');
+        expect(stored.conversationAllow).toEqual(['do_write']);
+    });
+
+    it('does not revoke a stored grant it did not add when its own decision is dropped (P1)', async () => {
+        const { hook, repository, script, saveConversation } = setup();
+        script.concurrent = true;
+        let sending!: Promise<void>;
+        act(() => {
+            sending = hook.result.current.send('go');
+        });
+        await waitFor(() => expect(hook.result.current.pendingApprovals).toHaveLength(2));
+        const original = repository.getConversation.bind(repository);
+        let reads = 0;
+        let openRead: () => void = () => undefined;
+        const readGate = new Promise<void>(resolve => (openRead = resolve));
+        jest.spyOn(repository, 'getConversation').mockImplementation(async id => {
+            reads += 1;
+            // The second decision reads the conversation only after the first one stored its grant.
+            if (reads === 2) await readGate;
+            return original(id);
+        });
+        let first!: Promise<void>;
+        let second!: Promise<void>;
+        act(() => {
+            first = hook.result.current.resolveApproval('call-1', 'approved', 'conversation') as Promise<void>;
+            second = hook.result.current.resolveApproval('call-2', 'approved', 'conversation') as Promise<void>;
+        });
+        await waitFor(() => expect(reads).toBe(2));
+        await waitFor(async () => expect((await repository.listConversations('root@def'))[0].conversationAllow).toEqual(['do_write']));
+        // Stop lands before the second decision reads the stored grant; it must not take the first decision's grant back.
+        const savesBefore = saveConversation.mock.calls.length;
+        act(() => {
+            hook.result.current.stop();
+        });
+        await act(async () => {
+            openRead();
+            await Promise.all([first, second]);
+            await sending;
+        });
+        // The end-of-turn save would hide a revoke, so look at every save made after the grant was stored.
+        const later = saveConversation.mock.calls.slice(savesBefore).map(([conversation]) => conversation.conversationAllow);
+        expect(later.every(allow => allow.includes('do_write'))).toBe(true);
+        const [stored] = await repository.listConversations('root@def');
+        expect(stored.conversationAllow).toEqual(['do_write']);
     });
 
     it('grants the conversation scope only once the runner resumes (I1)', async () => {

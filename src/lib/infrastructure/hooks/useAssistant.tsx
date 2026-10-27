@@ -903,13 +903,13 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                         try {
                             const stored = repository ? await repository.getConversation(conversationId) : undefined;
                             if (!stored || !repository || deletedRef.current.has(conversationId)) throw new Error('conversation not stored');
+                            // Only a grant this decision adds may be revoked later; one already stored belongs to another decision.
+                            const alreadyStored = stored.conversationAllow.includes(toolName);
                             await repository.saveConversation({
                                 ...stored,
-                                conversationAllow: stored.conversationAllow.includes(toolName)
-                                    ? stored.conversationAllow
-                                    : [...stored.conversationAllow, toolName],
+                                conversationAllow: alreadyStored ? stored.conversationAllow : [...stored.conversationAllow, toolName],
                             });
-                            grantStored = true;
+                            grantStored = !alreadyStored;
                         } catch {
                             saved = false;
                         }
@@ -965,8 +965,11 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                         runner.resolveApproval(toolCallId, false);
                         return;
                     }
-                    setConversation({ ...open, conversationAllow: [...open.conversationAllow, toolName] });
-                    grantedInMemory = true;
+                    // A concurrent decision of the same tool may have added it already; never hold it twice.
+                    if (!open.conversationAllow.includes(toolName)) {
+                        setConversation({ ...open, conversationAllow: [...open.conversationAllow, toolName] });
+                        grantedInMemory = true;
+                    }
                 }
                 if (approved) emitDecision('approved');
                 runner.resolveApproval(toolCallId, approved);
