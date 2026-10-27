@@ -145,7 +145,7 @@ describe('a tool call that starts before Stop', () => {
         expect(JSON.stringify(finalMessage(updates))).not.toContain('may still have been applied');
     });
 
-    it('closes a call the client never delivered when the turn ends in an error', async () => {
+    it('keeps the result of a finished call and redacts its secrets when the next model step errors', async () => {
         clock = forceClientYields();
         const { run, fake } = setup('write', 'never');
         fake.setResponses([{ toolCalls: [{ name: 'secret_tool', input: { id: '1', token: 's3cret' } }] }, { error: 'model fell over' }]);
