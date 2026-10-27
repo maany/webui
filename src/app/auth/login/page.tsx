@@ -7,6 +7,7 @@ import { Login as LoginStory } from '@/component-library/pages/Login/Login';
 import { AuthType, OIDCProvider, Role, VO } from '@/lib/core/entity/auth-models';
 import { signIn, useSession } from 'next-auth/react';
 import { AUTH_ERROR_MESSAGES } from '@/lib/core/entity/auth-errors';
+import { safeCallbackPath } from '@/lib/infrastructure/utils/safe-callback-url';
 import { LoadingPage } from '@/component-library/pages/system/LoadingPage';
 
 function LoginContent() {
@@ -443,8 +444,7 @@ function LoginContent() {
 
     useEffect(() => {
         if (callbackUrl) {
-            const redirectURL = decodeURIComponent(callbackUrl);
-            setRedirectURL(redirectURL);
+            setRedirectURL(safeCallbackPath(callbackUrl));
         }
 
         fetch('/api/auth/login', {
