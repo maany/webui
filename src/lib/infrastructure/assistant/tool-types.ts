@@ -31,6 +31,8 @@ export interface ToolExecutionContext {
     activateTools?(names: string[]): void;
     /** find_tools and refresh_handle: live toolVisibility check (flags, role, permissions ready). */
     isToolVisible?(name: string): boolean;
+    /** find_tools and refresh_handle: short user-facing reason a tool is hidden or denied, undefined when it can be used. */
+    unavailableReason?(name: string): string | undefined;
     /** refresh_handle: live effective policy of a tool; missing means read tools default to allow. */
     toolPolicy?(name: string): ToolPolicy;
     /** run_sql and refresh_handle: handle provenance rebuilt from the transcript. */
@@ -55,6 +57,8 @@ const TOOL_ERROR_CODES = new Set<string>([
     'stream_error',
     'rucio_error',
     'unavailable',
+    'repeated_failure',
+    'tool_budget_exhausted',
 ]);
 
 export function isToolError(value: unknown): value is ToolError {

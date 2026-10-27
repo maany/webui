@@ -20,6 +20,8 @@ export interface RefreshHandleDeps {
     isToolVisible?: (name: string) => boolean;
     /** Live policy; missing means read tools default to allow. */
     toolPolicy?: (name: string) => ToolPolicy;
+    /** Short user-facing reason a tool is hidden or denied, used in the error. */
+    unavailableReason?: (name: string) => string | undefined;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -75,11 +77,12 @@ export async function refreshHandle(
     if (!tool || tool.spec.executor !== 'feature')
         return toolError('unavailable', `${record.toolName} is not available, so ${name} cannot be refreshed`);
     if (tool.spec.risk !== 'read') return toolError('forbidden', `${record.toolName} is not a read tool`);
+    const reason = deps.unavailableReason?.(record.toolName);
     if (deps.isToolVisible?.(record.toolName) === false) {
-        return toolError('forbidden', `${record.toolName} is not available to you, so ${name} cannot be refreshed`);
+        return toolError('forbidden', `${record.toolName} is ${reason ?? 'not available to you'}, so ${name} cannot be refreshed`);
     }
     const policy = deps.toolPolicy?.(record.toolName) ?? 'allow';
-    if (policy === 'deny') return toolError('denied_by_policy', `${record.toolName} is turned off, so ${name} cannot be refreshed`);
+    if (policy === 'deny') return toolError('denied_by_policy', `${record.toolName} is ${reason ?? 'turned off'}, so ${name} cannot be refreshed`);
     if (policy === 'ask') {
         return toolError(
             'denied_by_policy',

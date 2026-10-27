@@ -56,6 +56,7 @@ describe('AssistantConfigGateway', () => {
                 'ASSISTANT_SCOPE_MODE',
                 'ASSISTANT_SCOPE_EXTRA_TOPICS',
                 'ASSISTANT_SCOPE_MODEL',
+                'ASSISTANT_MAX_TOOL_CALLS',
             ].sort(),
         );
     });

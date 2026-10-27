@@ -35,6 +35,9 @@ const RULES = [
     '4. Use tools instead of guessing. If you cannot find out, say so.',
     '5. Never ask for passwords, tokens or API keys.',
     '6. Answer briefly in Markdown. Use tables for tabular data. Link WebUI pages with relative links, for example [rule 1234](/rule/1234).',
+    '7. Never call a tool with placeholder, example or made-up identifiers (such as dummy, test, xxx or a string of zeros). Use only identifiers the user gave you or a tool returned; if you do not have one, look it up or ask the user.',
+    '8. Do not repeat a call that failed with the same arguments. Explain what went wrong or try a different approach.',
+    '9. To create a replication rule, use create_rule (the user approves it) or open the form: navigate to rule_create, then call page_action with rule_create.prefill so the user reviews and submits it. Do not look up a rule id first; a new rule has none until it is created. If neither is available, say so.',
 ].join('\n');
 
 const SCOPE = [

@@ -8,6 +8,8 @@ import type { ChatMessage, Conversation } from '@/lib/core/entity/assistant/conv
 import type { PageContext } from '@/lib/core/entity/assistant/page-context';
 import { deriveHandleRecords } from '@/lib/infrastructure/assistant/message-selectors';
 import { STEP_LIMIT_NOTICE } from '@/lib/infrastructure/assistant/message-reducer';
+import type { RunErrorKind } from '@/lib/infrastructure/assistant/runner-errors';
+import { buildAssistantSettingsUrl } from '@/lib/infrastructure/utils/navigation';
 import { clampPanelWidth, panelMaxWidth, PANEL_MIN_WIDTH } from '@/lib/infrastructure/assistant/panel-storage';
 import { cn } from '@/component-library/utils';
 import { AssistantMessage } from './AssistantMessage';
@@ -28,6 +30,10 @@ export interface AssistantPanelViewProps {
     contextFraction: number | null;
     contextWindow?: number;
     error?: string;
+    /** 'configuration' offers Open settings instead of Retry; 'session' offers neither (the session banner handles it). */
+    errorKind?: RunErrorKind;
+    /** When the error was last shown; a new value shows (and announces) the alert again. */
+    errorAt?: number;
     /** True when the controller reports an expired Rucio session; shows the session banner above the composer. */
     sessionExpired?: boolean;
     persistent: boolean;
@@ -237,13 +243,20 @@ export function AssistantPanelView(props: AssistantPanelViewProps) {
                       ))}
                 {status === 'error' && props.error && (
                     <div
+                        key={props.errorAt}
                         role="alert"
                         className="rounded-md border border-base-error-300 bg-base-error-100 dark:bg-base-error-900/40 px-3 py-2 text-sm text-base-error-700 dark:text-base-error-300"
                     >
                         <p>{props.error}</p>
-                        <button type="button" className="mt-1 font-semibold underline" onClick={props.onRetry}>
-                            Retry
-                        </button>
+                        {props.errorKind === 'configuration' ? (
+                            <Link href={buildAssistantSettingsUrl()} className="mt-1 inline-block font-semibold underline">
+                                Open settings
+                            </Link>
+                        ) : props.errorKind === 'session' ? null : (
+                            <button type="button" className="mt-1 font-semibold underline" onClick={props.onRetry}>
+                                Retry
+                            </button>
+                        )}
                     </div>
                 )}
                 {status === 'idle' && endsWithStepLimit(messages) && (

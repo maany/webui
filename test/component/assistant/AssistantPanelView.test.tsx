@@ -385,3 +385,42 @@ describe('AssistantPanelView focus', () => {
         expect(screen.getByRole('textbox', { name: 'Message Rucio bot' })).toHaveFocus();
     });
 });
+
+describe('AssistantPanelView error actions', () => {
+    it('offers Open settings instead of Retry for a configuration error', () => {
+        render(
+            <AssistantPanelView
+                {...props({ status: 'error', error: 'No model is configured. Add a provider in Rucio bot settings.', errorKind: 'configuration' })}
+            />,
+        );
+        expect(screen.getByRole('alert')).toHaveTextContent('No model is configured');
+        expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+        expect(screen.getByRole('link', { name: 'Open settings' })).toHaveAttribute('href', '/assistant/settings');
+    });
+
+    it('keeps Retry for a retryable error', () => {
+        const p = props({ status: 'error', error: 'Rucio bot could not reach the provider.', errorKind: 'retryable' });
+        render(<AssistantPanelView {...p} />);
+        expect(screen.queryByRole('link', { name: 'Open settings' })).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        expect(p.onRetry).toHaveBeenCalled();
+    });
+
+    it('shows no Retry for an expired session, which has its own banner', () => {
+        render(
+            <AssistantPanelView
+                {...props({ status: 'error', error: 'Your session has expired. Log in again.', errorKind: 'session', sessionExpired: true })}
+            />,
+        );
+        expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    });
+
+    it('announces the error again when it is shown with a fresh timestamp', () => {
+        const p = props({ status: 'error', error: 'Rucio bot could not reach the provider.', errorKind: 'retryable', errorAt: 1 });
+        const { rerender } = render(<AssistantPanelView {...p} />);
+        const first = screen.getByText('Rucio bot could not reach the provider.').closest('[role="alert"]');
+        rerender(<AssistantPanelView {...p} errorAt={2} />);
+        const second = screen.getByText('Rucio bot could not reach the provider.').closest('[role="alert"]');
+        expect(second).not.toBe(first);
+    });
+});

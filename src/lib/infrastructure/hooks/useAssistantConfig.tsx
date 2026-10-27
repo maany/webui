@@ -30,6 +30,7 @@ export async function fetchAssistantConfig(): Promise<AssistantConfig> {
     };
     if (viewModel.defaultProvider) config.defaultProvider = viewModel.defaultProvider;
     if (viewModel.pricesOverride) config.pricesOverride = viewModel.pricesOverride;
+    if (typeof viewModel.maxToolCallsPerTurn === 'number') config.maxToolCallsPerTurn = viewModel.maxToolCallsPerTurn;
     return config;
 }
 

@@ -45,3 +45,25 @@ export function describeRunError(error: string, options: { relay?: boolean } = {
     if (/\b404\b|model.*not.*found/i.test(error)) return `The provider does not know this model. Check the model name in settings. (${error})`;
     return error;
 }
+
+/**
+ * What the user can do about a failed turn. 'configuration' needs a change in Rucio bot settings, so Retry would only
+ * fail again; 'session' is handled by the session banner; everything else (network, rate limits, server and model
+ * errors, a context overflow that compaction could not fix) is 'retryable'.
+ */
+export type RunErrorKind = 'configuration' | 'retryable' | 'session';
+
+export function classifyRunError(error: string, options: { relay?: boolean } = {}): RunErrorKind {
+    if (error === SESSION_EXPIRED_ERROR) return 'session';
+    if (error === OFF_TOPIC_ERROR || error === TURN_SAVE_FAILED_ERROR || error === CONTEXT_OVERFLOW_ERROR) return 'retryable';
+    if (options.relay) {
+        if (/\b401\b/.test(error)) return 'session';
+        // The relay answers 404 when the operator has not configured a model.
+        if (/\b404\b/.test(error)) return 'configuration';
+        return 'retryable';
+    }
+    if (/\b401\b|(invalid|incorrect|missing).*key|unauthori[sz]ed|authentication/i.test(error)) return 'configuration';
+    if (/no base url/i.test(error)) return 'configuration';
+    if (/\b404\b|model.*not.*found/i.test(error)) return 'configuration';
+    return 'retryable';
+}

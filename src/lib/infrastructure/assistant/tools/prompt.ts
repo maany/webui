@@ -2,6 +2,7 @@
 export const ASSISTANT_DATA_TOOLS_PROMPT = [
     'Tools and data:',
     '- Tools for DIDs, rules, RSEs, accounts, replicas, subscriptions and transfer requests are not loaded at the start. Call find_tools with a few keywords, then call the tools it loads.',
+    '- If find_tools lists a tool under unavailable, it exists but this user cannot use it. Tell the user the reason it gives instead of guessing or trying other tools.',
     '- List tools store their rows in a SQL table called a handle (for example rules_1) and return only the handle name, row count, columns and 3 sample rows. Never invent rows you have not seen.',
     '- Use run_sql with one SELECT or WITH statement to count, filter, group and join handles. Dates are ISO text: use CAST(column AS TIMESTAMP).',
     '- If a result has truncated true or an error field, the data is incomplete. Say so in your answer.',

@@ -46,6 +46,7 @@ export const ASSISTANT_ENV_KEYS = [
     'ASSISTANT_SCOPE_MODE',
     'ASSISTANT_SCOPE_EXTRA_TOPICS',
     'ASSISTANT_SCOPE_MODEL',
+    'ASSISTANT_MAX_TOOL_CALLS',
 ] as const;
 
 type AssistantEnvKey = (typeof ASSISTANT_ENV_KEYS)[number];
@@ -58,6 +59,7 @@ const MAX_UPSTREAM_TIMEOUT_MS = 3_600_000;
 const DEFAULT_UPSTREAM_MAX_MS = 600_000;
 const MAX_UPSTREAM_MAX_MS = 3_600_000;
 const DEFAULT_MAX_CONCURRENT_STREAMS = 3;
+const MAX_TOOL_CALLS_PER_TURN = 200;
 const MAX_MAX_CONCURRENT_STREAMS = 1_000;
 const SCOPE_MODES: readonly AssistantScopeConfig['mode'][] = ['off', 'warn', 'block'];
 const MAX_SCOPE_TOPICS = 20;
@@ -260,6 +262,8 @@ class AssistantConfigGateway implements AssistantConfigGatewayOutputPort {
             };
         }
         if (prices) config.pricesOverride = prices;
+        const maxToolCalls = parsePositiveInt(env.ASSISTANT_MAX_TOOL_CALLS, MAX_TOOL_CALLS_PER_TURN);
+        if (maxToolCalls !== undefined) config.maxToolCallsPerTurn = maxToolCalls;
         return config;
     }
 

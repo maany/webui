@@ -13,6 +13,8 @@ export interface AssistantConfig {
     telemetry: { operatorSink: boolean; allowUserSinks: boolean; contentCap: TelemetryContentLevel; hashUser: boolean };
     operatorSkills: SkillDefinition[]; // source: 'operator'
     pricesOverride?: Record<string, ModelPricing>;
+    /** ASSISTANT_MAX_TOOL_CALLS: tool calls one turn may make, parallel calls included. Unset means the default (20). */
+    maxToolCallsPerTurn?: number;
 }
 
 export const DEFAULT_ASSISTANT_CONFIG: AssistantConfig = {

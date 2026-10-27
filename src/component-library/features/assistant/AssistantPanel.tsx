@@ -83,6 +83,8 @@ export function AssistantPanel() {
             contextFraction={assistant.contextFraction}
             contextWindow={assistant.contextWindow}
             error={assistant.error}
+            errorKind={assistant.errorKind}
+            errorAt={assistant.errorAt}
             sessionExpired={assistant.sessionExpired}
             persistent={assistant.persistent ?? true}
             pageContext={assistant.pageContext}

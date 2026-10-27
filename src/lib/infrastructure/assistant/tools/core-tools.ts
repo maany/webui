@@ -37,20 +37,40 @@ export const findToolsTool: RegisteredTool<FindToolsArgs> = {
         // Fail closed: without a live visibility check nothing can be offered.
         if (!ctx.isToolVisible) return { tools: [], note: 'No tools can be loaded right now.' };
         const isVisible = ctx.isToolVisible;
-        const candidates = allTools()
+        const reasonFor = (name: string): string | undefined => ctx.unavailableReason?.(name);
+        const searchable = allTools()
             .map(tool => tool.spec)
-            .filter(spec => spec.alwaysOn !== true && spec.domain !== 'core' && isVisible(spec.name));
+            .filter(spec => spec.alwaysOn !== true && spec.domain !== 'core');
+        // A visible tool the user or the server turned off is not loaded: calling it would only be refused.
+        const candidates = searchable.filter(spec => isVisible(spec.name) && reasonFor(spec.name) === undefined);
         const hits = searchToolSpecs(candidates, args.query, { domain: args.domain });
+        // Tools that exist but cannot be used are reported with a short reason, only when they rank among the best
+        // matches over every tool, and only when a reason source is wired (otherwise hidden tools stay unmentioned).
+        const unavailable = ctx.unavailableReason
+            ? searchToolSpecs(searchable, args.query, { domain: args.domain }).flatMap(hit => {
+                  const reason = reasonFor(hit.name);
+                  return reason ? [{ name: hit.name, reason }] : [];
+              })
+            : [];
+        const extra = unavailable.length > 0 ? { unavailable } : {};
         if (hits.length === 0) {
             return {
                 tools: [],
-                note: 'No matching tools. Try other keywords or one of the domains: dids, rules, rses, accounts, replicas, subscriptions, requests.',
+                ...extra,
+                note:
+                    unavailable.length > 0
+                        ? 'The matching tools are not available. Tell the user the reason given for each one; do not look for a workaround.'
+                        : 'No matching tools. Try other keywords or one of the domains: dids, rules, rses, accounts, replicas, subscriptions, requests.',
             };
         }
         ctx.activateTools?.(hits.map(hit => hit.name));
         return {
             tools: hits.map(hit => ({ name: hit.name, domain: hit.domain, description: hit.description })),
-            note: 'These tools are loaded. Call them directly in your next step.',
+            ...extra,
+            note:
+                unavailable.length > 0
+                    ? 'These tools are loaded. Call them directly in your next step. The tools under unavailable cannot be used; if the request needs one, tell the user the reason given.'
+                    : 'These tools are loaded. Call them directly in your next step.',
         };
     },
 };
@@ -145,6 +165,7 @@ export const refreshHandleTool: RegisteredTool<RefreshHandleArgs> = {
             expectedAccount: ctx.accountKey,
             isToolVisible: ctx.isToolVisible,
             toolPolicy: ctx.toolPolicy,
+            unavailableReason: ctx.unavailableReason,
         });
     },
 };

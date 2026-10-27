@@ -1094,3 +1094,89 @@ describe('decorateRunnerDeps (phase 5)', () => {
         expect(deps?.toolFilter?.(deps.tools)).toEqual([]);
     });
 });
+
+describe('useAssistantController error kinds', () => {
+    const failWith = (error: string): Script =>
+        async function* () {
+            yield { type: 'finished', status: 'error', error };
+        };
+
+    it('marks a missing provider as a configuration error', async () => {
+        const { hook, created } = setup([textScript('never')], { resolveProvider: () => ({ error: 'no-provider' }) });
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        expect(hook.result.current.error).toContain('No model is configured');
+        expect(hook.result.current.errorKind).toBe('configuration');
+        expect(created).toHaveLength(0);
+    });
+
+    it('marks a relay that is not configured (404) as a configuration error', async () => {
+        const { hook } = setup([failWith('404 Not Found')]);
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        expect(hook.result.current.status).toBe('error');
+        expect(hook.result.current.errorKind).toBe('configuration');
+    });
+
+    it('keeps network errors retryable and Retry starts a new attempt', async () => {
+        const { hook, created } = setup([failWith('Failed to fetch'), textScript('fixed')]);
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        expect(hook.result.current.errorKind).toBe('retryable');
+        await act(async () => {
+            await hook.result.current.retry?.();
+        });
+        expect(created).toHaveLength(2);
+        expect(hook.result.current.status).toBe('idle');
+        expect(hook.result.current.error).toBeUndefined();
+        expect(hook.result.current.errorKind).toBeUndefined();
+    });
+
+    it('shows the error again with a fresh timestamp when Retry has no turn to re-run', async () => {
+        let provider: ReturnType<AssistantControllerDeps['resolveProvider']> = { error: 'no-provider' };
+        const { hook, created } = setup([textScript('never')], { resolveProvider: () => provider });
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        const firstAt = hook.result.current.errorAt;
+        expect(firstAt).toEqual(expect.any(Number));
+        provider = PROVIDER;
+        await act(async () => {
+            await hook.result.current.retry?.();
+        });
+        expect(created).toHaveLength(0);
+        expect(hook.result.current.status).toBe('error');
+        expect(hook.result.current.error).toContain('No model is configured');
+        expect(hook.result.current.errorAt).toBeGreaterThan(firstAt!);
+    });
+
+    it('reports a configuration error with a fresh timestamp when Retry finds no provider', async () => {
+        let provider: ReturnType<AssistantControllerDeps['resolveProvider']> = PROVIDER;
+        const { hook } = setup([failWith('Failed to fetch')], { resolveProvider: () => provider });
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        const firstAt = hook.result.current.errorAt!;
+        provider = { error: 'no-provider' };
+        await act(async () => {
+            await hook.result.current.retry?.();
+        });
+        expect(hook.result.current.errorKind).toBe('configuration');
+        expect(hook.result.current.errorAt).toBeGreaterThan(firstAt);
+    });
+});
+
+describe('useAssistantController loop guard deps', () => {
+    it('passes the tool call budget and the unavailable reason source to the runner', async () => {
+        const unavailableReason = (name: string) => (name === 'create_rule' ? 'disabled on this server' : undefined);
+        const { hook, created } = setup([textScript('ok')], { maxToolCalls: 7, unavailableReason });
+        await act(async () => {
+            await hook.result.current.send('hello');
+        });
+        expect(created[0].lastDeps?.maxToolCalls).toBe(7);
+        expect(created[0].lastDeps?.unavailableReason?.('create_rule')).toBe('disabled on this server');
+    });
+});

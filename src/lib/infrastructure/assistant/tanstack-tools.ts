@@ -2,12 +2,15 @@ import { toolDefinition, type AnyTool, type ChatMiddleware } from '@tanstack/ai'
 import type { AnyClientTool } from '@tanstack/ai-client';
 import { z } from 'zod';
 import type { ToolError, ToolPolicy } from '@/lib/core/entity/assistant/tool';
+import type { ToolCallGuard } from './tool-call-guard';
 import { isToolError, type RegisteredTool, type ToolExecutionContext } from './tool-types';
 
 /** Shape a rejected approval sends back to the model. */
 export const ApprovalRejectSchema = z.object({
-    error: z.enum(['rejected_by_user', 'denied_by_policy']),
+    error: z.enum(['rejected_by_user', 'denied_by_policy', 'repeated_failure', 'tool_budget_exhausted']),
     message: z.string(),
+    /** The loop guard's stop note, see tool-call-guard. */
+    note: z.string().optional(),
 });
 
 export const REJECTED_BY_USER: ToolError = {
@@ -15,8 +18,10 @@ export const REJECTED_BY_USER: ToolError = {
     message: 'The user rejected this tool call. Do not retry it unless the user asks you to.',
 };
 
-export function deniedByPolicy(toolName: string): ToolError {
-    return { error: 'denied_by_policy', message: `The tool ${toolName} is disabled by the user's or operator's policy.` };
+/** The refusal for a denied tool. `reason` is a short user-facing phrase such as "disabled on this server". */
+export function deniedByPolicy(toolName: string, reason?: string): ToolError {
+    const why = reason ? `${toolName} is ${reason}.` : `${toolName} is turned off by the Rucio bot permissions or by the server.`;
+    return { error: 'denied_by_policy', message: `${why} Tell the user it is not available; do not retry it or look for a workaround.` };
 }
 
 export interface ToolResultObserver {
@@ -34,6 +39,10 @@ export interface BuildToolsOptions {
      * so a pending approval still matches its tool; every other policy, and every execution check, stays live.
      */
     builtWith?: ReadonlyMap<string, ToolPolicy>;
+    /** Short user-facing reason a tool is hidden or denied, used in the denied_by_policy message. */
+    unavailableReason?(toolName: string): string | undefined;
+    /** Per-turn loop guard: records every result and adds the stop note once failures pile up. */
+    guard?: Pick<ToolCallGuard, 'settle'>;
 }
 
 export interface BuiltTools {
@@ -91,6 +100,12 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
     const approvalClientTools: AnyClientTool[] = [];
     const builtPolicy = new Map<string, ToolPolicy>();
 
+    const finish = (toolCallId: string, result: unknown, durationMs: number): unknown => {
+        const final = options.guard ? options.guard.settle(toolCallId, result) : result;
+        options.onResult(toolCallId, final, isToolError(final) ? final : undefined, durationMs);
+        return final;
+    };
+
     for (const tool of tools) {
         // Only a stricter build is pinned: a tool built as ask keeps asking so its pending approval still resumes.
         const policy = options.builtWith?.get(tool.spec.name) === 'ask' ? 'ask' : options.policyFor(tool.spec.name);
@@ -100,19 +115,12 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
             const toolCallId = tanstackContext?.toolCallId ?? `call_${Date.now()}`;
             const started = Date.now();
             if (options.policyFor(tool.spec.name) === 'deny') {
-                const denied = deniedByPolicy(tool.spec.name);
-                options.onResult(toolCallId, denied, denied, 0);
-                return denied;
+                return finish(toolCallId, deniedByPolicy(tool.spec.name, options.unavailableReason?.(tool.spec.name)), 0);
             }
-            if (isInvalidArgsMarker(args)) {
-                const invalid = invalidArgs(args);
-                options.onResult(toolCallId, invalid, invalid, 0);
-                return invalid;
-            }
+            if (isInvalidArgsMarker(args)) return finish(toolCallId, invalidArgs(args), 0);
             if (policy !== 'ask' && options.policyFor(tool.spec.name) === 'ask') {
                 const tightened: ToolError = { error: 'denied_by_policy', message: 'This action now needs approval. Ask again to request it.' };
-                options.onResult(toolCallId, tightened, tightened, 0);
-                return tightened;
+                return finish(toolCallId, tightened, 0);
             }
             options.onStart?.(toolCallId, tool.spec.name, args);
             const ctx = options.makeToolContext(toolCallId);
@@ -124,9 +132,7 @@ export function buildTanstackTools(tools: RegisteredTool<any>[], options: BuildT
                     ? ({ error: 'aborted', message: 'The tool call was stopped.' } satisfies ToolError)
                     : ({ error: 'unavailable', message: errorMessage(error) } satisfies ToolError);
             }
-            const durationMs = Date.now() - started;
-            options.onResult(toolCallId, result, isToolError(result) ? result : undefined, durationMs);
-            return result;
+            return finish(toolCallId, result, Date.now() - started);
         };
 
         if (policy === 'ask') {
@@ -174,20 +180,26 @@ export function createToolFilterMiddleware(
  * Enforces `deny` at call time and maps TanStack's own tool failures
  * (unparsable JSON, truncated calls, aborts) to the ToolError shape.
  */
-export function createPolicyMiddleware(policyFor: (toolName: string) => ToolPolicy, onResult: ToolResultObserver): ChatMiddleware {
+export function createPolicyMiddleware(
+    policyFor: (toolName: string) => ToolPolicy,
+    onResult: ToolResultObserver,
+    options: Pick<BuildToolsOptions, 'unavailableReason' | 'guard'> = {},
+): ChatMiddleware {
+    const finish = (toolCallId: string, error: ToolError, durationMs: number): ToolError => {
+        const final = (options.guard ? options.guard.settle(toolCallId, error) : error) as ToolError;
+        onResult(toolCallId, final, final, durationMs);
+        return final;
+    };
     return {
         name: 'rucio-assistant-policy',
         onGuardToolCall: (_ctx, hook) => {
             if (policyFor(hook.toolName) === 'deny') {
-                const denied = deniedByPolicy(hook.toolName);
-                onResult(hook.toolCallId, denied, denied, 0);
-                return { type: 'skip', result: denied };
+                return {
+                    type: 'skip',
+                    result: finish(hook.toolCallId, deniedByPolicy(hook.toolName, options.unavailableReason?.(hook.toolName)), 0),
+                };
             }
-            if (isInvalidArgsMarker(hook.args)) {
-                const invalid = invalidArgs(hook.args);
-                onResult(hook.toolCallId, invalid, invalid, 0);
-                return { type: 'skip', result: invalid };
-            }
+            if (isInvalidArgsMarker(hook.args)) return { type: 'skip', result: finish(hook.toolCallId, invalidArgs(hook.args), 0) };
             return undefined;
         },
         onAfterToolCall: (ctx, info) => {
@@ -195,8 +207,7 @@ export function createPolicyMiddleware(policyFor: (toolName: string) => ToolPoli
             const mapped: ToolError = ctx.signal?.aborted
                 ? { error: 'aborted', message: 'The tool call was stopped.' }
                 : { error: 'invalid_args', message: errorMessage(info.error) };
-            onResult(info.toolCallId, mapped, mapped, info.duration);
-            return { type: 'replaceResult', result: mapped };
+            return { type: 'replaceResult', result: finish(info.toolCallId, mapped, info.duration) };
         },
     };
 }

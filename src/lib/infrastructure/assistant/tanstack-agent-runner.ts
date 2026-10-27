@@ -20,6 +20,7 @@ import { maskSensitiveArgs } from './approvals';
 import { getTool } from './tool-registry';
 import { interruptedToolError } from './tool-error';
 import { REJECTED_BY_USER, buildTanstackTools, createPolicyMiddleware, createToolFilterMiddleware, deniedByPolicy } from './tanstack-tools';
+import { createToolCallGuard, createToolCallGuardMiddleware } from './tool-call-guard';
 import { isToolError, type RegisteredTool, type ToolExecutionContext } from './tool-types';
 
 export interface AgentRunnerDeps {
@@ -30,6 +31,10 @@ export interface AgentRunnerDeps {
     emit(event: AssistantEvent): void;
     makeToolContext(toolCallId: string, turnId: string): ToolExecutionContext;
     maxSteps: number; // default 25
+    /** Tool calls one turn may make, parallel calls included; default DEFAULT_MAX_TOOL_CALLS (20). */
+    maxToolCalls?: number;
+    /** Short user-facing reason a tool is hidden or denied (flag off, role, permissions), for denied_by_policy messages. */
+    unavailableReason?(toolName: string): string | undefined;
     /** Narrows the offered tools before every model call (phase 5 skills). */
     toolFilter?: (tools: RegisteredTool<any>[]) => RegisteredTool<any>[];
 }
@@ -382,6 +387,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
         const durations = new Map<string, number>();
         const toolNames = new Map<string, string>();
         const toolArgsText = new Map<string, string>();
+        const toolArgs = new Map<string, unknown>();
         const pendingApprovals = new Set<string>();
         let lastFinishReason: string | null | undefined;
         // Model calls made this turn. Each approval resume starts a fresh chat(), so the limit is enforced here.
@@ -402,11 +408,16 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
         const recordDuration = (toolCallId: string, _result: unknown, _error: ToolError | undefined, durationMs: number) => {
             durations.set(toolCallId, durationMs);
         };
+        // Loop guard of this turn: refuses repeats of failed calls and calls over the budget, and notes failure streaks.
+        const guard = createToolCallGuard(d.maxToolCalls);
+        const unavailableReason = (name: string) => deps().unavailableReason?.(name);
         const built = buildTanstackTools(d.tools, {
             policyFor: name => d.policyFor(name),
             makeToolContext: toolCallId => d.makeToolContext(toolCallId, input.turnId),
             onResult: recordDuration,
             onStart: (id, name, args) => markRunning(id, name, args),
+            unavailableReason,
+            guard,
         });
         // Reads deps() again so tools loaded mid-turn by find_tools are offered on the next model call.
         let liveClient: ChatClient | null = null;
@@ -454,6 +465,8 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                 onStart: (id, name, args) => markRunning(id, name, args),
                 // Tools built at the start keep their approval mode, so a pending approval still resumes.
                 builtWith: pinnedAsk,
+                unavailableReason: name => fresh.unavailableReason?.(name),
+                guard,
             });
             // The client resumes approvals through its own tool list, so a tool loaded mid-turn must be added to it.
             rebuilt.builtPolicy.forEach((policy, name) => policy === 'ask' && pinnedAsk.set(name, 'ask'));
@@ -463,7 +476,8 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
         // Later phases append to this list (for example telemetry or skill middleware). The refresh stays first.
         const middleware: ChatMiddleware[] = [
             createRefreshToolsMiddleware(buildTools),
-            createPolicyMiddleware(name => d.policyFor(name), recordDuration),
+            createToolCallGuardMiddleware(guard, (toolCallId, refusal) => recordDuration(toolCallId, refusal, refusal, 0)),
+            createPolicyMiddleware(name => d.policyFor(name), recordDuration, { unavailableReason, guard }),
         ];
         if (d.toolFilter) middleware.push(createToolFilterMiddleware(d.toolFilter, () => deps().tools));
         const historyMessages = toModelMessages(input.history);
@@ -548,6 +562,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                         case 'TOOL_CALL_END': {
                             const toolName = toolNames.get(chunk.toolCallId) ?? 'unknown';
                             const args = chunk.input !== undefined ? chunk.input : parseToolContent(toolArgsText.get(chunk.toolCallId) || '{}');
+                            toolArgs.set(chunk.toolCallId, args);
                             announce(chunk.toolCallId, toolName, args);
                             break;
                         }
@@ -592,9 +607,20 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                                     const toolName = toolNames.get(toolCallId) ?? '';
                                     const live = toolName ? d.policyFor(toolName) : 'deny';
                                     pendingApprovals.add(toolCallId);
-                                    if (live === 'allow') queueMicrotask(() => autoResolve(toolCallId, true));
+                                    // Counted here, before the user is asked: a call over the budget or repeating a failure never shows a card.
+                                    const refusal = guard.admit(
+                                        toolCallId,
+                                        toolName || 'unknown',
+                                        toolArgs.has(toolCallId) ? toolArgs.get(toolCallId) : parseToolContent(toolArgsText.get(toolCallId) || '{}'),
+                                    );
+                                    if (refusal) {
+                                        recordDuration(toolCallId, refusal, refusal, 0);
+                                        queueMicrotask(() => autoResolve(toolCallId, false, refusal));
+                                    } else if (live === 'allow') queueMicrotask(() => autoResolve(toolCallId, true));
                                     else if (live === 'deny')
-                                        queueMicrotask(() => autoResolve(toolCallId, false, deniedByPolicy(toolName || 'unknown')));
+                                        queueMicrotask(() =>
+                                            autoResolve(toolCallId, false, deniedByPolicy(toolName || 'unknown', unavailableReason(toolName))),
+                                        );
                                     else channel.push({ type: 'approval-required', toolCallId });
                                 }
                             }
@@ -656,7 +682,7 @@ export function createAgentRunner(deps: () => AgentRunnerDeps, options: AgentRun
                             ? CONTEXT_OVERFLOW_ERROR
                             : runError.message,
                     });
-                } else if (stepLimitHit || lastFinishReason === 'tool_calls') {
+                } else if (stepLimitHit || guard.budgetExceeded() || lastFinishReason === 'tool_calls') {
                     channel.push({ type: 'finished', status: 'step-limit', ...(offTopicWarned ? { offTopic: true } : {}) });
                 } else channel.push({ type: 'finished', status: 'completed', ...(offTopicWarned ? { offTopic: true } : {}) });
             } catch (error) {

@@ -20,6 +20,7 @@ import { createConversationRepository } from '@/lib/infrastructure/assistant/ind
 import { lookupModel } from '@/lib/infrastructure/assistant/model-catalog';
 import { buildPageContext, toAccountKey } from '@/lib/infrastructure/assistant/page-context';
 import { createPolicyFor, type PolicyCaps } from '@/lib/infrastructure/assistant/policy-for';
+import { toolUnavailableReason } from '@/lib/infrastructure/assistant/tool-availability';
 import { ASSISTANT_RELAY_BASE_URL, DEFAULT_BASE_URLS } from '@/lib/infrastructure/assistant/provider-kinds';
 import { completeText, createAgentRunner } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
 import { allTools, getTool } from '@/lib/infrastructure/assistant/tool-registry';
@@ -105,6 +106,20 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
         return tool !== undefined && isVisible(tool.spec);
     };
     const toolPolicy = (name: string) => makePolicyFor(() => new Set(conversationAllowRef.current))(name);
+    // Why a tool cannot be used, in user words, so find_tools and the gate can say so instead of the model guessing.
+    const unavailableReason = (name: string): string | undefined => {
+        const tool = getTool(name);
+        if (!tool) return undefined;
+        return toolUnavailableReason(tool.spec, {
+            visibility: flags ? toolVisibility(tool.spec, { flags, role, permissionsReady: isReady }) : { visible: false, reason: 'not-ready' },
+            policy: toolPolicy(name),
+            prefs: settingsRef.current.toolPolicies,
+            capsLoaded: policyCapsRef.current !== undefined,
+        });
+    };
+    // A turn already running reads the latest flags, role, settings and caps.
+    const unavailableReasonRef = useRef(unavailableReason);
+    unavailableReasonRef.current = unavailableReason;
 
     const deps: AssistantControllerDeps = {
         accountKey,
@@ -130,6 +145,7 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
                 activeToolsRef.current.set(conversationId, addActiveTools(activeToolsRef.current.get(conversationId) ?? [], names));
             },
             isToolVisible,
+            unavailableReason: (name: string) => unavailableReasonRef.current(name),
             toolPolicy,
             handleRecords: () => deriveHandleRecords(messagesRef.current),
             skills: assistantSkills.source,
@@ -151,6 +167,8 @@ export function AssistantProvider({ children, overrides }: { children: ReactNode
         navigate: url => router.push(url),
         queryClient,
         createRunner: overrides?.createRunner ?? (runnerDeps => createAgentRunner(runnerDeps)),
+        ...(config.maxToolCallsPerTurn !== undefined ? { maxToolCalls: config.maxToolCallsPerTurn } : {}),
+        unavailableReason: name => unavailableReasonRef.current(name),
         decorateRunnerDeps: (runnerDeps, conversationId) => assistantSkills.decorate(runnerDeps, conversationId),
         summarize: overrides?.summarize ?? (input => completeText(input)),
     };

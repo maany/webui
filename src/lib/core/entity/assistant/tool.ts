@@ -39,7 +39,9 @@ export type ToolErrorCode =
     | 'aborted'
     | 'stream_error'
     | 'rucio_error'
-    | 'unavailable';
+    | 'unavailable'
+    | 'repeated_failure'
+    | 'tool_budget_exhausted';
 
 export interface ToolError {
     error: ToolErrorCode;

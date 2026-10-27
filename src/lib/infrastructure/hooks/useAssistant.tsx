@@ -34,7 +34,9 @@ import {
     OFF_TOPIC_ERROR,
     SESSION_EXPIRED_ERROR,
     TURN_SAVE_FAILED_ERROR,
+    classifyRunError,
     describeRunError,
+    type RunErrorKind,
 } from '@/lib/infrastructure/assistant/runner-errors';
 import { buildSystemPrompt, COMPACTION_SYSTEM_PROMPT, transcriptForSummary } from '@/lib/infrastructure/assistant/system-prompt';
 import type { AgentRunner, AgentRunnerDeps } from '@/lib/infrastructure/assistant/tanstack-agent-runner';
@@ -60,6 +62,13 @@ export interface UseAssistantResult {
     pendingApprovals: PendingApproval[];
     contextFraction: number | null; // prompt tokens / context window
     error?: string;
+    /**
+     * What the user can do about `error`: 'configuration' needs a change in Rucio bot settings (no Retry),
+     * 'retryable' offers Retry, 'session' is handled by the session banner.
+     */
+    errorKind?: RunErrorKind;
+    /** When `error` was last shown (ms, strictly increasing), so showing the same error again is visible. */
+    errorAt?: number;
     /** True when the last turn failed because the Rucio session expired; the panel offers a login link. */
     sessionExpired?: boolean;
     send(text: string, options?: { attachPageContext?: boolean }): Promise<void>;
@@ -114,6 +123,7 @@ export interface AssistantControllerDeps {
         /** Called with the conversation the tool context belongs to, which may no longer be the open one. */
         activateTools?: (names: string[], conversationId: string) => void;
         isToolVisible?: ToolExecutionContext['isToolVisible'];
+        unavailableReason?: ToolExecutionContext['unavailableReason'];
         toolPolicy?: ToolExecutionContext['toolPolicy'];
         handleRecords?: ToolExecutionContext['handleRecords'];
         skills?: AssistantSkillSourcePort;
@@ -139,6 +149,10 @@ export interface AssistantControllerDeps {
         signal?: AbortSignal;
     }): Promise<{ text: string; usage?: TokenUsage }>;
     maxSteps?: number;
+    /** Tool calls one turn may make (ASSISTANT_MAX_TOOL_CALLS); the runner defaults to 20. */
+    maxToolCalls?: number;
+    /** Short user-facing reason a tool is hidden or denied, for the runner's denied_by_policy messages. */
+    unavailableReason?(toolName: string): string | undefined;
 }
 
 const DEFAULT_MAX_STEPS = 25;
@@ -198,7 +212,12 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
     const [messages, setMessagesState] = useState<ChatMessage[]>([]);
     const [pendingApprovals, setPendingState] = useState<PendingApproval[]>([]);
     const [contextFraction, setContextFractionState] = useState<number | null>(null);
-    const [error, setError] = useState<string | undefined>(undefined);
+    const [errorState, setErrorState] = useState<{ message: string; kind: RunErrorKind; at: number } | undefined>(undefined);
+    /** Shows an error (or clears it with undefined); every call gets a fresh, strictly increasing timestamp. */
+    const setError = useCallback((message: string | undefined, kind: RunErrorKind = 'retryable') => {
+        if (message === undefined) setErrorState(undefined);
+        else setErrorState(previous => ({ message, kind, at: Math.max(Date.now(), (previous?.at ?? 0) + 1) }));
+    }, []);
     const [sessionExpired, setSessionExpired] = useState(false);
     const [persistent, setPersistent] = useState(true);
     const [contextWindow, setContextWindow] = useState<number | undefined>(undefined);
@@ -318,7 +337,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         setContextWindow(undefined);
         lastContextRouteRef.current = undefined;
         void depsRef.current.handles.dropAll();
-    }, [approvals, setConversation, setContextFraction, setMessages, setPending]);
+    }, [approvals, setConversation, setContextFraction, setError, setMessages, setPending]);
 
     // First mount: open storage, load history, enforce retention.
     useEffect(() => {
@@ -449,7 +468,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     if (abortRef.current === controller) abortRef.current = null;
                     if (isCurrent()) {
                         setSessionExpired(true);
-                        setError(describeRunError(SESSION_EXPIRED_ERROR, { relay: provider.via === 'relay' }));
+                        setError(describeRunError(SESSION_EXPIRED_ERROR, { relay: provider.via === 'relay' }), 'session');
                         setStatusState('error');
                     }
                     return;
@@ -534,6 +553,8 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                         };
                     },
                     maxSteps: d.maxSteps ?? DEFAULT_MAX_STEPS,
+                    ...(d.maxToolCalls !== undefined ? { maxToolCalls: d.maxToolCalls } : {}),
+                    unavailableReason: name => depsRef.current.unavailableReason?.(name),
                 };
                 return depsRef.current.decorateRunnerDeps?.(runnerDeps, startConversation.id) ?? runnerDeps;
             });
@@ -732,7 +753,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                     if (finalStatus === 'error') {
                         const relay = provider.via === 'relay';
                         const message = finalError ?? 'Something went wrong.';
-                        setError(describeRunError(message, { relay }));
+                        setError(describeRunError(message, { relay }), classifyRunError(message, { relay }));
                         setSessionExpired(isSessionExpired(message, relay));
                         setStatusState('error');
                     } else {
@@ -749,7 +770,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 .catch(() => [])
                 .then(() => refreshConversations());
         },
-        [compact, refreshConversations, release, replaceMessage, setContextFraction, setConversation, setPending],
+        [compact, refreshConversations, release, replaceMessage, setContextFraction, setConversation, setError, setPending],
     );
 
     const send = useCallback(
@@ -764,13 +785,13 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 const accountKey = d.accountKey;
                 setSessionExpired(false);
                 if (!accountKey) {
-                    setError('Sign in to use Rucio bot.');
+                    setError('Sign in to use Rucio bot.', 'session');
                     setStatusState('error');
                     return;
                 }
                 const provider = d.resolveProvider();
                 if ('error' in provider) {
-                    setError(providerErrorMessage(provider.error));
+                    setError(providerErrorMessage(provider.error), 'configuration');
                     setStatusState('error');
                     return;
                 }
@@ -817,7 +838,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 release(token);
             }
         },
-        [refreshConversations, release, runTurn, setConversation, setMessages],
+        [refreshConversations, release, runTurn, setConversation, setError, setMessages],
     );
 
     const retry = useCallback(async () => {
@@ -832,7 +853,11 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
                 break;
             }
         }
-        if (!current || userIndex < 0) return;
+        if (!current || userIndex < 0) {
+            // Nothing to re-run (the failure happened before any turn): show the error again so the press is visible.
+            setErrorState(previous => (previous ? { ...previous, at: Math.max(Date.now(), previous.at + 1) } : previous));
+            return;
+        }
         const token = {};
         busyRef.current = token;
         // Captured before the first await, like send: New chat or an account switch during the delete supersedes this retry.
@@ -843,7 +868,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
             setSessionExpired(false);
             const provider = depsRef.current.resolveProvider();
             if ('error' in provider) {
-                setError(providerErrorMessage(provider.error));
+                setError(providerErrorMessage(provider.error), 'configuration');
                 setStatusState('error');
                 return;
             }
@@ -862,7 +887,7 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         } finally {
             release(token);
         }
-    }, [release, runTurn, setMessages]);
+    }, [release, runTurn, setError, setMessages]);
 
     const continueTurn = useCallback(() => send('Continue.', { attachPageContext: false }), [send]);
 
@@ -1224,7 +1249,9 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
         messages,
         pendingApprovals,
         contextFraction,
-        error,
+        error: errorState?.message,
+        errorKind: errorState?.kind,
+        errorAt: errorState?.at,
         sessionExpired,
         send,
         stop,
