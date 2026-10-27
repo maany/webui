@@ -307,5 +307,17 @@ describe('assistant settings storage', () => {
             clearAssistantSettings();
             expect(sessionStorage.length).toBe(0);
         });
+
+        it('migrates sink secrets left in localStorage by an older session-mode save', () => {
+            const legacy = { ...withSink('session'), providers: [] };
+            localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify(legacy));
+            const loaded = loadAssistantSettings();
+            expect(loaded.telemetry.sink).toEqual(sink);
+            const raw = localStorage.getItem(ASSISTANT_SETTINGS_KEY) ?? '';
+            expect(raw).not.toContain('sk-lf-SECRET456');
+            expect(raw).not.toContain('pk-lf-PUBLIC123');
+            expect(raw).not.toContain('HEADERSECRET789');
+            expect(loadAssistantSettings().telemetry.sink).toEqual(sink);
+        });
     });
 });

@@ -89,6 +89,10 @@ function readSessionSinkSecrets(): SinkSecrets {
     }
 }
 
+function hasSessionSecrets(secrets: SinkSecrets): boolean {
+    return secrets.publicKey !== undefined || secrets.secretKey !== undefined || secrets.headers !== undefined;
+}
+
 function splitSinkSecrets(sink: TelemetrySink): { publicSink: TelemetrySink; secrets: SinkSecrets } {
     const { publicKey, secretKey, headers, ...publicSink } = sink;
     return { publicSink: publicSink as TelemetrySink, secrets: { publicKey, secretKey, headers } };
@@ -190,13 +194,21 @@ export function loadAssistantSettings(): AssistantSettings {
         const keys = readSessionKeys();
         if (!parsed.success) dropOrphanedSessionKeys(keys, settings.providers);
         const sink = settings.telemetry.sink;
-        return {
+        const sessionSecrets = readSessionSinkSecrets();
+        const hasLegacySecrets = !!sink && (sink.publicKey !== undefined || sink.secretKey !== undefined || sink.headers !== undefined);
+        const providers = settings.providers.map(provider =>
+            Object.prototype.hasOwnProperty.call(keys, provider.id) ? { ...provider, apiKey: keys[provider.id] } : provider,
+        );
+        const merged: AssistantSettings = {
             ...settings,
-            telemetry: sink ? { ...settings.telemetry, sink: { ...sink, ...readSessionSinkSecrets() } } : settings.telemetry,
-            providers: settings.providers.map(provider =>
-                Object.prototype.hasOwnProperty.call(keys, provider.id) ? { ...provider, apiKey: keys[provider.id] } : provider,
-            ),
+            providers,
+            telemetry: sink
+                ? { ...settings.telemetry, sink: { ...sink, ...(hasSessionSecrets(sessionSecrets) ? sessionSecrets : {}) } }
+                : settings.telemetry,
         };
+        // Settings saved before the sink split still carry the secrets in localStorage: move them out now.
+        if (hasLegacySecrets) saveAssistantSettings(merged);
+        return merged;
     } catch {
         return getDefaultAssistantSettings();
     }
