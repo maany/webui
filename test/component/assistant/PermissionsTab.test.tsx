@@ -103,6 +103,26 @@ describe('PermissionsTab', () => {
         expect(onChange).toHaveBeenCalledWith({ update_rule: 'ask', list_dids: 'ask', 'group:rules': 'ask' });
     });
 
+    it('a group choice removes a hidden tool choice that is looser than the group value', () => {
+        const { onChange } = renderTab({
+            visibility: { flags: flagsWithout('rules.approve'), role: Role.ADMIN, permissionsReady: true },
+            prefs: { update_rule: 'allow' },
+        });
+        const group = within(screen.getByRole('group', { name: 'Policy for all Rules tools' }));
+        fireEvent.click(group.getByRole('radio', { name: 'Deny' }));
+        expect(onChange).toHaveBeenCalledWith({ 'group:rules': 'deny' });
+    });
+
+    it('a group choice keeps a hidden tool choice that is stricter than the group value', () => {
+        const { onChange } = renderTab({
+            visibility: { flags: flagsWithout('rules.approve'), role: Role.ADMIN, permissionsReady: true },
+            prefs: { update_rule: 'deny' },
+        });
+        const group = within(screen.getByRole('group', { name: 'Policy for all Rules tools' }));
+        fireEvent.click(group.getByRole('radio', { name: 'Ask' }));
+        expect(onChange).toHaveBeenCalledWith({ update_rule: 'deny', 'group:rules': 'ask' });
+    });
+
     it('explains what a group control does', () => {
         renderTab();
         expect(screen.getAllByText('Applies to every tool in this group and replaces their individual choices.').length).toBeGreaterThan(0);

@@ -117,11 +117,14 @@ export function PermissionsTab({ tools, visibility, config, prefs, onChange }: P
 
     const setToolPolicy = (name: string, policy: ToolPolicy) => onChange({ ...prefs, [name]: policy });
     const setGroupPolicy = (domain: ToolDomain, policy: ToolPolicy) => {
-        // Only the tools shown here lose their own choice; a hidden tool keeps its choice for when it is shown again.
+        // Shown tools lose their own choice. A hidden tool keeps its choice only when it is at least as strict as the group value.
         const domainTools = new Set(visible.filter(tool => tool.domain === domain).map(tool => tool.name));
         const next: ToolPolicyPrefs = {};
+        const looserHidden = new Set(
+            hidden.filter(({ tool }) => tool.domain === domain && rank(prefs[tool.name] ?? policy) > rank(policy)).map(({ tool }) => tool.name),
+        );
         Object.entries(prefs).forEach(([key, value]) => {
-            if (!domainTools.has(key)) next[key] = value;
+            if (!domainTools.has(key) && !looserHidden.has(key)) next[key] = value;
         });
         next[`group:${domain}`] = policy;
         onChange(next);
