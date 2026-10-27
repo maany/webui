@@ -20,6 +20,11 @@ describe('safeCallbackPath', () => {
         ['null', null],
         ['undefined', undefined],
         ['malformed percent-encoding', '%E0%A4%A'],
+        // Browsers strip tab and newline while parsing a URL, so these would become //evil.example.
+        ['tab between the slashes', '/\t/evil.example'],
+        ['encoded newline between the slashes', '/%0A/evil.example'],
+        ['encoded carriage return between the slashes', '/%0D/evil.example'],
+        ['leading space', ' //evil.example'],
     ])('falls back to / for %s', (_name, raw) => {
         expect(safeCallbackPath(raw as string | null | undefined)).toBe('/');
     });
