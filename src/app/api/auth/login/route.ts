@@ -6,6 +6,7 @@ import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import LoginConfigController, { LoginConfigControllerParams } from '@/lib/infrastructure/controller/login-config-controller';
 import { LoginViewModel } from '@/lib/infrastructure/data/view-model/login';
+import { safeCallbackPath } from '@/lib/infrastructure/utils/safe-callback-url';
 
 /**
  * GET /api/auth/login
@@ -18,8 +19,9 @@ export async function GET(request: NextRequest) {
     if (isLoggedIn) {
         // If user is logged in, redirect to callbackUrl or dashboard
         const searchParams = request.nextUrl.searchParams;
-        const callbackUrl = searchParams.get('callbackUrl') || '/dashboard';
-        return NextResponse.redirect(new URL(callbackUrl, request.url));
+        // Only a same-origin path: an absolute or protocol-relative callbackUrl would be an open redirect.
+        const callbackUrl = searchParams.get('callbackUrl');
+        return NextResponse.redirect(new URL(callbackUrl ? safeCallbackPath(callbackUrl) : '/dashboard', request.url));
     }
 
     // If user is not logged in, redirect to login page
