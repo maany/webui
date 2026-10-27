@@ -7,7 +7,7 @@ import { Login as LoginStory } from '@/component-library/pages/Login/Login';
 import { AuthType, OIDCProvider, Role, VO } from '@/lib/core/entity/auth-models';
 import { signIn, useSession } from 'next-auth/react';
 import { AUTH_ERROR_MESSAGES } from '@/lib/core/entity/auth-errors';
-import { safeCallbackPath } from '@/lib/infrastructure/utils/safe-callback-url';
+import { appendQueryParams, safeCallbackPath } from '@/lib/infrastructure/utils/safe-callback-url';
 import { LoadingPage } from '@/component-library/pages/system/LoadingPage';
 
 function LoginContent() {
@@ -417,7 +417,7 @@ function LoginContent() {
             if (account) {
                 params.set('account', account);
             }
-            const callbackUrlWithParams = `${redirectURL}?${params.toString()}`;
+            const callbackUrlWithParams = appendQueryParams(redirectURL, params);
 
             console.log(`[Login] Callback URL: ${callbackUrlWithParams}`);
             console.log(`[Login] Redirecting to ${provider.name} SSO for authentication...`);
