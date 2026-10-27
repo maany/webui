@@ -689,8 +689,10 @@ export function useAssistantController(deps: AssistantControllerDeps): UseAssist
 
             // A turn the relay refused as off topic is flagged, so it never reaches later model calls; a retry that is answered clears it.
             const blockedOffTopic = finalStatus === 'error' && finalError === OFF_TOPIC_ERROR;
+            const answered = finalStatus === 'completed' || finalStatus === 'step-limit';
+            const flagged = userMessage.offTopic === true;
             let userUpdate: ChatMessage | undefined;
-            if (blockedOffTopic !== (userMessage.offTopic === true)) {
+            if ((blockedOffTopic && !flagged) || (answered && flagged)) {
                 const { offTopic: _previous, ...rest } = userMessage;
                 userUpdate = blockedOffTopic ? { ...rest, offTopic: true } : rest;
             }

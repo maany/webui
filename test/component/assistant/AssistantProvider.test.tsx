@@ -176,6 +176,27 @@ describe('AssistantProvider data tools wiring', () => {
         expect((await repository.listMessages(stored.id)).find(message => message.role === 'user')?.offTopic).toBeUndefined();
     });
 
+    it.each([
+        ['an error', { type: 'finished', status: 'error', error: '429 rate limited' } as RunnerUpdate],
+        ['a stop', { type: 'finished', status: 'stopped' } as RunnerUpdate],
+    ])('keeps the off-topic flag when a retry ends in %s', async (_label, outcome) => {
+        let blocked = true;
+        const script = async function* (): AsyncGenerator<RunnerUpdate> {
+            yield blocked ? { type: 'finished', status: 'error', error: OFF_TOPIC_ERROR } : outcome;
+        };
+        const { assistant, repository } = setup({ script: () => script() });
+        await act(async () => {
+            await assistant().send('write an essay');
+        });
+        blocked = false;
+        await act(async () => {
+            await assistant().retry();
+        });
+        expect(assistant().messages.find(message => message.role === 'user')?.offTopic).toBe(true);
+        const [stored] = await repository.listConversations('root@def');
+        expect((await repository.listMessages(stored.id)).find(message => message.role === 'user')?.offTopic).toBe(true);
+    });
+
     it('persists a run_sql result without its rows', async () => {
         const script = async function* (): AsyncGenerator<RunnerUpdate> {
             yield { type: 'tool-call', toolCallId: 'c1', toolName: 'run_sql', args: { sql: 'select 1' }, policy: 'allow' };
