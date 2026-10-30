@@ -112,9 +112,12 @@ export const accountToolSpecs: ToolSpec<ToolArgs>[] = [
 
 export const accountTools: RegisteredTool<ToolArgs>[] = accountToolSpecs.map(spec => createFeatureTool(spec));
 
-// Write tools (phase 4). All account mutations are admin only (withAdmin) and need accounts.manage.
+// Write tools (phase 4). All account mutations are admin only (withAdmin) and need the
+// accounts.manage area flag their route needs (accounts.manage gates every area).
 
-const accountWriteRequires = (): ToolSpec['requires'] => ({ flags: ['accounts.manage'], role: Role.ADMIN });
+type AccountManageArea = 'accounts.manage.core' | 'accounts.manage.identities' | 'accounts.manage.attributes' | 'accounts.manage.quotas';
+
+const accountWriteRequires = (area: AccountManageArea): ToolSpec['requires'] => ({ flags: [area], role: Role.ADMIN });
 
 export const createAccountTool = defineWriteTool<CreateAccountInput>({
     name: 'create_account',
@@ -123,7 +126,7 @@ export const createAccountTool = defineWriteTool<CreateAccountInput>({
         'Create a Rucio account. accountType is USER, GROUP or SERVICE. email may be null. Rucio usually restricts this to the root account.',
     input: CreateAccountSchema,
     risk: 'write',
-    requires: accountWriteRequires(),
+    requires: accountWriteRequires('accounts.manage.core'),
     executor: 'feature',
     output: 'object',
     route: { path: '/api/feature/create-account', method: 'POST' },
@@ -138,7 +141,7 @@ export const updateAccountTool = defineWriteTool<UpdateAccountInput>({
         'High risk: suspending locks the account out and reactivating restores its access.',
     input: UpdateAccountSchema,
     risk: 'high',
-    requires: accountWriteRequires(),
+    requires: accountWriteRequires('accounts.manage.core'),
     executor: 'feature',
     output: 'object',
     route: { path: '/api/feature/update-account', method: 'PUT' },
@@ -152,7 +155,7 @@ export const deleteAccountTool = defineWriteTool<DeleteAccountInput>({
         'Delete an account. High risk: Rucio keeps a tombstone, so the name can never be reused. Existing sessions keep working until they expire.',
     input: DeleteAccountSchema,
     risk: 'high',
-    requires: accountWriteRequires(),
+    requires: accountWriteRequires('accounts.manage.core'),
     executor: 'feature',
     output: 'object',
     route: { path: '/api/feature/delete-account', method: 'DELETE' },
@@ -165,7 +168,7 @@ export const addAccountAttributeTool = defineWriteTool<AddAccountAttributeInput>
     description: 'Add a key=value attribute to an account. High risk: setting admin=True makes the account a Rucio admin.',
     input: AddAccountAttributeSchema,
     risk: 'high',
-    requires: accountWriteRequires(),
+    requires: accountWriteRequires('accounts.manage.attributes'),
     executor: 'feature',
     output: 'object',
     route: { path: '/api/feature/add-account-attribute', method: 'POST' },
@@ -178,7 +181,7 @@ export const updateAccountAttributeTool = defineWriteTool<UpdateAccountAttribute
     description: 'Change the value of an existing account attribute. High risk: setting admin=True makes the account a Rucio admin.',
     input: UpdateAccountAttributeSchema,
     risk: 'high',
-    requires: accountWriteRequires(),
+    requires: accountWriteRequires('accounts.manage.attributes'),
     executor: 'feature',
     output: 'object',
     route: { path: '/api/feature/update-account-attribute', method: 'PUT' },
@@ -191,7 +194,7 @@ export const deleteAccountAttributeTool = defineWriteTool<DeleteAccountAttribute
     description: 'Remove an attribute from an account. High risk: removing admin takes Rucio admin rights away from the account.',
     input: DeleteAccountAttributeSchema,
     risk: 'high',
-    requires: accountWriteRequires(),
+    requires: accountWriteRequires('accounts.manage.attributes'),
     executor: 'feature',
     output: 'object',
     route: { path: '/api/feature/delete-account-attribute', method: 'DELETE' },
@@ -206,7 +209,7 @@ export const addAccountIdentityTool = defineWriteTool<AddAccountIdentityInput>({
         'USERPASS identities need a password. Never repeat a password back to the user.',
     input: AddAccountIdentitySchema,
     risk: 'high',
-    requires: accountWriteRequires(),
+    requires: accountWriteRequires('accounts.manage.identities'),
     executor: 'feature',
     output: 'object',
     route: { path: '/api/feature/add-account-identity', method: 'POST' },
@@ -220,7 +223,7 @@ export const deleteAccountIdentityTool = defineWriteTool<DeleteAccountIdentityIn
     description: 'Remove an identity mapping from an account. High risk: that identity can no longer log in as the account.',
     input: DeleteAccountIdentitySchema,
     risk: 'high',
-    requires: accountWriteRequires(),
+    requires: accountWriteRequires('accounts.manage.identities'),
     executor: 'feature',
     output: 'object',
     route: { path: '/api/feature/delete-account-identity', method: 'DELETE' },
@@ -234,7 +237,7 @@ export const setAccountLimitTool = defineWriteTool<SetAccountLimitInput>({
         "Set an account's storage quota in bytes (base 10) on an RSE expression. locality local applies per RSE, global across the expression. bytes -1 means unlimited.",
     input: SetAccountLimitSchema,
     risk: 'write',
-    requires: accountWriteRequires(),
+    requires: accountWriteRequires('accounts.manage.quotas'),
     executor: 'feature',
     output: 'object',
     route: { path: '/api/feature/set-account-limit', method: 'PUT' },
@@ -247,7 +250,7 @@ export const deleteAccountLimitTool = defineWriteTool<DeleteAccountLimitInput>({
     description: "Remove an account's local or global quota on an RSE expression.",
     input: DeleteAccountLimitSchema,
     risk: 'write',
-    requires: accountWriteRequires(),
+    requires: accountWriteRequires('accounts.manage.quotas'),
     executor: 'feature',
     output: 'object',
     route: { path: '/api/feature/delete-account-limit', method: 'DELETE' },
