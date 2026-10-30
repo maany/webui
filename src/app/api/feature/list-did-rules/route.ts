@@ -4,8 +4,10 @@ import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { ListDIDRulesControllerParameters } from '@/lib/infrastructure/controller/list-did-rules-controller';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
+import { ListDidRulesSchema } from '@/lib/infrastructure/api-schemas/list-did-rules';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/list-did-rules
@@ -24,11 +26,9 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: 'Invalid Session. No Rucio Account found' }, { status: 400 });
         }
 
-        const params = parseQueryParams(request);
-        const scope = params.scope as string;
-        const name = params.name as string;
+        const params = parseQuery(ListDidRulesSchema, new URL(request.url).searchParams);
 
-        if (!scope || !name) {
+        if (!params.success) {
             return NextResponse.json({ error: 'Missing required parameters: scope and name' }, { status: 400 });
         }
 
@@ -37,8 +37,8 @@ export async function GET(request: NextRequest) {
         return executeAuthenticatedController(
             controller,
             {
-                scope,
-                name,
+                scope: params.data.scope,
+                name: params.data.name,
                 sessionAccount: sessionUser.rucioAccount,
             },
             true, // streaming endpoint

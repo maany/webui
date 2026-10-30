@@ -5,8 +5,10 @@ import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { ListRuleReplicaLockStatesControllerParameters } from '@/lib/infrastructure/controller/list-rule-replica-lock-states-controller';
 import { ListRuleReplicaLockStatesRequest } from '@/lib/core/usecase-models/list-rule-replica-lock-states-usecase-models';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
+import { ListRuleReplicaLockStatesSchema } from '@/lib/infrastructure/api-schemas/list-rule-replica-lock-states';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/list-rule-replica-lock-states
@@ -15,10 +17,9 @@ import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
  */
 async function getHandler(request: NextRequest) {
     try {
-        const params = parseQueryParams(request);
-        const id = params.id as string;
+        const params = parseQuery(ListRuleReplicaLockStatesSchema, new URL(request.url).searchParams);
 
-        if (!id) {
+        if (!params.success) {
             return NextResponse.json({ error: 'Missing required parameter: id (rule ID)' }, { status: 400 });
         }
 
@@ -26,7 +27,7 @@ async function getHandler(request: NextRequest) {
             CONTROLLERS.LIST_RULE_REPLICA_LOCK_STATES,
         );
 
-        return executeAuthenticatedController(controller, { id }, true);
+        return executeAuthenticatedController(controller, { id: params.data.id }, true);
     } catch (error) {
         console.error('Error in list-rule-replica-lock-states:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

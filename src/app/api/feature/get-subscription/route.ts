@@ -2,10 +2,12 @@ import 'reflect-metadata';
 import { NextRequest, NextResponse } from 'next/server';
 import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
-import GetSubscriptionController, { GetSubscriptionControllerParameters } from '@/lib/infrastructure/controller/get-subscription-controller';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import GetSubscriptionController from '@/lib/infrastructure/controller/get-subscription-controller';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { getSessionUser } from '@/lib/infrastructure/auth/nextauth-session-utils';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
+import { GetSubscriptionSchema } from '@/lib/infrastructure/api-schemas/get-subscription';
+import { firstInvalidField, parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/get-subscription
@@ -24,22 +26,16 @@ async function getHandler(request: NextRequest) {
             return NextResponse.json({ error: 'Unauthorized: Rucio Account is not set' }, { status: 401 });
         }
 
-        const params = parseQueryParams(request);
-        const account = params.account as string;
-        const name = params.name as string;
+        const params = parseQuery(GetSubscriptionSchema, new URL(request.url).searchParams);
 
-        if (!account) {
-            return NextResponse.json({ error: 'Missing required parameter: account' }, { status: 400 });
-        }
-
-        if (!name) {
-            return NextResponse.json({ error: 'Missing required parameter: name' }, { status: 400 });
+        if (!params.success) {
+            return NextResponse.json({ error: `Missing required parameter: ${firstInvalidField(params.error)}` }, { status: 400 });
         }
 
         const controller: GetSubscriptionController = appContainer.get(CONTROLLERS.GET_SUBSCRIPTION);
 
         return executeAuthenticatedController(controller, {
-            name,
+            name: params.data.name,
             sessionAccount: sessionUser.rucioAccount,
         });
     } catch (error) {

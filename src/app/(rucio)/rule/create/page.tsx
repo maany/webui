@@ -1,7 +1,15 @@
 'use client';
-import { CreateRule } from '@/component-library/pages/Rule/create/CreateRule';
+import { CreateRule, CreateRulePrefill } from '@/component-library/pages/Rule/create/CreateRule';
 import { CreateRuleParameters } from '@/lib/infrastructure/data/view-model/rule';
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { toolError } from '@/lib/infrastructure/assistant/page-tool-errors';
+import { usePageAction } from '@/lib/infrastructure/hooks/usePageAction';
+import {
+    RULE_CREATE_PREFILL_ACTION,
+    RULE_CREATE_PREFILL_DESCRIPTION,
+    RuleCreatePrefillSchema,
+    resolveRuleCreatePrefill,
+} from '@/lib/infrastructure/assistant/page-actions/rule-create-prefill';
 
 const PARAMS_KEY = 'create_rule_parameters';
 const ACTIVE_KEY = 'create_rule_active';
@@ -10,6 +18,33 @@ export default function Page() {
     useEffect(() => {
         document.title = 'Create Rule - Rucio';
     }, []);
+
+    // Rucio bot fills the wizard through this state; the user still reviews and submits.
+    const [prefill, setPrefill] = useState<CreateRulePrefill | undefined>(undefined);
+    const prefillCount = useRef(0);
+    // Index 4 is the submission stage, which submits a rule on mount
+    const SUBMISSION_STAGE = 4;
+    const stageIndex = useRef(0);
+
+    usePageAction({
+        name: RULE_CREATE_PREFILL_ACTION,
+        description: RULE_CREATE_PREFILL_DESCRIPTION,
+        schema: RuleCreatePrefillSchema,
+        apply: async (args, context) => {
+            if (stageIndex.current === SUBMISSION_STAGE) {
+                throw toolError('unavailable', 'The wizard shows a submitted rule. Ask the user to reload the create rule page to start a new one.');
+            }
+            const id = ++prefillCount.current;
+            const result = await resolveRuleCreatePrefill(args, context);
+            if (context?.signal?.aborted) throw toolError('aborted', 'The turn was stopped before the wizard was filled.');
+            if (id !== prefillCount.current) throw toolError('aborted', 'A newer prefill replaced this one.');
+            if (stageIndex.current === SUBMISSION_STAGE) {
+                throw toolError('unavailable', 'The wizard shows a submitted rule. Ask the user to reload the create rule page to start a new one.');
+            }
+            setPrefill({ parameters: result.parameters, activeIndex: result.activeIndex, nonce: id });
+            return result.summary;
+        },
+    });
 
     const getSavedParameters = () => {
         const initialParametersString = localStorage.getItem(PARAMS_KEY);
@@ -57,6 +92,10 @@ export default function Page() {
             setSavedParameters={setSavedParameters}
             removeSavedParameters={removeSavedParameters}
             removeSavedIndex={removeSavedIndex}
+            prefill={prefill}
+            onStageChange={index => {
+                stageIndex.current = index;
+            }}
         />
     );
 }

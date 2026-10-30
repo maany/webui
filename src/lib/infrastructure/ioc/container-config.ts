@@ -18,6 +18,8 @@ import EnvConfigGatewayOutputPort from '@/lib/core/port/secondary/env-config-gat
 import EnvConfigGateway from '../gateway/env-config-gateway';
 import FeatureConfigGatewayOutputPort from '@/lib/core/port/secondary/feature-config-gateway-output-port';
 import FeatureConfigGateway from '../gateway/feature-config-gateway';
+import AssistantConfigGatewayOutputPort from '@/lib/core/port/secondary/assistant-config-gateway-output-port';
+import AssistantConfigGateway from '../gateway/assistant-config-gateway';
 import SetX509LoginSessionInputPort from '@/lib/core/port/primary/set-x509-login-session-input-port';
 import SetX509LoginSessionUseCase from '@/lib/core/use-case/set-x509-login-session-usecase';
 import SetX509LoginSessionController, { ISetX509LoginSessionController } from '../controller/set-x509-login-session-controller';
@@ -85,10 +87,12 @@ import GetDDMLinkFeature from './features/get-ddm-link-feature';
 import UpdateRuleFeature from '@/lib/infrastructure/ioc/features/update-rule-feature';
 import ListSuspiciousReplicasFeature from '@/lib/infrastructure/ioc/features/list-suspicious-replicas-feature';
 import DeclareBadReplicasFeature from '@/lib/infrastructure/ioc/features/declare-bad-replicas-feature';
+import ListRequestsFeature from '@/lib/infrastructure/ioc/features/list-requests-feature';
 import AMIGatewayOutputPort from '@/lib/core/port/secondary/ami-gateway-output-port';
 import AMIGateway from '../gateway/ami-gateway/ami-gateway';
 import GetAMITagInfoFeature from '@/lib/infrastructure/ioc/features/get-ami-tag-info-feature';
 import GetPandaTaskLinkFeature from '@/lib/infrastructure/ioc/features/get-panda-task-link-feature';
+import GetAssistantConfigFeature from '@/lib/infrastructure/ioc/features/get-assistant-config-feature';
 import { isFeatureEnabledInEnv } from '@/lib/core/entity/feature-config';
 
 /**
@@ -100,6 +104,7 @@ appContainer.bind<AuthServerGatewayOutputPort>(GATEWAYS.AUTH_SERVER).to(RucioAut
 appContainer.bind<DIDGatewayOutputPort>(GATEWAYS.DID).to(RucioDIDGateway);
 appContainer.bind<EnvConfigGatewayOutputPort>(GATEWAYS.ENV_CONFIG).to(EnvConfigGateway);
 appContainer.bind<FeatureConfigGatewayOutputPort>(GATEWAYS.FEATURE_CONFIG).to(FeatureConfigGateway);
+appContainer.bind<AssistantConfigGatewayOutputPort>(GATEWAYS.ASSISTANT_CONFIG).to(AssistantConfigGateway);
 appContainer.bind<RSEGatewayOutputPort>(GATEWAYS.RSE).to(RSEGateway);
 appContainer.bind<StreamGatewayOutputPort>(GATEWAYS.STREAM).to(StreamingGateway).inRequestScope();
 appContainer.bind<SubscriptionGatewayOutputPort>(GATEWAYS.SUBSCRIPTION).to(SubscriptionGateway);
@@ -198,6 +203,10 @@ loadFeaturesSync(appContainer, accountManagementFeatures);
 const dashboardFeatures = [new ListAccountRSEUsageFeature(appContainer)];
 loadFeaturesSync(appContainer, dashboardFeatures);
 
+// Features: Transfer requests (gated by the requests flag; Rucio only lets admins list them by default)
+const requestFeatures = [new ListRequestsFeature(appContainer)];
+loadFeaturesSync(appContainer, requestFeatures);
+
 // Features: ATLAS AMI tags. Only loaded when FEATURE_DIDS_AMI_TAGS is on at
 // startup. The feature is still passed to buildControllerFlagMap so withFeature
 // answers 404 before anything tries to resolve the (unbound) controller.
@@ -211,6 +220,10 @@ const pandaTaskFeatures = [new GetPandaTaskLinkFeature(appContainer)];
 if (isFeatureEnabledInEnv('dids.panda_task', process.env)) {
     loadFeaturesSync(appContainer, pandaTaskFeatures);
 }
+
+// Features: Rucio bot (assistant). Always bound; withFeature answers 404 while FEATURE_ASSISTANT is off.
+const assistantFeatures = [new GetAssistantConfigFeature(appContainer)];
+loadFeaturesSync(appContainer, assistantFeatures);
 
 export const CONTROLLER_FLAG_MAP = buildControllerFlagMap([
     ...commonFeatures,
@@ -226,8 +239,10 @@ export const CONTROLLER_FLAG_MAP = buildControllerFlagMap([
     ...updateRuleFeatures,
     ...accountManagementFeatures,
     ...dashboardFeatures,
+    ...requestFeatures,
     ...amiTagFeatures,
     ...pandaTaskFeatures,
+    ...assistantFeatures,
 ]);
 
 appContainer.bind<SetX509LoginSessionInputPort>(INPUT_PORT.SET_X509_LOGIN_SESSION).to(SetX509LoginSessionUseCase).inRequestScope();

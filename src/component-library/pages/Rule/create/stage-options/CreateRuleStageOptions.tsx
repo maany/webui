@@ -6,6 +6,10 @@ import { LabeledCheckbox } from '@/component-library/features/form/LabeledCheckb
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/component-library/atoms/form/select';
 import { WarningField } from '@/component-library/features/fields/WarningField';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component-library/atoms/misc/Collapsible';
+import type { CreateRuleOptionsErrors } from '@/component-library/pages/Rule/create/create-rule-validation';
+
+export type { CreateRuleOptionsErrors } from '@/component-library/pages/Rule/create/create-rule-validation';
+export { getEmptyOptionsErrors } from '@/component-library/pages/Rule/create/create-rule-validation';
 
 interface FieldWithLabelProps {
     label: string;
@@ -34,26 +38,6 @@ const InputWithLabel: React.FC<FieldWithLabelProps> = ({ label, children, classN
             )}
         </div>
     );
-};
-
-export type CreateRuleOptionsErrors = {
-    tooManyCopies: boolean;
-    copiesInvalid: boolean;
-    lifetimeInvalid: boolean;
-    commentsEmpty: boolean;
-    groupingInvalid: boolean;
-    sampleCountInvalid: boolean;
-};
-
-export const getEmptyOptionsErrors = (): CreateRuleOptionsErrors => {
-    return {
-        commentsEmpty: false,
-        copiesInvalid: false,
-        groupingInvalid: false,
-        lifetimeInvalid: false,
-        tooManyCopies: false,
-        sampleCountInvalid: false,
-    };
 };
 
 const LifetimeInput = ({

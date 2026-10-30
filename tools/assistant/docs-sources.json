@@ -1,0 +1,12 @@
+{
+    "documentation": {
+        "repo": "rucio/documentation",
+        "ref": "566bee0ff5471bab2c05e5fc0f9a77f7a5df2ecb",
+        "commitDate": "2026-10-19T14:25:25Z"
+    },
+    "openapi": {
+        "url": "https://rucio.cern.ch/documentation/html/rest_api_doc.html",
+        "version": "41.0.0rc1",
+        "sha256": "ac5572e46fca5e1f1b965bda05ad8693a50ce81eb05776a9c0fc64cf396a4e27"
+    }
+}

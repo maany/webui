@@ -1,4 +1,5 @@
 const nextJest = require('next/jest')
+const { withEsmPackages } = require('../jest.esm')
 
 const createJestConfig = nextJest({
   // Provide the path to your Next.js app to load next.config.js and .env files in your test environment
@@ -35,5 +36,6 @@ const customJestConfig = {
 
 }
 
-// createJestConfig is exported this way to ensure that next/jest can load the Next.js config which is async
-module.exports = createJestConfig(customJestConfig)
+// createJestConfig is exported this way to ensure that next/jest can load the Next.js config which is async.
+// withEsmPackages lets Jest compile ESM-only dependencies (see test/jest.esm.js).
+module.exports = withEsmPackages(createJestConfig(customJestConfig))

@@ -33,10 +33,18 @@ export const FEATURE_REGISTRY = {
     'accounts.manage.quotas': { default: true, parent: 'accounts.manage', pages: [] },
     'dids.metadata': { default: true, pages: [] },
     'dids.mutate': { default: true, pages: [] },
+    // Transfer request listing (/api/feature/list-requests). Rucio's default policy only lets admins list requests.
+    requests: { default: true, pages: [] },
     // ATLAS-only: AMI tag chips on DID views + /api/feature/get-ami-tag-info
     'dids.ami_tags': { default: false, pages: [] },
     // ATLAS-only: PanDA task link on DID views + /api/feature/get-panda-task-link
     'dids.panda_task': { default: false, pages: [] },
+    // Rucio bot: assistant panel, /assistant/settings, /api/feature/get-assistant-config and /api/assistant/*
+    assistant: { default: false, pages: ['/assistant/settings'] },
+    // Rucio bot write tools (always behind the approval policy; wired in phase 4)
+    'assistant.write': { default: false, parent: 'assistant', pages: [] },
+    // Rucio bot declare_bad_replicas tool (high risk; wired in phase 4)
+    'assistant.bad_replicas': { default: false, parent: 'assistant.write', pages: [] },
 } as const satisfies Record<string, FeatureDefinition>;
 
 export type FeatureKey = keyof typeof FEATURE_REGISTRY;

@@ -4,7 +4,9 @@ import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { ListDIDParentsControllerParameters } from '@/lib/infrastructure/controller/list-did-parents-controller';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { ListDidParentsSchema } from '@/lib/infrastructure/api-schemas/list-did-parents';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/list-did-parents
@@ -13,17 +15,15 @@ import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastr
  */
 export async function GET(request: NextRequest) {
     try {
-        const params = parseQueryParams(request);
-        const scope = params.scope as string;
-        const name = params.name as string;
+        const params = parseQuery(ListDidParentsSchema, new URL(request.url).searchParams);
 
-        if (!scope || !name) {
+        if (!params.success) {
             return NextResponse.json({ error: 'Missing required parameters: scope and name' }, { status: 400 });
         }
 
         const controller = appContainer.get<BaseController<ListDIDParentsControllerParameters, void>>(CONTROLLERS.LIST_DID_PARENTS);
 
-        return executeAuthenticatedController(controller, { scope, name }, true);
+        return executeAuthenticatedController(controller, { scope: params.data.scope, name: params.data.name }, true);
     } catch (error) {
         console.error('Error in list-did-parents:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

@@ -139,7 +139,7 @@ export const ReauthModal = ({ isOpen, onClose, onSuccess, mode, targetAccount, r
                 if (!isSubmitting) onClose();
             }}
             ariaHideApp={false}
-            overlayClassName="fixed inset-0 z-40 flex items-center justify-center bg-neutral-900/50 dark:bg-neutral-900/70 backdrop-blur-xs"
+            overlayClassName="fixed inset-0 z-[60] flex items-center justify-center bg-neutral-900/50 dark:bg-neutral-900/70 backdrop-blur-xs"
             className={cn(
                 'mx-2 max-w-md w-full rounded-lg shadow-lg z-50',
                 'border border-neutral-200 dark:border-neutral-700',

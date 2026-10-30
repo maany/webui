@@ -1,4 +1,5 @@
 const nextJest = require('next/jest')
+const { withEsmPackages } = require('../jest.esm')
 
 const createJestConfig = nextJest({
   // Provide the path to your Next.js app to load next.config.js and .env files in your test environment
@@ -36,16 +37,6 @@ const customJestConfig = {
 
 }
 
-// createJestConfig is exported this way to ensure that next/jest can load the Next.js config which is async
-// Wrap to ensure ESM-only packages (like permix) are transformed by Jest
-const baseConfig = createJestConfig(customJestConfig)
-module.exports = async () => {
-  const config = await baseConfig()
-  // Allow Jest to transform permix .mjs files
-  config.transformIgnorePatterns = config.transformIgnorePatterns.map(pattern =>
-    pattern.includes('node_modules') && !pattern.includes('permix')
-      ? pattern.replace('(?!(', '(?!(permix|')
-      : pattern
-  )
-  return config
-}
+// createJestConfig is exported this way to ensure that next/jest can load the Next.js config which is async.
+// withEsmPackages lets Jest compile ESM-only dependencies, permix included (see test/jest.esm.js).
+module.exports = withEsmPackages(createJestConfig(customJestConfig))

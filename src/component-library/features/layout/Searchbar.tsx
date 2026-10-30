@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useRef, useState } from 'react';
 import { Input } from '@/component-library/atoms/form/input';
-import { cn } from '@/component-library/utils';
+import { cn, isMacPlatform } from '@/component-library/utils';
 import { buildDIDSearchUrl, buildRSESearchUrl, buildRuleDetailUrl, detectSearchType, navigateToSearch } from '@/lib/infrastructure/utils/navigation';
 import { DIDType } from '@/lib/core/entity/rucio';
 
@@ -157,8 +157,7 @@ export const Searchbar = () => {
 
     // Detect OS and set appropriate shortcut key
     useEffect(() => {
-        const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0 || navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
-        setShortcutKey(isMac ? '⌘ K' : 'Ctrl + K');
+        setShortcutKey(isMacPlatform() ? '⌘ K' : 'Ctrl + K');
     }, []);
 
     // Handle keyboard shortcut to focus search

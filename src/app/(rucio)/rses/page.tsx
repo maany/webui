@@ -1,4 +1,4 @@
-import { ListRSE } from '@/component-library/pages/RSE/list/ListRSE';
+import { ListRSEClient } from './ListRSEClient';
 import { requireFeature } from '@/lib/infrastructure/feature-flags/require-feature';
 
 export default async function Page({ searchParams }: { searchParams?: Promise<{ [key: string]: string | string[] | undefined }> }) {
@@ -23,7 +23,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
                     </p>
                 </header>
                 <section aria-label="RSE Search and Results">
-                    <ListRSE initialExpression={firstExpression ?? undefined} autoSearch={autoSearch} />
+                    <ListRSEClient initialExpression={firstExpression ?? undefined} autoSearch={autoSearch} />
                 </section>
             </div>
         </main>

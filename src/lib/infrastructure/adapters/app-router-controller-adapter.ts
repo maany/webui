@@ -5,6 +5,14 @@ import { getSession, withAuthenticatedSession } from '@/lib/infrastructure/auth/
 import { BaseController, TAuthenticatedControllerParameters, TSimpleControllerParameters } from '@/lib/sdk/controller';
 import { SessionUser } from '@/lib/core/entity/auth-models';
 import { Signal } from '@/lib/sdk/web';
+import { headers } from 'next/headers';
+import { toAccountKey } from '@/lib/infrastructure/assistant/page-context';
+import {
+    ACCOUNT_MISMATCH_ERROR_TYPE,
+    ACCOUNT_MISMATCH_MESSAGE,
+    ASSISTANT_ACCOUNT_HEADER,
+    isAccountMismatch,
+} from '@/lib/infrastructure/assistant/account-binding';
 
 /**
  * Mock response object that captures data from controller execution
@@ -286,12 +294,33 @@ export async function executeController<TParams extends TSimpleControllerParamet
  *   return executeAuthenticatedController(controller, { filters: { account: 'test' } });
  * }
  */
+/** The assistant's expected account header, or null when absent or when there is no request scope. */
+async function readAssistantAccountHeader(): Promise<string | null> {
+    try {
+        return (await headers()).get(ASSISTANT_ACCOUNT_HEADER);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Assistant requests carry the account they were started or approved under. Returns the 409 response to send
+ * when the session account differs, or null to proceed. Every assistant-facing route must call this (or go through
+ * executeAuthenticatedController, which does) before touching Rucio.
+ */
+export async function rejectAssistantAccountMismatch(user: { rucioAccount?: string; rucioVO?: string }): Promise<NextResponse | null> {
+    if (!isAccountMismatch(await readAssistantAccountHeader(), toAccountKey(user.rucioAccount, user.rucioVO))) return null;
+    return NextResponse.json({ status: 'error', errorType: ACCOUNT_MISMATCH_ERROR_TYPE, message: ACCOUNT_MISMATCH_MESSAGE }, { status: 409 });
+}
+
 export async function executeAuthenticatedController<TParams extends TAuthenticatedControllerParameters>(
     controller: BaseController<TParams, any>,
     parameters: Omit<TParams, 'response' | 'session' | 'rucioAuthToken'>,
     streaming: boolean = false,
 ): Promise<NextResponse | Response> {
     return withAuthenticatedSession(async (user: SessionUser, token: string) => {
+        const mismatch = await rejectAssistantAccountMismatch(user);
+        if (mismatch) return mismatch;
         try {
             const session = await getSession();
             const responseAdapter = streaming ? new StreamingResponseAdapter() : new ControllerResponseAdapter();
@@ -352,32 +381,6 @@ export async function executeAuthenticatedController<TParams extends TAuthentica
             );
         }
     }) as Promise<NextResponse | Response>;
-}
-
-/**
- * Parse and validate query parameters from Request URL
- *
- * @param request - The incoming Request object
- * @returns Object with query parameters
- */
-export function parseQueryParams(request: Request): Record<string, string | string[]> {
-    const url = new URL(request.url);
-    const params: Record<string, string | string[]> = {};
-
-    url.searchParams.forEach((value, key) => {
-        if (params[key]) {
-            // Handle multiple values for same key
-            if (Array.isArray(params[key])) {
-                (params[key] as string[]).push(value);
-            } else {
-                params[key] = [params[key] as string, value];
-            }
-        } else {
-            params[key] = value;
-        }
-    });
-
-    return params;
 }
 
 /**

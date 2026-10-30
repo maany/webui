@@ -4,6 +4,7 @@
  */
 
 import {
+    Cog6ToothIcon,
     HomeIcon,
     DocumentDuplicateIcon,
     ShieldCheckIcon,
@@ -15,9 +16,11 @@ import {
     ExclamationTriangleIcon,
     UserCircleIcon,
     UserGroupIcon,
+    SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { CommandItem } from '@/lib/core/entity/command-palette';
 import { ACCOUNT_NAME_REGEX } from '@/lib/core/utils/account-validation';
+import { ASSISTANT_SHORTCUT_LABEL_DEFAULT } from '@/lib/infrastructure/hooks/useAssistantShell';
 import { DIDType } from '@/lib/core/entity/rucio';
 import {
     buildDIDSearchUrl,
@@ -38,8 +41,16 @@ import {
  *   suspicious-replicas and accounts entries (admin-only surfaces).
  * @param accountsEnabled - Whether the `accounts` feature flag is on. Gates the
  *   accounts and my-account entries.
+ * @param assistantEnabled - Whether the `assistant` feature flag is on. Gates the
+ *   Rucio bot settings entry.
  */
-export function getNavigationCommands(account?: string, canViewApprovalQueue?: boolean, isAdmin?: boolean, accountsEnabled?: boolean): CommandItem[] {
+export function getNavigationCommands(
+    account?: string,
+    canViewApprovalQueue?: boolean,
+    isAdmin?: boolean,
+    accountsEnabled?: boolean,
+    assistantEnabled?: boolean,
+): CommandItem[] {
     const commands: CommandItem[] = [
         {
             id: 'nav-dashboard',
@@ -135,6 +146,18 @@ export function getNavigationCommands(account?: string, canViewApprovalQueue?: b
             icon: ExclamationTriangleIcon,
             url: '/suspicious-replicas',
             keywords: ['suspicious', 'bad', 'replica', 'file', 'corrupted', 'declare', 'rse'],
+        });
+    }
+
+    if (assistantEnabled) {
+        commands.push({
+            id: 'nav-assistant-settings',
+            type: 'navigation',
+            title: 'Rucio bot settings',
+            description: 'Choose the model Rucio bot uses',
+            icon: Cog6ToothIcon,
+            url: '/assistant/settings',
+            keywords: ['assistant', 'bot', 'ai', 'llm', 'model', 'provider', 'settings', 'rucio bot'],
         });
     }
 
@@ -259,6 +282,25 @@ export function getHelpCommands(): CommandItem[] {
             onSelect: () => {
                 window.open('https://rucio.cern.ch/documentation/', '_blank', 'noopener,noreferrer');
             },
+        },
+    ];
+}
+
+/**
+ * "Ask Rucio bot" opens the assistant panel. The palette adds it only when the
+ * assistant feature flag is on.
+ */
+export function getAssistantCommands(openAssistant: () => void, shortcut: string = ASSISTANT_SHORTCUT_LABEL_DEFAULT): CommandItem[] {
+    return [
+        {
+            id: 'action-ask-rucio-bot',
+            type: 'action',
+            title: 'Ask Rucio bot',
+            description: 'Open the Rucio bot chat panel',
+            icon: SparklesIcon,
+            keywords: ['ask', 'assistant', 'bot', 'chat', 'ai', 'help'],
+            shortcut,
+            onSelect: openAssistant,
         },
     ];
 }

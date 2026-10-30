@@ -1,6 +1,5 @@
 import 'reflect-metadata';
 import { NextRequest, NextResponse } from 'next/server';
-import { z } from 'zod';
 import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
@@ -8,19 +7,7 @@ import { AttachDIDsControllerParameters } from '@/lib/infrastructure/controller/
 import { AttachDIDsRequest } from '@/lib/core/usecase-models/attach-dids-usecase-models';
 import { executeAuthenticatedController, parseRequestBody } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
-
-const AttachDIDsSchema = z.object({
-    dids: z
-        .array(
-            z.object({
-                scope: z.string().min(1),
-                name: z.string().min(1),
-            }),
-        )
-        .nonempty(),
-    scope: z.string().min(1),
-    name: z.string().min(1),
-});
+import { AttachDidsSchema } from '@/lib/infrastructure/api-schemas/attach-dids';
 
 /**
  * POST /api/feature/attach-dids
@@ -35,12 +22,12 @@ async function postHandler(request: NextRequest) {
             return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
         }
 
-        const params = AttachDIDsSchema.safeParse(body);
+        const params = AttachDidsSchema.safeParse(body);
         if (!params.success) {
             return NextResponse.json(
                 {
                     error: 'Missing required parameters or provided parameters are invalid',
-                    details: params.error.errors,
+                    details: params.error.issues,
                 },
                 { status: 400 },
             );

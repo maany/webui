@@ -56,7 +56,9 @@ const INPUT_PORT = {
     GET_PANDA_TASK_LINK: Symbol.for('GetPandaTaskLinkInputPort'),
     UPDATE_RULE: Symbol.for('UpdateRuleInputPort'),
     LIST_SUSPICIOUS_REPLICAS: Symbol.for('ListSuspiciousReplicasInputPort'),
+    LIST_REQUESTS: Symbol.for('ListRequestsInputPort'),
     DECLARE_BAD_REPLICAS: Symbol.for('DeclareBadReplicasInputPort'),
+    GET_ASSISTANT_CONFIG: Symbol.for('GetAssistantConfigInputPort'),
 };
 
 export default INPUT_PORT;

@@ -73,6 +73,13 @@ describe('feature-config registry + resolution', () => {
         expect(set['accounts.manage']).toBe(true);
     });
 
+    it('enables requests by default and maps it to FEATURE_REQUESTS', () => {
+        expect(FEATURE_REGISTRY.requests).toEqual({ default: true, pages: [] });
+        expect(resolveFeatureEnabled('requests', {})).toBe(true);
+        expect(envKeyForFeature('requests')).toBe('FEATURE_REQUESTS');
+        expect(isFeatureEnabledInEnv('requests', { FEATURE_REQUESTS: 'false' })).toBe(false);
+    });
+
     it('resolveEnabledSet returns a boolean for every registry key', () => {
         const set = resolveEnabledSet({});
         const keys = Object.keys(FEATURE_REGISTRY) as FeatureKey[];

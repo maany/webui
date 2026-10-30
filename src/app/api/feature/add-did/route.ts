@@ -1,6 +1,5 @@
 import 'reflect-metadata';
 import { NextRequest, NextResponse } from 'next/server';
-import { z } from 'zod';
 import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
@@ -8,12 +7,7 @@ import { AddDIDControllerParameters } from '@/lib/infrastructure/controller/add-
 import { AddDIDRequest } from '@/lib/core/usecase-models/add-did-usecase-models';
 import { executeAuthenticatedController, parseRequestBody } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
-
-const AddDIDSchema = z.object({
-    scope: z.string().min(1),
-    name: z.string().min(1),
-    type: z.enum(['Dataset', 'Container']),
-});
+import { AddDidSchema } from '@/lib/infrastructure/api-schemas/add-did';
 
 /**
  * POST /api/feature/add-did
@@ -28,12 +22,12 @@ async function postHandler(request: NextRequest) {
             return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
         }
 
-        const params = AddDIDSchema.safeParse(body);
+        const params = AddDidSchema.safeParse(body);
         if (!params.success) {
             return NextResponse.json(
                 {
                     error: 'Missing required parameters or provided parameters are invalid',
-                    details: params.error.errors,
+                    details: params.error.issues,
                 },
                 { status: 400 },
             );

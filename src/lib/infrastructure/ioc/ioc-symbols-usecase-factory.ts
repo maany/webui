@@ -57,7 +57,9 @@ const USECASE_FACTORY = {
     GET_PANDA_TASK_LINK: Symbol.for('Factory<GetPandaTaskLinkUseCase>'),
     UPDATE_RULE: Symbol.for('Factory<UpdateRuleUseCase>'),
     LIST_SUSPICIOUS_REPLICAS: Symbol.for('Factory<ListSuspiciousReplicasUseCase>'),
+    LIST_REQUESTS: Symbol.for('Factory<ListRequestsUseCase>'),
     DECLARE_BAD_REPLICAS: Symbol.for('Factory<DeclareBadReplicasUseCase>'),
+    GET_ASSISTANT_CONFIG: Symbol.for('Factory<GetAssistantConfigUseCase>'),
 };
 
 export default USECASE_FACTORY;

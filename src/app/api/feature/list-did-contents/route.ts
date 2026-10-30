@@ -4,7 +4,9 @@ import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { ListDIDContentsControllerParameters } from '@/lib/infrastructure/controller/list-did-contents-controller';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { ListDidContentsSchema } from '@/lib/infrastructure/api-schemas/list-did-contents';
+import { firstInvalidField, parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/list-did-contents
@@ -13,21 +15,15 @@ import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastr
  */
 export async function GET(request: NextRequest) {
     try {
-        const params = parseQueryParams(request);
-        const scope = params.scope as string;
-        const name = params.name as string;
+        const params = parseQuery(ListDidContentsSchema, new URL(request.url).searchParams);
 
-        if (!scope) {
-            return NextResponse.json({ error: 'Missing required parameter: scope' }, { status: 400 });
-        }
-
-        if (!name) {
-            return NextResponse.json({ error: 'Missing required parameter: name' }, { status: 400 });
+        if (!params.success) {
+            return NextResponse.json({ error: `Missing required parameter: ${firstInvalidField(params.error)}` }, { status: 400 });
         }
 
         const controller = appContainer.get<BaseController<ListDIDContentsControllerParameters, void>>(CONTROLLERS.LIST_DID_CONTENTS);
 
-        return executeAuthenticatedController(controller, { scope, name }, true);
+        return executeAuthenticatedController(controller, { scope: params.data.scope, name: params.data.name }, true);
     } catch (error) {
         console.error('Error in list-did-contents:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

@@ -1,6 +1,5 @@
 import 'reflect-metadata';
 import { NextRequest, NextResponse } from 'next/server';
-import { z } from 'zod';
 import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
@@ -8,15 +7,9 @@ import { ListAccountsControllerParameters } from '@/lib/infrastructure/controlle
 import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
 import { withFeature } from '@/lib/infrastructure/adapters/with-feature';
 import { withAdmin } from '@/lib/infrastructure/adapters/with-admin';
-import { ACCOUNT_NAME_PATTERN_REGEX } from '@/lib/core/utils/account-validation';
-import { ACCOUNT_TYPES } from '@/lib/core/entity/rucio';
 import { AccountListFilter } from '@/lib/core/entity/account';
-
-const QuerySchema = z.object({
-    account: z.string().regex(ACCOUNT_NAME_PATTERN_REGEX).optional(),
-    accountType: z.enum(ACCOUNT_TYPES).optional(),
-    identity: z.string().max(1024).optional(),
-});
+import { ListAccountsSchema } from '@/lib/infrastructure/api-schemas/list-accounts';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/list-accounts
@@ -24,12 +17,7 @@ const QuerySchema = z.object({
  * Streams the accounts matching the filter. Admins only.
  */
 async function getHandler(request: NextRequest) {
-    const searchParams = request.nextUrl.searchParams;
-    const params = QuerySchema.safeParse({
-        account: searchParams.get('account') ?? undefined,
-        accountType: searchParams.get('accountType') ?? undefined,
-        identity: searchParams.get('identity') ?? undefined,
-    });
+    const params = parseQuery(ListAccountsSchema, request.nextUrl.searchParams);
     if (!params.success) {
         return NextResponse.json({ status: 'error', errorType: 'validation_error', message: 'Invalid account filter' }, { status: 400 });
     }

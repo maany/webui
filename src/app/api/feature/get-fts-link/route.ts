@@ -4,7 +4,9 @@ import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { GetFTSLinkControllerParameters } from '@/lib/infrastructure/controller/get-fts-link-controller';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { GetFtsLinkSchema } from '@/lib/infrastructure/api-schemas/get-fts-link';
+import { firstInvalidField, parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/get-fts-link
@@ -13,26 +15,15 @@ import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastr
  */
 export async function GET(request: NextRequest) {
     try {
-        const params = parseQueryParams(request);
-        const scope = params.scope as string;
-        const name = params.name as string;
-        const rse = params.rse as string;
+        const params = parseQuery(GetFtsLinkSchema, new URL(request.url).searchParams);
 
-        if (!scope) {
-            return NextResponse.json({ error: 'Missing required parameter: scope' }, { status: 400 });
-        }
-
-        if (!name) {
-            return NextResponse.json({ error: 'Missing required parameter: name' }, { status: 400 });
-        }
-
-        if (!rse) {
-            return NextResponse.json({ error: 'Missing required parameter: rse' }, { status: 400 });
+        if (!params.success) {
+            return NextResponse.json({ error: `Missing required parameter: ${firstInvalidField(params.error)}` }, { status: 400 });
         }
 
         const controller = appContainer.get<BaseController<GetFTSLinkControllerParameters, void>>(CONTROLLERS.GET_FTS_LINK);
 
-        return executeAuthenticatedController(controller, { scope, name, rse });
+        return executeAuthenticatedController(controller, { scope: params.data.scope, name: params.data.name, rse: params.data.rse });
     } catch (error) {
         console.error('Error in get-fts-link:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

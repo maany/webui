@@ -1,26 +1,12 @@
 import 'reflect-metadata';
 import { NextRequest, NextResponse } from 'next/server';
-import { z } from 'zod';
 import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { DeclareBadReplicasControllerParameters } from '@/lib/infrastructure/controller/declare-bad-replicas-controller';
 import { DeclareBadReplicasRequest } from '@/lib/core/usecase-models/declare-bad-replicas-usecase-models';
 import { executeAuthenticatedController, parseRequestBody } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
-
-const DeclareBadReplicasSchema = z.object({
-    dids: z
-        .array(
-            z.object({
-                scope: z.string().min(1),
-                name: z.string().min(1),
-            }),
-        )
-        .min(1),
-    rse: z.string().min(1),
-    reason: z.string().min(1),
-    expiresAt: z.string().nullable().optional(),
-});
+import { DeclareBadReplicasSchema } from '@/lib/infrastructure/api-schemas/declare-bad-replicas';
 
 /**
  * POST /api/feature/declare-bad-replicas
@@ -38,7 +24,7 @@ export async function POST(request: NextRequest) {
         const params = DeclareBadReplicasSchema.safeParse(body);
         if (!params.success) {
             return NextResponse.json(
-                { error: 'Missing required parameters or provided parameters are invalid', details: params.error.errors },
+                { error: 'Missing required parameters or provided parameters are invalid', details: params.error.issues },
                 { status: 400 },
             );
         }

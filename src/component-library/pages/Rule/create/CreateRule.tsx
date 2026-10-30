@@ -1,11 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import {
-    CreateRuleGrouping,
-    CreateRuleOptions,
-    CreateRuleParameters,
-    CreateRuleStorage,
-    getEmptyCreateRuleParameters,
-} from '@/lib/infrastructure/data/view-model/rule';
+import { CreateRuleOptions, CreateRuleParameters, CreateRuleStorage, getEmptyCreateRuleParameters } from '@/lib/infrastructure/data/view-model/rule';
 import { Heading } from '@/component-library/atoms/misc/Heading';
 import Timeline from '@/component-library/features/Timeline';
 import { HiArrowLeft, HiArrowRight } from 'react-icons/hi';
@@ -13,11 +7,8 @@ import { Button } from '@/component-library/atoms/form/button';
 import { CreateRuleStageData } from '@/component-library/pages/Rule/create/stage-dids/CreateRuleStageData';
 import { CreateRuleStageStorage } from '@/component-library/pages/Rule/create/stage-rses/CreateRuleStageStorage';
 import { LoadingSpinner } from '@/component-library/atoms/loading/LoadingSpinner';
-import {
-    CreateRuleOptionsErrors,
-    CreateRuleStageOptions,
-    getEmptyOptionsErrors,
-} from '@/component-library/pages/Rule/create/stage-options/CreateRuleStageOptions';
+import { CreateRuleStageOptions } from '@/component-library/pages/Rule/create/stage-options/CreateRuleStageOptions';
+import { CreateRuleOptionsErrors, computeOptionsErrors, getEmptyOptionsErrors } from '@/component-library/pages/Rule/create/create-rule-validation';
 import { ListDIDsViewModel } from '@/lib/infrastructure/data/view-model/list-did';
 import { CreateRuleStageSummary } from '@/component-library/pages/Rule/create/stage-summary/CreateRuleStageSummary';
 import { CreateRuleStageSubmission } from '@/component-library/pages/Rule/create/stage-submission/CreateRuleStageSubmission';
@@ -60,6 +51,17 @@ const NextButton = ({
     );
 };
 
+// Index 4 is the submission stage, which submits on mount: neither a prefill nor a saved index may land on it
+const MAX_RESTORED_INDEX = 3;
+const clampRestoredIndex = (index: number): number => Math.min(Math.max(Math.trunc(index) || 0, 0), MAX_RESTORED_INDEX);
+
+/** Wizard state pushed in from outside the wizard (Rucio bot prefill). A new object applies it again. */
+export interface CreateRulePrefill {
+    parameters: CreateRuleParameters;
+    activeIndex: number;
+    nonce: number;
+}
+
 interface CreateRuleProps {
     getSavedParameters: () => CreateRuleParameters | undefined;
     getSavedIndex: () => number | undefined;
@@ -67,6 +69,9 @@ interface CreateRuleProps {
     setSavedIndex: (activeIndex: number) => void;
     removeSavedParameters: () => void;
     removeSavedIndex: () => void;
+    prefill?: CreateRulePrefill;
+    /** Called with the active stage index whenever it changes, including the submission stage (4). */
+    onStageChange?: (activeIndex: number) => void;
 }
 
 export const CreateRule = (props: CreateRuleProps) => {
@@ -74,36 +79,11 @@ export const CreateRule = (props: CreateRuleProps) => {
     const [parameters, setParameters] = useState<CreateRuleParameters>(getEmptyCreateRuleParameters());
     const [activeIndex, setActiveIndex] = useState<number>(0);
     const [optionsErrors, setOptionsErrors] = useState<CreateRuleOptionsErrors>(getEmptyOptionsErrors());
+    // Bumped on every prefill so the stages remount: some of them copy parameters into local state on mount
+    const [stageKey, setStageKey] = useState<number>(0);
 
     const checkOptionsErrors = () => {
-        const totalDataSize = parameters.dids.reduce((accumulator, current) => accumulator + current.bytes, 0);
-
-        const newOptionErrors = getEmptyOptionsErrors();
-        const { copies, daysLifetime, grouping, comments } = parameters;
-
-        newOptionErrors.copiesInvalid = isNaN(copies) || copies < 1 || copies > parameters.rses.length;
-        newOptionErrors.tooManyCopies =
-            !parameters.askApproval &&
-            parameters.rses.filter(rse => {
-                if (rse.bytes_remaining >= totalDataSize) return true;
-                // if the bytes_limit is -1, it means there is no limit (infinite quota)
-                if (rse.bytes_limit === -1 && rse.has_quota) return true;
-                return false;
-            }).length < copies;
-
-        newOptionErrors.lifetimeInvalid = daysLifetime !== undefined && (isNaN(daysLifetime) || daysLifetime < 1);
-
-        newOptionErrors.commentsEmpty = parameters.askApproval && !comments;
-        newOptionErrors.groupingInvalid =
-            grouping !== undefined &&
-            grouping !== CreateRuleGrouping.DATASET &&
-            grouping !== CreateRuleGrouping.ALL &&
-            grouping !== CreateRuleGrouping.NONE;
-
-        newOptionErrors.sampleCountInvalid =
-            parameters.sample && (!parameters.sampleFileCount || isNaN(parameters.sampleFileCount) || parameters.sampleFileCount < 1);
-
-        setOptionsErrors(newOptionErrors);
+        setOptionsErrors(computeOptionsErrors(parameters));
     };
 
     useEffect(() => {
@@ -111,11 +91,19 @@ export const CreateRule = (props: CreateRuleProps) => {
         if (savedParameters) setParameters(savedParameters);
 
         const savedIndex = props.getSavedIndex();
-        // TODO: check for range
-        if (savedIndex) setActiveIndex(savedIndex);
+        if (savedIndex) setActiveIndex(clampRestoredIndex(savedIndex));
 
         setIsLoading(false);
     }, []);
+
+    const prefill = props.prefill;
+    useEffect(() => {
+        if (isLoading || !prefill) return;
+        const index = clampRestoredIndex(prefill.activeIndex);
+        setParameters(prefill.parameters);
+        setActiveIndex(index);
+        setStageKey(previous => previous + 1);
+    }, [prefill, isLoading]);
 
     // Effects to sync parameters and activeIndex with localStorage
     useEffect(() => {
@@ -123,6 +111,10 @@ export const CreateRule = (props: CreateRuleProps) => {
         props.setSavedParameters(parameters);
         checkOptionsErrors();
     }, [parameters]);
+    useEffect(() => {
+        if (isLoading) return;
+        props.onStageChange?.(activeIndex);
+    }, [activeIndex, isLoading]);
     useEffect(() => {
         // Don't save submission
         if (isLoading || activeIndex === 4) return;
@@ -214,9 +206,16 @@ export const CreateRule = (props: CreateRuleProps) => {
                     </header>
                     <Timeline steps={steps} activeIndex={activeIndex} onSwitch={activeIndex !== 4 ? setActiveIndex : undefined} />
                     <div>
-                        <CreateRuleStageData visible={activeIndex === 0} parameters={parameters} addDID={addDID} removeDID={removeDID} />
+                        <CreateRuleStageData
+                            key={`dids-${stageKey}`}
+                            visible={activeIndex === 0}
+                            parameters={parameters}
+                            addDID={addDID}
+                            removeDID={removeDID}
+                        />
                         {activeIndex === 1 && (
                             <CreateRuleStageStorage
+                                key={`rses-${stageKey}`}
                                 parameters={parameters}
                                 updateStorage={updateStorage}
                                 updateNeedsApproval={updateNeedsApproval}
@@ -224,9 +223,14 @@ export const CreateRule = (props: CreateRuleProps) => {
                             />
                         )}
                         {activeIndex === 2 && (
-                            <CreateRuleStageOptions parameters={parameters} updateOptionValue={updateOptionValue} errors={optionsErrors} />
+                            <CreateRuleStageOptions
+                                key={`options-${stageKey}`}
+                                parameters={parameters}
+                                updateOptionValue={updateOptionValue}
+                                errors={optionsErrors}
+                            />
                         )}
-                        {activeIndex === 3 && <CreateRuleStageSummary parameters={parameters} />}
+                        {activeIndex === 3 && <CreateRuleStageSummary key={`summary-${stageKey}`} parameters={parameters} />}
                     </div>
                     {activeIndex === 4 && (
                         <CreateRuleStageSubmission

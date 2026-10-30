@@ -119,3 +119,39 @@ describe('accountQueryDefaults.retry', () => {
         expect(accountQueryDefaults.retry(0, { errorType })).toBe(false);
     });
 });
+
+describe('assistant write entries', () => {
+    const setup = () => {
+        const queryClient = new QueryClient();
+        const spy = jest.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined);
+        return { queryClient, spy };
+    };
+
+    it('create-rule refreshes the rule list', () => {
+        const { queryClient, spy } = setup();
+        invalidateForMutation(queryClient, 'create-rule', { dids: [{ scope: 'data18', name: 'XYZ' }], copies: 1, rse_expression: 'tier=1' });
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy).toHaveBeenCalledWith({ queryKey: [...QUERY_KEYS.RULE_PAGE] });
+    });
+
+    it('attach-dids and set-did-status refresh DID metadata', () => {
+        const { queryClient, spy } = setup();
+        invalidateForMutation(queryClient, 'attach-dids', { scope: 'user.jdoe', name: 'ds', dids: [{ scope: 'user.jdoe', name: 'f1' }] });
+        invalidateForMutation(queryClient, 'set-did-status', { scope: 'user.jdoe', name: 'ds', open: false });
+        expect(spy).toHaveBeenCalledTimes(2);
+        expect(spy).toHaveBeenNthCalledWith(1, { queryKey: ['did-meta'] });
+        expect(spy).toHaveBeenNthCalledWith(2, { queryKey: ['did-meta'] });
+    });
+
+    it('add-did and declare-bad-replicas have entries that refresh nothing (their lists are streamed)', () => {
+        expect(INVALIDATION_MAP['add-did']).toEqual([]);
+        expect(INVALIDATION_MAP['declare-bad-replicas']).toEqual([]);
+        const { queryClient, spy } = setup();
+        invalidateForMutation(queryClient, 'add-did', { scope: 'user.jdoe', name: 'ds', type: 'Dataset' });
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('DID_META is its own key family', () => {
+        expect(QUERY_KEYS.DID_META).toEqual(['did-meta']);
+    });
+});

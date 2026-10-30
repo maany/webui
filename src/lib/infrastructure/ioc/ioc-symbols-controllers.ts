@@ -56,7 +56,9 @@ const CONTROLLERS = {
     GET_PANDA_TASK_LINK: Symbol.for('GetPandaTaskLinkController'),
     UPDATE_RULE: Symbol.for('UpdateRuleController'),
     LIST_SUSPICIOUS_REPLICAS: Symbol.for('ListSuspiciousReplicasController'),
+    LIST_REQUESTS: Symbol.for('ListRequestsController'),
     DECLARE_BAD_REPLICAS: Symbol.for('DeclareBadReplicasController'),
+    GET_ASSISTANT_CONFIG: Symbol.for('GetAssistantConfigController'),
 };
 
 export default CONTROLLERS;

@@ -18,6 +18,9 @@ export const QUERY_KEYS = {
     /** Paginated/streamed rule list — used by ListRule page */
     RULE_PAGE: ['rule-page'] as const,
 
+    /** DID metadata (open, length, bytes), used by DetailsDID and the ListDID side panel */
+    DID_META: ['did-meta'] as const,
+
     /** AMI tag info for a DID's tags (ATLAS only) — used by AMITagsRow */
     AMI_TAG_INFO: ['ami-tag-info'] as const,
 
@@ -29,6 +32,9 @@ export const QUERY_KEYS = {
 
     /** Root of every account query (info, attributes, identities, quotas); see `accountKeys` */
     ACCOUNT: ['account'] as const,
+
+    /** Rucio bot operator configuration, used by useAssistantConfig */
+    assistantConfig: ['assistant-config'] as const,
 } as const;
 
 /**

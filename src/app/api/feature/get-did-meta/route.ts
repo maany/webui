@@ -4,7 +4,9 @@ import appContainer from '@/lib/infrastructure/ioc/container-config';
 import CONTROLLERS from '@/lib/infrastructure/ioc/ioc-symbols-controllers';
 import { BaseController } from '@/lib/sdk/controller';
 import { DIDMetaControllerParameters } from '@/lib/infrastructure/controller/did-meta-controller';
-import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { executeAuthenticatedController } from '@/lib/infrastructure/adapters/app-router-controller-adapter';
+import { GetDidMetaSchema } from '@/lib/infrastructure/api-schemas/get-did-meta';
+import { parseQuery } from '@/lib/infrastructure/api-schemas/parse';
 
 /**
  * GET /api/feature/get-did-meta
@@ -13,17 +15,15 @@ import { executeAuthenticatedController, parseQueryParams } from '@/lib/infrastr
  */
 export async function GET(request: NextRequest) {
     try {
-        const params = parseQueryParams(request);
-        const scope = params.scope as string;
-        const name = params.name as string;
+        const params = parseQuery(GetDidMetaSchema, new URL(request.url).searchParams);
 
-        if (!scope || !name) {
+        if (!params.success) {
             return NextResponse.json({ error: 'Missing required parameters: scope and name' }, { status: 400 });
         }
 
         const controller = appContainer.get<BaseController<DIDMetaControllerParameters, void>>(CONTROLLERS.DID_META);
 
-        return executeAuthenticatedController(controller, { scope, name });
+        return executeAuthenticatedController(controller, { scope: params.data.scope, name: params.data.name });
     } catch (error) {
         console.error('Error in get-did-meta:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

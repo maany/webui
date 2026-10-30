@@ -110,10 +110,14 @@ export class WebUIEnvTemplateCompiler {
       'FEATURE_ACCOUNTS_MANAGE_QUOTAS': 'true',
       'FEATURE_DIDS_METADATA': 'true',
       'FEATURE_DIDS_MUTATE': 'true',
+      'FEATURE_REQUESTS': 'true',
       'FEATURE_DIDS_AMI_TAGS': 'false',
       'AMI_BASE_URL': 'https://atlas-ami.cern.ch',
       'FEATURE_DIDS_PANDA_TASK': 'false',
       'PANDA_BASE_URL': 'https://bigpanda.cern.ch',
+      'FEATURE_ASSISTANT': 'false',
+      'FEATURE_ASSISTANT_WRITE': 'false',
+      'FEATURE_ASSISTANT_BAD_REPLICAS': 'false',
       ...this.environmentVariables,
     }
   }

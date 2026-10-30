@@ -41,4 +41,12 @@ export const INVALIDATION_MAP: Record<string, readonly InvalidationEntry[]> = {
     'delete-account-identity': [(vars: AccountVars) => accountKeys.identities(vars.account)],
     'set-account-limit': [(vars: AccountVars) => accountKeys.quotas(vars.account)],
     'delete-account-limit': [(vars: AccountVars) => accountKeys.quotas(vars.account)],
+
+    // Writes that only Rucio bot calls today (phase 4). DID, rule and replica lists are streamed, not cached,
+    // so creating a DID or declaring bad replicas has nothing cached to refresh.
+    'create-rule': [QUERY_KEYS.RULE_PAGE],
+    'add-did': [],
+    'attach-dids': [QUERY_KEYS.DID_META],
+    'set-did-status': [QUERY_KEYS.DID_META],
+    'declare-bad-replicas': [],
 };

@@ -7,6 +7,7 @@ import { Toaster } from '@/component-library/atoms/toast/Toaster';
 import { SiteHeaderViewModel } from '@/lib/infrastructure/data/view-model/site-header';
 import { addRecentPage } from '@/lib/utils/recent-pages-storage';
 import { getPageTitle } from '@/lib/utils/page-title';
+import { ASSISTANT_INERT_TARGET_ID } from '@/lib/infrastructure/hooks/useAssistantShell';
 
 type LayoutProps = {
     children: ReactNode;
@@ -31,7 +32,11 @@ export const Layout = ({ children, siteHeader, siteHeaderError }: LayoutProps) =
     }, [pathname]);
 
     return (
-        <div className="min-h-screen flex flex-col">
+        <div
+            id={ASSISTANT_INERT_TARGET_ID}
+            className="min-h-screen flex flex-col overflow-x-clip"
+            style={{ paddingRight: 'var(--rucio-assistant-offset, 0px)' }}
+        >
             <HeaderClient siteHeader={siteHeader} siteHeaderError={siteHeaderError} isSiteHeaderFetching={false} />
             <main id="main-content" className="flex flex-col grow px-4 py-6 sm:px-8 md:px-12 lg:px-16 xl:px-24 2xl:px-32 min-w-0 overflow-x-hidden">
                 {children}
